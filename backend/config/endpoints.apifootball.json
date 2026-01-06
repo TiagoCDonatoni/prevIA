@@ -1,0 +1,23 @@
+{
+  "provider": "apifootball",
+  "endpoints": [
+    {
+      "id": "seasons",
+      "path": "/seasons",
+      "sample_params": {},
+      "enabled": true
+    },
+    {
+      "id": "countries",
+      "path": "/countries",
+      "sample_params": {},
+      "enabled": true
+    },
+    {
+      "id": "leagues",
+      "path": "/leagues",
+      "sample_params": { "season": 2024 },
+      "enabled": true
+    }
+  ]
+}

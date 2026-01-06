@@ -1,0 +1,35 @@
+{
+  "provider": "apifootball",
+  "source": {
+    "endpoint_key": "apifootball:fixtures:/fixtures",
+    "items_path": "$[\"response\"]",
+    "fields": {
+      "fixture_id": "$[\"fixture\"][\"id\"]",
+      "fixture_date": "$[\"fixture\"][\"date\"]"
+    }
+  },
+  "rules": {
+    "max_fixtures": 2,
+    "pick_order": "latest"
+  },
+  "derived_endpoints": [
+    {
+      "id": "fixture_statistics",
+      "path": "/fixtures/statistics",
+      "params": { "fixture": "{fixture_id}" },
+      "enabled": true
+    },
+    {
+      "id": "fixture_events",
+      "path": "/fixtures/events",
+      "params": { "fixture": "{fixture_id}" },
+      "enabled": true
+    },
+    {
+      "id": "fixture_lineups",
+      "path": "/fixtures/lineups",
+      "params": { "fixture": "{fixture_id}" },
+      "enabled": true
+    }
+  ]
+}

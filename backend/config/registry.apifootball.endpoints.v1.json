@@ -1,0 +1,17 @@
+{
+  "schema": "endpoint_registry.v1",
+  "provider": "apifootball",
+  "endpoints": [
+    { "path": "/seasons", "identity_params": [] },
+    { "path": "/countries", "identity_params": [] },
+    { "path": "/leagues", "identity_params": [] },
+
+    { "path": "/teams", "identity_params": ["league", "season"] },
+    { "path": "/standings", "identity_params": ["league", "season"] },
+    { "path": "/fixtures", "identity_params": ["league", "season"] },
+
+    { "path": "/fixtures/events", "identity_params": ["fixture"] },
+    { "path": "/fixtures/lineups", "identity_params": ["fixture"] },
+    { "path": "/fixtures/statistics", "identity_params": ["fixture"] }
+  ]
+}

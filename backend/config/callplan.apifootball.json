@@ -1,0 +1,36 @@
+{
+  "provider": "apifootball",
+  "source": {
+    "endpoint_key": "apifootball:leagues:/leagues",
+    "items_path": "$[\"response\"]",
+    "fields": {
+      "league_id": "$[\"league\"][\"id\"]",
+      "season_years": "$[\"seasons\"]"
+    }
+  },
+  "rules": {
+    "max_leagues": 5,
+    "seasons_pick": "latest",
+    "max_fixtures": 50
+  },
+  "derived_endpoints": [
+    {
+      "id": "teams",
+      "path": "/teams",
+      "params": { "league": "{league_id}", "season": "{season}" },
+      "enabled": true
+    },
+    {
+      "id": "standings",
+      "path": "/standings",
+      "params": { "league": "{league_id}", "season": "{season}" },
+      "enabled": true
+    },
+    {
+      "id": "fixtures",
+      "path": "/fixtures",
+      "params": { "league": "{league_id}", "season": "{season}" },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "app.title": "prevIA — MVP",
+  "admin.title": "Validator/Admin",
+  "error.missing_key": "API key is not configured."
+}

@@ -1,0 +1,6 @@
+{
+  "db_path": "data/app.db",
+  "default_lang": "pt-BR",
+  "supported_langs": ["pt-BR", "en", "es"],
+  "http_timeout_s": 30
+}

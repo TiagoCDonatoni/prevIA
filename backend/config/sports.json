@@ -1,0 +1,12 @@
+{
+  "sports": [
+    {
+      "id": "football",
+      "providers": {
+        "theodds": {
+          "sport_keys": ["soccer_brazil_campeonato"]
+        }
+      }
+    }
+  ]
+}

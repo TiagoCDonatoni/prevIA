@@ -1,0 +1,15 @@
+{
+  "provider": "theodds",
+  "endpoints": [
+    {
+      "id": "odds_list",
+      "path": "/sports/{sport_key}/odds",
+      "sample_params": {
+        "regions": "us",
+        "markets": "h2h",
+        "oddsFormat": "decimal"
+      },
+      "enabled": true
+    }
+  ]
+}
