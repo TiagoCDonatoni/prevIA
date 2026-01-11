@@ -27,12 +27,21 @@ FEATURES: list[str] = [
 ]
 
 
+from dataclasses import dataclass
+
+from dataclasses import dataclass
+
 @dataclass(frozen=True)
 class TrainConfig:
     league_id: int
     train_seasons: list[int]
-    feature_version: str = "features_v1"
+
+    # versioning
     model_version: str = "1x2_logreg_v1"
+    feature_version: str = "features_v1"
+
+    # regularization inverse strength (higher = less regularization)
+    C: float = 1.0
 
 
 def _label_from_goals(gh: int, ga: int) -> int:
@@ -97,6 +106,7 @@ def train_and_save(*, cfg: TrainConfig, artifact_filename: str) -> dict[str, Any
     model = LogisticRegression(
         solver="lbfgs",
         max_iter=2000,
+        C=float(cfg.C),
     )
     model.fit(X_train, y_train)
 
