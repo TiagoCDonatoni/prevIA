@@ -49,28 +49,40 @@ def load_dataset_1x2(
         return [], []
 
     X, y = [], []
+    skipped = 0
 
     t0 = time.time()
     last = t0
     print(f"    building dataset: league_id={league_id} season={season} total_fixtures={total}")
 
     for i, (home_id, away_id, gh, ga) in enumerate(rows, start=1):
-        feats = build_match_features(
-            home_team_id=home_id,
-            away_team_id=away_id,
-            league_id=league_id,
-            season=season,
-        )
+        try:
+            feats = build_match_features(
+                home_team_id=home_id,
+                away_team_id=away_id,
+                league_id=league_id,
+                season=season,
+            )
+        except ValueError:
+            # geralmente: team_season_stats faltando para algum time/season
+            skipped += 1
+            continue
+
         X.append([float(feats[k]) for k in FEATURES])
         y.append(_label_from_goals(int(gh), int(ga)))
 
         if i % progress_every == 0 or i == total:
             now = time.time()
             elapsed = now - t0
-            rate = i / elapsed if elapsed > 0 else 0.0
-            eta = (total - i) / rate if rate > 0 else 0.0
+            done = len(y) + skipped
+            rate = done / elapsed if elapsed > 0 else 0.0
+            eta = (total - done) / rate if rate > 0 else 0.0
             chunk = now - last
-            print(f"      progress {i}/{total} ({i/total:.0%}) rate={rate:.1f}/s eta={eta:.1f}s chunk_dt={chunk:.2f}s")
+            print(f"      progress {done}/{total} ({done/total:.0%}) rate={rate:.1f}/s eta={eta:.1f}s chunk_dt={chunk:.2f}s skipped={skipped}")
             last = now
+
+    if skipped > 0:
+        coverage = len(y) / total
+        print(f"    warning: skipped={skipped}/{total} coverage={coverage:.3f}")
 
     return X, y
