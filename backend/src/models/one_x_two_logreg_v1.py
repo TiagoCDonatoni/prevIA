@@ -157,8 +157,18 @@ def predict_1x2_from_artifact(
     coef = np.array(art["coef"], dtype=float)  # (3, n_features)
     intercept = np.array(art["intercept"], dtype=float)  # (3,)
 
-    logits = intercept + coef @ x  # (3,)
-    probs = _softmax(logits)
+    # logits: shape (3,)
+    logits = intercept + coef @ x
+
+    # default: no calibration
+    T = 1.0
+    cal = art.get("calibration")
+    if cal and cal.get("type") == "temperature":
+        T = float(cal.get("T", 1.0))
+
+    # IMPORTANT: use scaled logits to compute probs
+    probs_vec = _softmax(logits / T)
+    probs = {"H": float(probs_vec[0]), "D": float(probs_vec[1]), "A": float(probs_vec[2])}
 
     # debug: top contributions per class
     contrib = coef * x  # (3, n_features)
@@ -172,22 +182,19 @@ def predict_1x2_from_artifact(
         }
 
     return {
-        "model_version": art["model_version"],
-        "feature_version": art["feature_version"],
+        "model_version": art.get("model_version", "1x2_logreg_v1"),
+        "feature_version": art.get("feature_version", "features_v1"),
         "league_id": league_id,
         "season": season,
         "home_team_id": home_team_id,
         "away_team_id": away_team_id,
-        "probs": {
-            "H": float(probs[0]),
-            "D": float(probs[1]),
-            "A": float(probs[2]),
-        },
+        "probs": probs,
         "features": {k: float(feats[k]) for k in art["feature_order"]},
         "debug": debug,
         "artifact": {
-            "train_seasons": art["train_seasons"],
-            "n_samples": art["n_samples"],
-            "trained_at_utc": art["trained_at_utc"],
+            "train_seasons": art.get("train_seasons"),
+            "n_samples": art.get("n_samples"),
+            "trained_at_utc": art.get("trained_at_utc"),
+            "calibration": cal if cal else None,
         },
     }
