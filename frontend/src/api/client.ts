@@ -2,6 +2,8 @@
  * Mock API client.
  * Replace these with real fetch calls when the backend is ready.
  */
+import { API_BASE_URL } from "../config";
+
 import type {
   ArtifactRow,
   FixtureLite,
@@ -106,12 +108,22 @@ export async function getKpis(): Promise<KpiSnapshot> {
   };
 }
 
-export async function searchTeams(q: string): Promise<TeamLite[]> {
-  await sleep(80);
-  const qq = q.trim().toLowerCase();
-  if (!qq) return MOCK_TEAMS.slice(0, 6);
-  return MOCK_TEAMS.filter((t) => t.name.toLowerCase().includes(qq)).slice(0, 20);
+export async function searchTeams(q: string, limit = 20) {
+  const qq = (q || "").trim();
+  if (qq.length < 2) return [];
+
+  const url = new URL("/admin/teams", API_BASE_URL);
+  url.searchParams.set("q", qq);
+  url.searchParams.set("limit", String(limit));
+
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`GET /admin/teams failed: ${res.status} ${txt}`);
+  }
+  return (await res.json()) as any[];
 }
+
 
 export async function listArtifacts(): Promise<ArtifactRow[]> {
   await sleep(120);
@@ -166,3 +178,50 @@ export async function matchupWhatIf(req: MatchupWhatIfRequest): Promise<MatchupR
     ],
   };
 }
+
+import type { TeamSummary } from "./contracts";
+
+export async function getTeamSummary(teamId: number, lastN = 20, season?: number): Promise<TeamSummary> {
+  const url = new URL("/admin/team/summary", API_BASE_URL);
+  url.searchParams.set("team_id", String(teamId));
+  url.searchParams.set("last_n", String(lastN));
+  if (season) url.searchParams.set("season", String(season));
+
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`GET /admin/team/summary failed: ${res.status} ${txt}`);
+  }
+  return (await res.json()) as TeamSummary;
+}
+
+import type { TeamLite } from "./contracts";
+
+export async function listTeams(limit = 300, offset = 0): Promise<TeamLite[]> {
+  const url = new URL("/admin/teams/list", API_BASE_URL);
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
+
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`GET /admin/teams/list failed: ${res.status} ${txt}`);
+  }
+  return (await res.json()) as TeamLite[];
+}
+
+export async function getMetricsOverview(): Promise<{
+  teams: number;
+  fixtures_total: number;
+  fixtures_finished: number;
+  fixtures_cancelled: number;
+  leagues: number;
+  kickoff_min_utc: string | null;
+  kickoff_max_utc: string | null;
+}> {
+  const url = new URL("/admin/metrics/overview", API_BASE_URL);
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as any;
+}
+
