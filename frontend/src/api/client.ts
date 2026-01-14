@@ -84,6 +84,15 @@ const MOCK_RUNS: RunRow[] = [
   },
 ];
 
+async function fetchJson<T = any>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}${txt ? ` | ${txt}` : ""}`);
+  }
+  return (await res.json()) as T;
+}
+
 export async function getKpis(): Promise<KpiSnapshot> {
   await sleep(120);
   return {
@@ -243,5 +252,4 @@ export async function getArtifactMetrics(params?: {
   url.search = qs.toString();
   return fetchJson(url.toString());
 }
-
 
