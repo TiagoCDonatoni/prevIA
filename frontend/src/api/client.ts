@@ -225,3 +225,23 @@ export async function getMetricsOverview(): Promise<{
   return (await res.json()) as any;
 }
 
+export async function getArtifactMetrics(params?: {
+  league_id?: number;
+  season?: number;
+  limit?: number;
+  sort?: "brier" | "logloss" | "top1_acc" | "created_at_utc";
+  order?: "asc" | "desc";
+}) {
+  const qs = new URLSearchParams();
+  if (params?.league_id != null) qs.set("league_id", String(params.league_id));
+  if (params?.season != null) qs.set("season", String(params.season));
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.sort) qs.set("sort", params.sort);
+  if (params?.order) qs.set("order", params.order);
+
+  const url = new URL("/admin/metrics/artifacts", API_BASE_URL);
+  url.search = qs.toString();
+  return fetchJson(url.toString());
+}
+
+
