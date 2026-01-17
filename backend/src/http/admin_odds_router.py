@@ -1,33 +1,74 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query
-
-from src.core.settings import load_settings
-from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 
 from datetime import datetime, timezone, timedelta
 import re
 import unicodedata
 
+from fastapi import APIRouter, HTTPException, Query
+
+from src.core.settings import load_settings
+from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.db.pg import pg_conn
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 
 
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
+# Default do projeto (EPL)
+DEFAULT_EPL_ARTIFACT = "epl_1x2_logreg_v1_C_2021_2023_C0.3.json"
+
+# Persistência (schema odds.v1)
+SQL_UPSERT_EVENT = """
+INSERT INTO odds.odds_events (
+  event_id, sport_key, commence_time_utc, home_name, away_name,
+  resolved_home_team_id, resolved_away_team_id, resolved_fixture_id,
+  match_confidence, updated_at_utc
+) VALUES (
+  %(event_id)s, %(sport_key)s, %(commence_time_utc)s, %(home_name)s, %(away_name)s,
+  %(resolved_home_team_id)s, %(resolved_away_team_id)s, %(resolved_fixture_id)s,
+  %(match_confidence)s, now()
+)
+ON CONFLICT (event_id) DO UPDATE SET
+  sport_key = EXCLUDED.sport_key,
+  commence_time_utc = EXCLUDED.commence_time_utc,
+  home_name = EXCLUDED.home_name,
+  away_name = EXCLUDED.away_name,
+  resolved_home_team_id = EXCLUDED.resolved_home_team_id,
+  resolved_away_team_id = EXCLUDED.resolved_away_team_id,
+  resolved_fixture_id = EXCLUDED.resolved_fixture_id,
+  match_confidence = EXCLUDED.match_confidence,
+  updated_at_utc = now()
+"""
+
+SQL_INSERT_SNAPSHOT_1X2 = """
+INSERT INTO odds.odds_snapshots_1x2 (
+  event_id, bookmaker, market, odds_home, odds_draw, odds_away, captured_at_utc
+) VALUES (
+  %(event_id)s, %(bookmaker)s, %(market)s, %(odds_home)s, %(odds_draw)s, %(odds_away)s, %(captured_at_utc)s
+)
+"""
+
 
 def _client() -> TheOddsClient:
     s = load_settings()
-    # Se o nome da env var da key for diferente, ajuste no settings.py (recomendado),
-    # ou ajuste aqui temporariamente.
     return TheOddsClient(
         base_url=s.the_odds_api_base_url or "",
         api_key=s.the_odds_api_key or "",
         timeout_sec=20,
     )
 
+
+def _parse_commence_time_utc(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    # Ex: "2026-01-17T20:00:00Z"
+    return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
 _STOPWORDS = {"fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"}
+
 
 def _norm_name(s: str) -> str:
     s = (s or "").strip().lower()
@@ -36,6 +77,7 @@ def _norm_name(s: str) -> str:
     s = re.sub(r"[^a-z0-9\\s]", " ", s)
     parts = [p for p in s.split() if p and p not in _STOPWORDS]
     return " ".join(parts).strip()
+
 
 def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5):
     name_norm = _norm_name(raw_name)
@@ -63,7 +105,6 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5):
     where = " AND ".join([f"lower(name) ILIKE %(t{i})s" for i in range(len(tokens))])
     params = {f"t{i}": f"%{tok}%" for i, tok in enumerate(tokens)}
 
-    # NOTE: se você não tiver pg_trgm/similarity habilitado, troque o ORDER BY por name ASC.
     sql_like = f"""
       SELECT team_id, name, country_name
       FROM core.teams
@@ -82,9 +123,15 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5):
     sugg = [{"team_id": int(r[0]), "name": str(r[1]), "country": (str(r[2]) if r[2] else None)} for r in rows]
     return best_id, "ILIKE", sugg
 
-def _try_find_fixture(conn, kickoff_utc_iso: str, home_team_id: int, away_team_id: int, tol_hours: int = 36):
+
+def _try_find_fixture(
+    conn,
+    kickoff_utc_iso: str,
+    home_team_id: int,
+    away_team_id: int,
+    tol_hours: int = 36
+) -> Optional[Dict[str, Any]]:
     # kickoff_utc_iso vem em ISO string (The Odds API). Converter para datetime UTC.
-    # Ex: "2026-01-17T20:00:00Z" ou "...+00:00"
     s = kickoff_utc_iso.replace("Z", "+00:00")
     k = datetime.fromisoformat(s).astimezone(timezone.utc)
 
@@ -114,9 +161,10 @@ def _try_find_fixture(conn, kickoff_utc_iso: str, home_team_id: int, away_team_i
             "kickoff_utc": kickoff_db.isoformat().replace("+00:00", "Z") if kickoff_db else None,
         }
 
-def _market_probs_from_odds(odds_h: float | None, odds_d: float | None, odds_a: float | None):
+
+def _market_probs_from_odds(odds_h: float | None, odds_d: float | None, odds_a: float | None) -> Dict[str, Any]:
     # MVP: implied probs + normalização (remove vig proporcional)
-    vals = []
+    vals: List[Optional[float]] = []
     for o in (odds_h, odds_d, odds_a):
         vals.append((1.0 / o) if (o and o > 0) else None)
 
@@ -132,6 +180,58 @@ def _market_probs_from_odds(odds_h: float | None, odds_d: float | None, odds_a: 
     return {"raw": raw, "novig": novig, "overround": s}
 
 
+def _persist_event_and_snapshot(
+    *,
+    event_id: str,
+    sport_key: str,
+    commence_time: Optional[str],
+    home_name: str,
+    away_name: str,
+    bookmaker: Optional[str],
+    odds_h: Optional[float],
+    odds_d: Optional[float],
+    odds_a: Optional[float],
+    resolved_home_team_id: Optional[int],
+    resolved_away_team_id: Optional[int],
+    resolved_fixture_id: Optional[int],
+    match_confidence: Optional[str],
+    captured_at_utc: datetime,
+) -> None:
+    commence_dt = _parse_commence_time_utc(commence_time)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                SQL_UPSERT_EVENT,
+                {
+                    "event_id": event_id,
+                    "sport_key": sport_key,
+                    "commence_time_utc": commence_dt,
+                    "home_name": home_name,
+                    "away_name": away_name,
+                    "resolved_home_team_id": resolved_home_team_id,
+                    "resolved_away_team_id": resolved_away_team_id,
+                    "resolved_fixture_id": resolved_fixture_id,
+                    "match_confidence": match_confidence,
+                },
+            )
+
+            cur.execute(
+                SQL_INSERT_SNAPSHOT_1X2,
+                {
+                    "event_id": event_id,
+                    "bookmaker": bookmaker,
+                    "market": "h2h",
+                    "odds_home": odds_h,
+                    "odds_draw": odds_d,
+                    "odds_away": odds_a,
+                    "captured_at_utc": captured_at_utc,
+                },
+            )
+
+        conn.commit()
+
+
 @router.get("/sports")
 def admin_odds_list_sports() -> List[Dict[str, Any]]:
     """
@@ -139,7 +239,6 @@ def admin_odds_list_sports() -> List[Dict[str, Any]]:
     """
     try:
         rows = _client().list_sports()
-        # Retorna enxuto
         out: List[Dict[str, Any]] = []
         for x in rows:
             out.append(
@@ -160,13 +259,13 @@ def admin_odds_upcoming(
     sport_key: str = Query(..., min_length=2),
     regions: str = Query(default="eu"),
     limit: int = Query(default=50, ge=1, le=200),
+    persist: bool = Query(default=True),
 ) -> List[Dict[str, Any]]:
     """
-    Returns upcoming events with H2H odds normalized into a stable internal assumption:
-    - event_id
-    - kickoff_utc
-    - home_name / away_name
-    - odds_1x2 {H,D,A} (when available)
+    Returns upcoming events with H2H odds in a stable internal shape.
+    Se persist=true, salva:
+      - odds.odds_events (upsert)
+      - odds.odds_snapshots_1x2 (insert)
     """
     try:
         raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
@@ -176,43 +275,73 @@ def admin_odds_upcoming(
     out: List[Dict[str, Any]] = []
 
     for ev in raw[:limit]:
-        event_id = ev.get("id")
+        event_id = str(ev.get("id") or "")
         commence_time = ev.get("commence_time")
-        home = ev.get("home_team")
-        away = ev.get("away_team")
+        home = str(ev.get("home_team") or "")
+        away = str(ev.get("away_team") or "")
 
-        # Pega a melhor linha de odds (MVP): primeiro bookmaker/market.
-        odds_h = None
-        odds_d = None
-        odds_a = None
+        odds_h: Optional[float] = None
+        odds_d: Optional[float] = None
+        odds_a: Optional[float] = None
+        bookmaker_name: Optional[str] = None
 
         bookmakers = ev.get("bookmakers") or []
         if bookmakers:
             mk = bookmakers[0]
+            bookmaker_name = mk.get("title") or mk.get("key")
             markets = mk.get("markets") or []
-            # h2h geralmente vem como uma lista de outcomes (2 ou 3 outcomes)
             mkt = markets[0] if markets else None
             outcomes = (mkt or {}).get("outcomes") or []
-            # outcomes: [{"name": "...", "price": 1.9}, ...]
-            # Para 1x2: pode vir HOME/AWAY ou HOME/DRAW/AWAY dependendo do esporte/mercado.
             for o in outcomes:
                 name = str(o.get("name") or "").strip()
                 price = o.get("price")
                 if price is None:
                     continue
-
-                # Normalização MVP por nome:
-                if name.lower() == str(home).lower():
+                if name.lower() == home.lower():
                     odds_h = float(price)
-                elif name.lower() == str(away).lower():
+                elif name.lower() == away.lower():
                     odds_a = float(price)
                 elif name.lower() in ("draw", "tie", "empate"):
                     odds_d = float(price)
 
+        if persist and event_id:
+            try:
+                _persist_event_and_snapshot(
+                    event_id=event_id,
+                    sport_key=sport_key,
+                    commence_time=commence_time,
+                    home_name=home,
+                    away_name=away,
+                    bookmaker=bookmaker_name,
+                    odds_h=odds_h,
+                    odds_d=odds_d,
+                    odds_a=odds_a,
+                    resolved_home_team_id=None,
+                    resolved_away_team_id=None,
+                    resolved_fixture_id=None,
+                    match_confidence=None,
+                    captured_at_utc=datetime.now(timezone.utc),
+                )
+            except Exception as e:
+                # MVP: não quebra a listagem por falha de persist, mas retorna erro no item
+                out.append(
+                    {
+                        "event_id": event_id,
+                        "kickoff_utc": commence_time,
+                        "home_name": home,
+                        "away_name": away,
+                        "sport_key": sport_key,
+                        "regions": regions,
+                        "odds_1x2": {"H": odds_h, "D": odds_d, "A": odds_a},
+                        "persist_error": str(e),
+                    }
+                )
+                continue
+
         out.append(
             {
                 "event_id": event_id,
-                "kickoff_utc": commence_time,  # já vem ISO UTC
+                "kickoff_utc": commence_time,
                 "home_name": home,
                 "away_name": away,
                 "sport_key": sport_key,
@@ -223,19 +352,20 @@ def admin_odds_upcoming(
 
     return out
 
+
 @router.get("/upcoming/orchestrate")
 def admin_odds_upcoming_orchestrate(
     sport_key: str = Query(..., min_length=2),
     regions: str = Query(default="eu"),
     limit: int = Query(default=50, ge=1, le=200),
-    artifact_filename: Optional[str] = Query(default=None),
+    artifact_filename: Optional[str] = Query(default=DEFAULT_EPL_ARTIFACT),
     assume_league_id: Optional[int] = Query(default=None, ge=1),
     assume_season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    persist: bool = Query(default=True),
 ) -> List[Dict[str, Any]]:
     """
     Orquestra: Odds API -> resolve team_ids -> tenta achar fixture -> (opcional) P_model + compare.
-    - Se artifact_filename não for informado, retorna só resolução + fixture + market probs.
-    - Se artifact_filename for informado, calcula P_model quando tiver league_id/season (do fixture ou assume_*).
+    Também persiste odds como fatos (events + snapshots) se persist=true.
     """
     try:
         raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
@@ -244,18 +374,23 @@ def admin_odds_upcoming_orchestrate(
 
     out: List[Dict[str, Any]] = []
 
+    # Uma conexão para resolver/fixture com custo baixo
     with pg_conn() as conn:
         for ev in raw[:limit]:
-            event_id = ev.get("id")
+            event_id = str(ev.get("id") or "")
             commence_time = ev.get("commence_time")
             home = str(ev.get("home_team") or "")
             away = str(ev.get("away_team") or "")
 
-            # odds MVP: primeiro bookmaker/market
-            odds_h = odds_d = odds_a = None
+            odds_h: Optional[float] = None
+            odds_d: Optional[float] = None
+            odds_a: Optional[float] = None
+            bookmaker_name: Optional[str] = None
+
             bookmakers = ev.get("bookmakers") or []
             if bookmakers:
                 mk = bookmakers[0]
+                bookmaker_name = mk.get("title") or mk.get("key")
                 markets = mk.get("markets") or []
                 mkt = markets[0] if markets else None
                 outcomes = (mkt or {}).get("outcomes") or []
@@ -275,9 +410,19 @@ def admin_odds_upcoming_orchestrate(
             home_id, home_type, home_sugg = _find_team_id(conn, home)
             away_id, away_type, away_sugg = _find_team_id(conn, away)
 
-            fixture = None
+            # fixture hint
+            fixture: Optional[Dict[str, Any]] = None
             if home_id and away_id and commence_time:
                 fixture = _try_find_fixture(conn, commence_time, home_id, away_id)
+
+            # match confidence (MVP)
+            if home_id and away_id:
+                if home_type == "EXACT" and away_type == "EXACT":
+                    match_conf = "EXACT"
+                else:
+                    match_conf = "ILIKE"
+            else:
+                match_conf = "NONE"
 
             market = _market_probs_from_odds(odds_h, odds_d, odds_a)
 
@@ -303,7 +448,6 @@ def admin_odds_upcoming_orchestrate(
                     p_mkt = market["novig"]
 
                     edge = None
-                    evv = None
                     if p_mkt:
                         edge = {
                             "H": (p_model["H"] - (p_mkt["H"] or 0.0)) if p_mkt["H"] is not None else None,
@@ -330,6 +474,29 @@ def admin_odds_upcoming_orchestrate(
                 except Exception as e:
                     model_block = {"error": str(e)}
 
+            # persist facts
+            persist_error = None
+            if persist and event_id:
+                try:
+                    _persist_event_and_snapshot(
+                        event_id=event_id,
+                        sport_key=sport_key,
+                        commence_time=commence_time,
+                        home_name=home,
+                        away_name=away,
+                        bookmaker=bookmaker_name,
+                        odds_h=odds_h,
+                        odds_d=odds_d,
+                        odds_a=odds_a,
+                        resolved_home_team_id=home_id,
+                        resolved_away_team_id=away_id,
+                        resolved_fixture_id=(fixture or {}).get("fixture_id") if fixture else None,
+                        match_confidence=match_conf,
+                        captured_at_utc=datetime.now(timezone.utc),
+                    )
+                except Exception as e:
+                    persist_error = str(e)
+
             out.append(
                 {
                     "event_id": event_id,
@@ -344,11 +511,12 @@ def admin_odds_upcoming_orchestrate(
                         "home": {"team_id": home_id, "match_type": home_type, "suggestions": home_sugg},
                         "away": {"team_id": away_id, "match_type": away_type, "suggestions": away_sugg},
                         "ok": bool(home_id and away_id),
+                        "match_confidence": match_conf,
                     },
                     "fixture_hint": fixture,
                     "model": model_block,
+                    "persist_error": persist_error,
                 }
             )
 
     return out
-
