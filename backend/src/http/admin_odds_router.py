@@ -579,8 +579,8 @@ def admin_odds_queue(
         EXTRACT(EPOCH FROM (now() - l.captured_at_utc))::int AS freshness_seconds
       FROM odds.odds_events e
       JOIN latest l ON l.event_id = e.event_id
-      WHERE (%(sport_key)s IS NULL OR e.sport_key = %(sport_key)s)
-        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= %(end)s))
+      WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
+        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
         AND ({conf_clause})
       ORDER BY
         e.commence_time_utc ASC NULLS LAST,
