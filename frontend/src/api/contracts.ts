@@ -92,3 +92,49 @@ export type RunRow = {
   logloss: number;
   top1_acc: number;
 };
+
+export type TeamSummaryMatch = {
+  fixture_id: number;
+  kickoff_utc: string | null;
+  league_id: number | null;
+  season: number | null;
+  round: string | null;
+  home_team: { team_id: number; name: string };
+  away_team: { team_id: number; name: string };
+  goals_home: number | null;
+  goals_away: number | null;
+  team_result: "W" | "D" | "L";
+  team_gf: number | null;
+  team_ga: number | null;
+};
+
+export type TeamSummary = {
+  team: {
+    team_id: number;
+    name: string;
+    country?: string | null;
+    is_national: boolean;
+    logo_url?: string | null;
+    venue: { name?: string | null; city?: string | null; capacity?: number | null };
+  };
+  filters: { season?: number | null; last_n: number };
+  stats: {
+    matches: number;
+    matches_home: number;
+    matches_away: number;
+    wins: number;
+    draws: number;
+    losses: number;
+    goals_for: number;
+    goals_against: number;
+    points: number;
+    ppg: number;
+    avg_goals_for: number;
+    avg_goals_against: number;
+  };
+  splits: {
+    home: { w: number; d: number; l: number; gf: number; ga: number };
+    away: { w: number; d: number; l: number; gf: number; ga: number };
+  };
+  last_matches: TeamSummaryMatch[];
+};

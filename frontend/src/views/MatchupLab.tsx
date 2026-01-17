@@ -1,34 +1,30 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
 import type { FixtureLite, MatchupResponse, TeamLite } from "../api/contracts";
+
 import {
   findUpcomingFixturesBetweenTeams,
   matchupByFixture,
   matchupWhatIf,
-  searchTeams,
   listArtifacts,
+  listTeams,
 } from "../api/client";
-import { Card, Pill, fmtNum, fmtPct, fmtIsoToShort } from "../ui/components";
 
-function ProbRow(props: { label: string; p: number; odd: number }) {
-  return (
-    <tr>
-      <td>{props.label}</td>
-      <td className="mono">{fmtPct(props.p)}</td>
-      <td className="mono">{fmtNum(props.odd, 2)}</td>
-    </tr>
-  );
-}
+import { Card } from "../ui/Card";
+import { Pill } from "../ui/Pill";
+import { fmtIsoToShort, fmtNum, fmtPct } from "../ui/components";
 
 export default function MatchupLab() {
   const [qHome, setQHome] = useState("");
   const [qAway, setQAway] = useState("");
-  const [homeOptions, setHomeOptions] = useState<TeamLite[]>([]);
-  const [awayOptions, setAwayOptions] = useState<TeamLite[]>([]);
+
+  const [allTeams, setAllTeams] = useState<TeamLite[]>([]);
+
   const [home, setHome] = useState<TeamLite | null>(null);
   const [away, setAway] = useState<TeamLite | null>(null);
 
   const [fixtures, setFixtures] = useState<FixtureLite[]>([]);
-  const [selectedFixtureId, setSelectedFixtureId] = useState<number | "">( "");
+  const [selectedFixtureId, setSelectedFixtureId] = useState<number | "">("");
 
   const [advanced, setAdvanced] = useState(false);
   const [venueMode, setVenueMode] = useState<"HOME" | "NEUTRAL">("HOME");
@@ -38,8 +34,10 @@ export default function MatchupLab() {
   const [artifactOptions, setArtifactOptions] = useState<string[]>([]);
 
   const [result, setResult] = useState<MatchupResponse | null>(null);
+
   const canSearchFixtures = useMemo(() => !!home && !!away, [home, away]);
 
+  // Load artifacts once
   useEffect(() => {
     void (async () => {
       const arts = await listArtifacts();
@@ -49,13 +47,26 @@ export default function MatchupLab() {
     })();
   }, []);
 
+  // Load teams once (preload default list)
   useEffect(() => {
-    void (async () => setHomeOptions(await searchTeams(qHome)))();
-  }, [qHome]);
+    void (async () => {
+      const teams = await listTeams(1000, 0); // ajuste se quiser (300/500/1000)
+      setAllTeams(teams);
+    })();
+  }, []);
 
-  useEffect(() => {
-    void (async () => setAwayOptions(await searchTeams(qAway)))();
-  }, [qAway]);
+  // Filter locally (no backend calls while typing)
+  const homeOptions = useMemo(() => {
+    const qq = qHome.trim().toLowerCase();
+    if (!qq) return allTeams;
+    return allTeams.filter((t) => t.name.toLowerCase().includes(qq));
+  }, [qHome, allTeams]);
+
+  const awayOptions = useMemo(() => {
+    const qq = qAway.trim().toLowerCase();
+    if (!qq) return allTeams;
+    return allTeams.filter((t) => t.name.toLowerCase().includes(qq));
+  }, [qAway, allTeams]);
 
   async function onFindFixtures() {
     if (!home || !away) return;
@@ -69,7 +80,10 @@ export default function MatchupLab() {
     setResult(null);
 
     if (!advanced && selectedFixtureId) {
-      const res = await matchupByFixture({ fixture_id: Number(selectedFixtureId), artifact_id: artifactId || undefined });
+      const res = await matchupByFixture({
+        fixture_id: Number(selectedFixtureId),
+        artifact_id: artifactId || undefined,
+      });
       setResult(res);
       return;
     }
@@ -87,14 +101,22 @@ export default function MatchupLab() {
   return (
     <>
       <div className="split">
-        <Card
-          title="Inputs"
-          right={<Pill>Season: auto</Pill>}
-        >
+        <Card title="Inputs" right={<Pill>Season: auto</Pill>}>
           <div className="form-row">
             <div className="field w6">
               <label>Home team (global)</label>
-              <input value={qHome} onChange={(e) => setQHome(e.target.value)} placeholder="Search (e.g., Arsenal)" />
+              <input
+                value={qHome}
+                onChange={(e) => {
+                  setQHome(e.target.value);
+                  setHome(null);
+                  setFixtures([]);
+                  setSelectedFixtureId("");
+                  setResult(null);
+                }}
+                placeholder="Filter (optional)…"
+              />
+
               <div style={{ marginTop: 8 }}>
                 <select
                   value={home?.team_id ?? ""}
@@ -104,21 +126,42 @@ export default function MatchupLab() {
                     setHome(t);
                     setFixtures([]);
                     setSelectedFixtureId("");
+                    setResult(null);
                   }}
+                  disabled={allTeams.length === 0}
                 >
-                  <option value="">Select home…</option>
+                  <option value="">
+                    {allTeams.length === 0 ? "Loading teams…" : "Select home…"}
+                  </option>
+
                   {homeOptions.map((t) => (
                     <option key={t.team_id} value={t.team_id}>
-                      {t.name}{t.country ? ` (${t.country})` : ""}
+                      {t.name}
+                      {t.country ? ` (${t.country})` : ""}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {allTeams.length > 0 && qHome.trim() && homeOptions.length === 0 ? (
+                <div className="note">No teams match “{qHome.trim()}”.</div>
+              ) : null}
             </div>
 
             <div className="field w6">
               <label>Away team (global)</label>
-              <input value={qAway} onChange={(e) => setQAway(e.target.value)} placeholder="Search (e.g., Chelsea)" />
+              <input
+                value={qAway}
+                onChange={(e) => {
+                  setQAway(e.target.value);
+                  setAway(null);
+                  setFixtures([]);
+                  setSelectedFixtureId("");
+                  setResult(null);
+                }}
+                placeholder="Filter (optional)…"
+              />
+
               <div style={{ marginTop: 8 }}>
                 <select
                   value={away?.team_id ?? ""}
@@ -128,16 +171,26 @@ export default function MatchupLab() {
                     setAway(t);
                     setFixtures([]);
                     setSelectedFixtureId("");
+                    setResult(null);
                   }}
+                  disabled={allTeams.length === 0}
                 >
-                  <option value="">Select away…</option>
+                  <option value="">
+                    {allTeams.length === 0 ? "Loading teams…" : "Select away…"}
+                  </option>
+
                   {awayOptions.map((t) => (
                     <option key={t.team_id} value={t.team_id}>
-                      {t.name}{t.country ? ` (${t.country})` : ""}
+                      {t.name}
+                      {t.country ? ` (${t.country})` : ""}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {allTeams.length > 0 && qAway.trim() && awayOptions.length === 0 ? (
+                <div className="note">No teams match “{qAway.trim()}”.</div>
+              ) : null}
             </div>
 
             <div className="field w6">
@@ -151,7 +204,10 @@ export default function MatchupLab() {
               </select>
             </div>
 
-            <div className="field w6" style={{ display: "flex", alignItems: "flex-end", justifyContent: "flex-end", gap: 10 }}>
+            <div
+              className="field w6"
+              style={{ display: "flex", alignItems: "flex-end", justifyContent: "flex-end", gap: 10 }}
+            >
               <button className="btn ghost" disabled={!canSearchFixtures} onClick={onFindFixtures}>
                 Find upcoming fixtures
               </button>
@@ -162,10 +218,12 @@ export default function MatchupLab() {
 
             <div className="field w12">
               <label>
-                <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /> Advanced (what-if)
+                <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /> Advanced
+                (what-if)
               </label>
               <div className="note">
-                Default mode prefers a real fixture when available. Advanced mode runs a what-if simulation without relying on a fixture.
+                Default mode prefers a real fixture when available. Advanced mode runs a what-if simulation without
+                relying on a fixture.
               </div>
             </div>
 
@@ -177,7 +235,9 @@ export default function MatchupLab() {
                   onChange={(e) => setSelectedFixtureId(e.target.value ? Number(e.target.value) : "")}
                   disabled={fixtures.length === 0}
                 >
-                  <option value="">{fixtures.length ? "Select fixture…" : "No fixtures loaded (click “Find upcoming fixtures”)"} </option>
+                  <option value="">
+                    {fixtures.length ? "Select fixture…" : "No fixtures loaded (click “Find upcoming fixtures”)"}{" "}
+                  </option>
                   {fixtures.map((f) => (
                     <option key={f.fixture_id} value={f.fixture_id}>
                       {fmtIsoToShort(f.kickoff_utc)} — {f.competition_name} — season {f.season}
@@ -217,10 +277,15 @@ export default function MatchupLab() {
                 Artifact: <b>{result.meta.artifact_id}</b>
                 <br />
                 {result.meta.kickoff_utc ? (
-                  <>Kickoff: <b>{result.meta.kickoff_utc}</b><br /></>
+                  <>
+                    Kickoff: <b>{result.meta.kickoff_utc}</b>
+                    <br />
+                  </>
                 ) : null}
                 {result.meta.competition_name ? (
-                  <>Competition: <b>{result.meta.competition_name}</b> • Season: <b>{result.meta.season}</b></>
+                  <>
+                    Competition: <b>{result.meta.competition_name}</b> • Season: <b>{result.meta.season}</b>
+                  </>
                 ) : null}
               </div>
 
@@ -273,3 +338,14 @@ export default function MatchupLab() {
     </>
   );
 }
+
+function ProbRow(props: { label: string; p: number; odd: number }) {
+  return (
+    <tr>
+      <td>{props.label}</td>
+      <td className="mono">{fmtPct(props.p)}</td>
+      <td className="mono">{fmtNum(props.odd, { maximumFractionDigits: 2 })}</td>
+    </tr>
+  );
+}
+

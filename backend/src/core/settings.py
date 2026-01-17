@@ -61,12 +61,12 @@ def load_settings() -> Settings:
         the_odds_api_base_url=the_odds_api_base_url,
         the_odds_api_key=the_odds_api_key,
         db_path=db_path,
+        database_url=database_url,
         default_lang=default_lang,
         supported_langs=supported_langs,
         sports_config=sports_config,
         apifootball_endpoints=apifootball_endpoints,
         theodds_endpoints=theodds_endpoints,
         app_defaults=app_defaults,
-        database_url=database_url,
-
     )
+

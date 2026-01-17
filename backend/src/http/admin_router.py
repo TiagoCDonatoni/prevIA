@@ -5,13 +5,13 @@ from fastapi import APIRouter, Query, HTTPException
 
 from src.db.pg import pg_conn
 
-router = APIRouter(prefix="/admin", tags=["admin"])
-
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
+admin_odds_router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
 # -----------------------------
 # /admin/teams
 # -----------------------------
-@router.get("/teams")
+@admin_router.get("/teams")
 def admin_search_teams(
     q: str = Query(default="", max_length=80),
     limit: int = Query(default=20, ge=1, le=50),
@@ -433,8 +433,8 @@ def admin_metrics_overview() -> Dict[str, Any]:
 from typing import Any, Dict, List, Optional
 from fastapi import Query
 
-@router.get("/metrics/artifacts")
-def admin_metrics_artifacts(
+@admin_router.get("/metrics/artifacts/raw")
+def admin_metrics_artifacts_raw(
     league_id: Optional[int] = Query(default=None, ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
     limit: int = Query(default=50, ge=1, le=200),
@@ -522,8 +522,6 @@ from fastapi import APIRouter, Query, HTTPException
 
 from src.db.pg import pg_conn
 
-router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
-
 _STOPWORDS = {
     "fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"
 }
@@ -591,7 +589,7 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5) -> Tuple[Opti
     return best_id, "ILIKE", suggestions
 
 
-@router.get("/resolve")
+@admin_odds_router.get("/resolve")
 def resolve_odds_teams(
     home_name: str = Query(..., min_length=2),
     away_name: str = Query(..., min_length=2),
@@ -609,3 +607,7 @@ def resolve_odds_teams(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+from typing import Literal
+
+__all__ = ["admin_router", "admin_odds_router"]

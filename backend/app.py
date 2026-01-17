@@ -6,7 +6,10 @@ from src.core.settings import load_settings, BASE_DIR
 from src.routes.debug_db import router as debug_db_router
 
 # Admin (DB/metrics/matchup etc.)
-from src.http.admin_router import router as admin_router
+from src.routers.admin_router import admin_router, admin_odds_router
+
+app.include_router(admin_router)
+app.include_router(admin_odds_router)
 
 # Odds admin
 from src.http.admin_odds_router import router as admin_odds_router
