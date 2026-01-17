@@ -520,3 +520,128 @@ def admin_odds_upcoming_orchestrate(
             )
 
     return out
+
+@router.get("/queue")
+def admin_odds_queue(
+    sport_key: Optional[str] = Query(default=None),
+    hours_ahead: int = Query(default=72, ge=1, le=720),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> List[Dict[str, Any]]:
+    """
+    Lista a fila de odds a partir do banco (fatos persistidos),
+    retornando o ÚLTIMO snapshot 1x2 por event_id.
+
+    min_confidence:
+      - NONE  (não filtra)
+      - ILIKE (inclui ILIKE e EXACT)
+      - EXACT (somente EXACT)
+    """
+    now_utc = datetime.now(timezone.utc)
+    end_utc = now_utc + timedelta(hours=hours_ahead)
+
+    # regra simples de filtro por confiança
+    conf_clause = "TRUE"
+    if min_confidence == "EXACT":
+        conf_clause = "e.match_confidence = 'EXACT'"
+    elif min_confidence == "ILIKE":
+        conf_clause = "e.match_confidence IN ('ILIKE','EXACT')"
+
+    sql = f"""
+      WITH latest AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.bookmaker,
+          s.market,
+          s.odds_home,
+          s.odds_draw,
+          s.odds_away,
+          s.captured_at_utc
+        FROM odds.odds_snapshots_1x2 s
+        ORDER BY s.event_id, s.captured_at_utc DESC
+      )
+      SELECT
+        e.event_id,
+        e.sport_key,
+        e.commence_time_utc,
+        e.home_name,
+        e.away_name,
+        e.resolved_home_team_id,
+        e.resolved_away_team_id,
+        e.resolved_fixture_id,
+        e.match_confidence,
+        l.bookmaker,
+        l.market,
+        l.odds_home,
+        l.odds_draw,
+        l.odds_away,
+        l.captured_at_utc,
+        EXTRACT(EPOCH FROM (now() - l.captured_at_utc))::int AS freshness_seconds
+      FROM odds.odds_events e
+      JOIN latest l ON l.event_id = e.event_id
+      WHERE (%(sport_key)s IS NULL OR e.sport_key = %(sport_key)s)
+        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= %(end)s))
+        AND ({conf_clause})
+      ORDER BY
+        e.commence_time_utc ASC NULLS LAST,
+        l.captured_at_utc DESC
+      LIMIT %(limit)s
+    """
+
+    params = {"sport_key": sport_key, "end": end_utc, "limit": limit}
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    out: List[Dict[str, Any]] = []
+    for (
+        event_id,
+        sport_key_db,
+        commence_time_utc,
+        home_name,
+        away_name,
+        resolved_home_team_id,
+        resolved_away_team_id,
+        resolved_fixture_id,
+        match_confidence,
+        bookmaker,
+        market,
+        odds_home,
+        odds_draw,
+        odds_away,
+        captured_at_utc,
+        freshness_seconds,
+    ) in rows:
+        out.append(
+            {
+                "event_id": event_id,
+                "sport_key": sport_key_db,
+                "commence_time_utc": commence_time_utc.isoformat().replace("+00:00", "Z") if commence_time_utc else None,
+                "home_name": home_name,
+                "away_name": away_name,
+                "resolved": {
+                    "home_team_id": int(resolved_home_team_id) if resolved_home_team_id is not None else None,
+                    "away_team_id": int(resolved_away_team_id) if resolved_away_team_id is not None else None,
+                    "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
+                    "match_confidence": match_confidence,
+                },
+                "latest_snapshot": {
+                    "bookmaker": bookmaker,
+                    "market": market,
+                    "odds_1x2": {
+                        "H": float(odds_home) if odds_home is not None else None,
+                        "D": float(odds_draw) if odds_draw is not None else None,
+                        "A": float(odds_away) if odds_away is not None else None,
+                    },
+                    "captured_at_utc": captured_at_utc.isoformat().replace("+00:00", "Z") if captured_at_utc else None,
+                    "freshness_seconds": int(freshness_seconds) if freshness_seconds is not None else None,
+                },
+            }
+        )
+
+    return out
