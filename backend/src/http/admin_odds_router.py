@@ -621,7 +621,10 @@ def admin_odds_queue(
             {
                 "event_id": event_id,
                 "sport_key": sport_key_db,
-                "commence_time_utc": commence_time_utc.isoformat().replace("+00:00", "Z") if commence_time_utc else None,
+                "commence_time_utc": (
+                    commence_time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    if commence_time_utc else None
+                ),
                 "home_name": home_name,
                 "away_name": away_name,
                 "resolved": {
@@ -638,7 +641,10 @@ def admin_odds_queue(
                         "D": float(odds_draw) if odds_draw is not None else None,
                         "A": float(odds_away) if odds_away is not None else None,
                     },
-                    "captured_at_utc": captured_at_utc.isoformat().replace("+00:00", "Z") if captured_at_utc else None,
+                "captured_at_utc": (
+                    captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    if captured_at_utc else None
+                ),
                     "freshness_seconds": int(freshness_seconds) if freshness_seconds is not None else None,
                 },
             }
