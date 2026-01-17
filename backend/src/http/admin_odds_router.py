@@ -651,3 +651,293 @@ def admin_odds_queue(
         )
 
     return out
+
+@router.get("/queue/intel")
+def admin_odds_queue_intel(
+    sport_key: Optional[str] = Query(default=None),
+    hours_ahead: int = Query(default=72, ge=1, le=720),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+    limit: int = Query(default=200, ge=1, le=1000),
+
+    # MVP: assumimos EPL/season quando fixture_id não existe
+    assume_league_id: Optional[int] = Query(default=39, ge=1),
+    assume_season: Optional[int] = Query(default=2024, ge=1900, le=2100),
+
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+    sort: str = Query(
+        default="best_ev",
+        pattern="^(best_ev|ev_h|ev_d|ev_a|edge_h|edge_d|edge_a|kickoff|freshness)$"
+    ),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+) -> Dict[str, Any]:
+    """
+    Queue Intel: lê odds persistidas (último snapshot por evento), calcula:
+      - P_market (no-vig)
+      - P_model (quando possível)
+      - EV e edge
+    e ordena por uma métrica simples.
+
+    NÃO chama provider externo. Apenas DB + modelo local.
+    """
+
+    now_utc = datetime.now(timezone.utc)
+    end_utc = now_utc + timedelta(hours=hours_ahead)
+
+    # filtro de confiança (MVP, simples)
+    conf_clause = "TRUE"
+    if min_confidence == "EXACT":
+        conf_clause = "e.match_confidence = 'EXACT'"
+    elif min_confidence == "ILIKE":
+        conf_clause = "e.match_confidence IN ('ILIKE','EXACT')"
+
+    # Query igual ao /queue, mas retornando campos necessários ao intel
+    sql = f"""
+      WITH latest AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.bookmaker,
+          s.market,
+          s.odds_home,
+          s.odds_draw,
+          s.odds_away,
+          s.captured_at_utc
+        FROM odds.odds_snapshots_1x2 s
+        ORDER BY s.event_id, s.captured_at_utc DESC
+      )
+      SELECT
+        e.event_id,
+        e.sport_key,
+        e.commence_time_utc,
+        e.home_name,
+        e.away_name,
+        e.resolved_home_team_id,
+        e.resolved_away_team_id,
+        e.resolved_fixture_id,
+        e.match_confidence,
+        l.bookmaker,
+        l.market,
+        l.odds_home,
+        l.odds_draw,
+        l.odds_away,
+        l.captured_at_utc,
+        EXTRACT(EPOCH FROM (now() - l.captured_at_utc))::int AS freshness_seconds
+      FROM odds.odds_events e
+      JOIN latest l ON l.event_id = e.event_id
+      WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
+        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
+        AND ({conf_clause})
+      ORDER BY
+        e.commence_time_utc ASC NULLS LAST,
+        l.captured_at_utc DESC
+      LIMIT %(limit)s
+    """
+
+    params = {"sport_key": sport_key, "end": end_utc, "limit": limit}
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items: List[Dict[str, Any]] = []
+    counters = {
+        "total": 0,
+        "ok_model": 0,
+        "missing_team": 0,
+        "model_error": 0,
+    }
+
+    for (
+        event_id,
+        sport_key_db,
+        commence_time_utc,
+        home_name,
+        away_name,
+        resolved_home_team_id,
+        resolved_away_team_id,
+        resolved_fixture_id,
+        match_confidence,
+        bookmaker,
+        market,
+        odds_home,
+        odds_draw,
+        odds_away,
+        captured_at_utc,
+        freshness_seconds,
+    ) in rows:
+        counters["total"] += 1
+
+        # Normalizar timestamps para UTC Z (evita confusão)
+        kickoff_iso = (
+            commence_time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if commence_time_utc else None
+        )
+        captured_iso = (
+            captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if captured_at_utc else None
+        )
+
+        oh = float(odds_home) if odds_home is not None else None
+        od = float(odds_draw) if odds_draw is not None else None
+        oa = float(odds_away) if odds_away is not None else None
+
+        market_probs = _market_probs_from_odds(oh, od, oa)
+        p_mkt = market_probs.get("novig")
+
+        home_id = int(resolved_home_team_id) if resolved_home_team_id is not None else None
+        away_id = int(resolved_away_team_id) if resolved_away_team_id is not None else None
+
+        # MVP: se não temos fixture_id/league/season, usamos assume
+        league_id = int(assume_league_id) if assume_league_id else None
+        season = int(assume_season) if assume_season else None
+
+        model_block: Optional[Dict[str, Any]] = None
+        status = "ok"
+        reason = None
+
+        if not home_id or not away_id:
+            status = "incomplete"
+            reason = "missing_team_id"
+            counters["missing_team"] += 1
+        else:
+            try:
+                pred = predict_1x2_from_artifact(
+                    artifact_filename=artifact_filename,
+                    league_id=league_id,
+                    season=season,
+                    home_team_id=home_id,
+                    away_team_id=away_id,
+                )
+                p_model = pred["probs"]
+
+                # edge vs mercado no-vig (se disponível)
+                edge = None
+                if p_mkt:
+                    edge = {
+                        "H": (p_model["H"] - (p_mkt["H"] or 0.0)) if p_mkt.get("H") is not None else None,
+                        "D": (p_model["D"] - (p_mkt["D"] or 0.0)) if p_mkt.get("D") is not None else None,
+                        "A": (p_model["A"] - (p_mkt["A"] or 0.0)) if p_mkt.get("A") is not None else None,
+                    }
+
+                # EV decimal (odds * prob - 1)
+                evv = {
+                    "H": (p_model["H"] * oh - 1.0) if oh else None,
+                    "D": (p_model["D"] * od - 1.0) if od else None,
+                    "A": (p_model["A"] * oa - 1.0) if oa else None,
+                }
+
+                best_ev = None
+                best_side = None
+                for side in ("H", "D", "A"):
+                    v = evv.get(side)
+                    if v is None:
+                        continue
+                    if best_ev is None or v > best_ev:
+                        best_ev = v
+                        best_side = side
+
+                model_block = {
+                    "artifact_filename": artifact_filename,
+                    "league_id": league_id,
+                    "season": season,
+                    "probs_model": p_model,
+                    "edge_vs_market": edge,
+                    "ev_decimal": evv,
+                    "best_ev": best_ev,
+                    "best_side": best_side,
+                    "artifact_meta": pred.get("artifact"),
+                }
+                counters["ok_model"] += 1
+
+            except Exception as e:
+                status = "incomplete"
+                reason = str(e)
+                counters["model_error"] += 1
+                model_block = {"error": str(e)}
+
+        items.append(
+            {
+                "event_id": event_id,
+                "sport_key": sport_key_db,
+                "kickoff_utc": kickoff_iso,
+                "home_name": home_name,
+                "away_name": away_name,
+                "resolved": {
+                    "home_team_id": home_id,
+                    "away_team_id": away_id,
+                    "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
+                    "match_confidence": match_confidence,
+                },
+                "latest_snapshot": {
+                    "bookmaker": bookmaker,
+                    "market": market,
+                    "odds_1x2": {"H": oh, "D": od, "A": oa},
+                    "captured_at_utc": captured_iso,
+                    "freshness_seconds": int(freshness_seconds) if freshness_seconds is not None else None,
+                },
+                "market_probs": market_probs,
+                "model": model_block,
+                "status": status,
+                "reason": reason,
+            }
+        )
+
+    # ordenação (simples e robusta)
+    def _key(it: Dict[str, Any]):
+        if sort == "kickoff":
+            return it.get("kickoff_utc") or ""
+        if sort == "freshness":
+            fs = (it.get("latest_snapshot") or {}).get("freshness_seconds")
+            return fs if fs is not None else 10**9
+
+        m = it.get("model") or {}
+        edge = (m.get("edge_vs_market") or {})
+        evd = (m.get("ev_decimal") or {})
+
+        if sort == "best_ev":
+            v = m.get("best_ev")
+            return v if v is not None else -10**9
+
+        if sort == "ev_h":
+            v = evd.get("H")
+            return v if v is not None else -10**9
+        if sort == "ev_d":
+            v = evd.get("D")
+            return v if v is not None else -10**9
+        if sort == "ev_a":
+            v = evd.get("A")
+            return v if v is not None else -10**9
+
+        if sort == "edge_h":
+            v = edge.get("H")
+            return v if v is not None else -10**9
+        if sort == "edge_d":
+            v = edge.get("D")
+            return v if v is not None else -10**9
+        if sort == "edge_a":
+            v = edge.get("A")
+            return v if v is not None else -10**9
+
+        return -10**9
+
+    reverse = (order.lower() == "desc")
+    items.sort(key=_key, reverse=reverse)
+
+    return {
+        "meta": {
+            "sport_key": sport_key,
+            "hours_ahead": hours_ahead,
+            "min_confidence": min_confidence,
+            "limit": limit,
+            "artifact_filename": artifact_filename,
+            "assume_league_id": assume_league_id,
+            "assume_season": assume_season,
+            "sort": sort,
+            "order": order,
+            "counts": counters,
+        },
+        "items": items,
+    }
