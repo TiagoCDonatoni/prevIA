@@ -253,3 +253,33 @@ export async function getArtifactMetrics(params?: {
   return fetchJson(url.toString());
 }
 
+import type { OddsIntelResponse } from "./contracts";
+
+export async function getOddsQueueIntel(params: {
+  sport_key: string;
+  hours_ahead?: number;
+  limit?: number;
+  min_confidence?: "EXACT" | "ILIKE" | "FUZZY" | "NONE";
+  sort?: string; // "best_ev" | "ev_h" | "ev_d" | "ev_a" etc (backend valida)
+  order?: "asc" | "desc";
+  artifact_filename?: string;
+  assume_league_id?: number;
+  assume_season?: number;
+}): Promise<OddsIntelResponse> {
+  const qs = new URLSearchParams();
+  qs.set("sport_key", params.sport_key);
+
+  if (params.hours_ahead != null) qs.set("hours_ahead", String(params.hours_ahead));
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.min_confidence) qs.set("min_confidence", params.min_confidence);
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.order) qs.set("order", params.order);
+
+  if (params.artifact_filename) qs.set("artifact_filename", params.artifact_filename);
+  if (params.assume_league_id != null) qs.set("assume_league_id", String(params.assume_league_id));
+  if (params.assume_season != null) qs.set("assume_season", String(params.assume_season));
+
+  const url = new URL("/admin/odds/queue/intel", API_BASE_URL);
+  url.search = qs.toString();
+  return fetchJson<OddsIntelResponse>(url.toString());
+}

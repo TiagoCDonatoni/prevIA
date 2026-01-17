@@ -138,3 +138,82 @@ export type TeamSummary = {
   };
   last_matches: TeamSummaryMatch[];
 };
+
+export type Odds1x2 = { H: number; D: number; A: number };
+
+export type OddsMarketProbs = {
+  raw: Odds1x2;
+  novig: Odds1x2;
+  overround: number;
+};
+
+export type OddsResolved = {
+  home_team_id: number | null;
+  away_team_id: number | null;
+  fixture_id: number | null;
+  match_confidence: "EXACT" | "ILIKE" | "FUZZY" | "NONE";
+};
+
+export type OddsSnapshot = {
+  bookmaker: string;
+  market: string;
+  odds_1x2: Odds1x2 | null;
+  captured_at_utc: string;
+  freshness_seconds: number | null;
+};
+
+export type OddsModelMeta = {
+  train_seasons: number[];
+  n_samples: number;
+  trained_at_utc: string;
+  calibration: any | null;
+};
+
+export type OddsModelEval = {
+  artifact_filename: string;
+  league_id: number;
+  season: number;
+  probs_model: Odds1x2;
+  edge_vs_market: Odds1x2;
+  ev_decimal: Odds1x2;
+  best_ev: number;
+  best_side: "H" | "D" | "A";
+  artifact_meta: OddsModelMeta;
+};
+
+export type OddsIntelItem = {
+  event_id: string;
+  sport_key: string;
+  kickoff_utc: string;
+  home_name: string;
+  away_name: string;
+  resolved: OddsResolved;
+  latest_snapshot: OddsSnapshot;
+  market_probs: OddsMarketProbs | null;
+  model: OddsModelEval | { error: string } | null;
+  status: "ok" | "incomplete";
+  reason: string | null;
+};
+
+export type OddsIntelMeta = {
+  sport_key: string;
+  hours_ahead: number;
+  min_confidence: "EXACT" | "ILIKE" | "FUZZY" | "NONE";
+  limit: number;
+  artifact_filename: string;
+  assume_league_id: number;
+  assume_season: number;
+  sort: string;
+  order: "asc" | "desc";
+  counts: {
+    total: number;
+    ok_model: number;
+    missing_team: number;
+    model_error: number;
+  };
+};
+
+export type OddsIntelResponse = {
+  meta: OddsIntelMeta;
+  items: OddsIntelItem[];
+};

@@ -5,8 +5,9 @@ import "./styles.css";
 import Dashboard from "./views/Dashboard";
 import MatchupLab from "./views/MatchupLab";
 import TeamExplorer from "./views/TeamExplorer";
+import OddsIntel from "./views/OddsIntel";
 
-type Page = "dashboard" | "matchup" | "team";
+type Page = "dashboard" | "matchup" | "team" | "odds";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -38,6 +39,12 @@ export default function App() {
           >
             Team Explorer
           </button>
+          <button
+            className={`nav-btn ${page === "odds" ? "active" : ""}`}
+            onClick={() => setPage("odds")}
+          >
+            Odds Intel
+          </button>
         </div>
       </div>
 
@@ -45,6 +52,7 @@ export default function App() {
         {page === "dashboard" && <Dashboard />}
         {page === "matchup" && <MatchupLab />}
         {page === "team" && <TeamExplorer />}
+        {page === "odds" && <OddsIntel />}
       </div>
     </div>
   );
