@@ -1,5 +1,8 @@
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Literal
+
+import re
+import unicodedata
 
 from fastapi import APIRouter, Query, HTTPException
 
@@ -51,7 +54,7 @@ def admin_search_teams(
 # -----------------------------
 # /admin/fixtures/upcoming
 # -----------------------------
-@router.get("/fixtures/upcoming")
+@admin_router.get("/fixtures/upcoming")
 def admin_upcoming_fixtures(
     team_id: Optional[int] = Query(default=None, ge=1),
     days_ahead: int = Query(default=14, ge=1, le=60),
@@ -141,7 +144,7 @@ def admin_upcoming_fixtures(
 # -----------------------------
 # /admin/team/summary
 # -----------------------------
-@router.get("/team/summary")
+@admin_router.get("/team/summary")
 def admin_team_summary(
     team_id: int = Query(..., ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
@@ -257,24 +260,42 @@ def admin_team_summary(
                     raise HTTPException(status_code=404, detail="team not found")
 
                 (
-                    _team_id, name, country_name, is_national, logo_url,
-                    venue_name, venue_city, venue_capacity
+                    _team_id,
+                    name,
+                    country_name,
+                    is_national,
+                    logo_url,
+                    venue_name,
+                    venue_city,
+                    venue_capacity,
                 ) = team_row
 
                 cur.execute(agg_sql, params)
                 agg = cur.fetchone()
 
                 if not agg:
-                    # no finished matches
                     agg = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
                 (
-                    matches, matches_home, matches_away,
-                    wins, draws, losses,
-                    goals_for, goals_against,
+                    matches,
+                    matches_home,
+                    matches_away,
+                    wins,
+                    draws,
+                    losses,
+                    goals_for,
+                    goals_against,
                     points,
-                    home_w, home_d, home_l, home_gf, home_ga,
-                    away_w, away_d, away_l, away_gf, away_ga
+                    home_w,
+                    home_d,
+                    home_l,
+                    home_gf,
+                    home_ga,
+                    away_w,
+                    away_d,
+                    away_l,
+                    away_gf,
+                    away_ga,
                 ) = agg
 
                 cur.execute(last_sql, params)
@@ -361,13 +382,26 @@ def admin_team_summary(
             "avg_goals_against": safe_div(goals_against, matches),
         },
         "splits": {
-            "home": {"w": int(home_w), "d": int(home_d), "l": int(home_l), "gf": int(home_gf), "ga": int(home_ga)},
-            "away": {"w": int(away_w), "d": int(away_d), "l": int(away_l), "gf": int(away_gf), "ga": int(away_ga)},
+            "home": {
+                "w": int(home_w),
+                "d": int(home_d),
+                "l": int(home_l),
+                "gf": int(home_gf),
+                "ga": int(home_ga),
+            },
+            "away": {
+                "w": int(away_w),
+                "d": int(away_d),
+                "l": int(away_l),
+                "gf": int(away_gf),
+                "ga": int(away_ga),
+            },
         },
         "last_matches": last_matches,
     }
 
-@router.get("/teams/list")
+
+@admin_router.get("/teams/list")
 def admin_list_teams(
     limit: int = Query(default=300, ge=1, le=2000),
     offset: int = Query(default=0, ge=0, le=200000),
@@ -399,7 +433,8 @@ def admin_list_teams(
         )
     return out
 
-@router.get("/metrics/overview")
+
+@admin_router.get("/metrics/overview")
 def admin_metrics_overview() -> Dict[str, Any]:
     """
     High-level DB coverage metrics for Admin Dashboard.
@@ -430,11 +465,10 @@ def admin_metrics_overview() -> Dict[str, Any]:
         "kickoff_max_utc": kickoff_max.isoformat().replace("+00:00", "Z") if kickoff_max else None,
     }
 
-from typing import Any, Dict, List, Optional
-from fastapi import Query
 
+@admin_router.get("/metrics/artifacts")
 @admin_router.get("/metrics/artifacts/raw")
-def admin_metrics_artifacts_raw(
+def admin_metrics_artifacts(
     league_id: Optional[int] = Query(default=None, ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
     limit: int = Query(default=50, ge=1, le=200),
@@ -444,6 +478,10 @@ def admin_metrics_artifacts_raw(
     """
     Returns latest metrics snapshot per (artifact_id, league_id, season).
     Default: sorted by brier asc.
+
+    Aliases:
+      - /admin/metrics/artifacts
+      - /admin/metrics/artifacts/raw
     """
     sort_sql = {
         "brier": "brier",
@@ -515,16 +553,6 @@ def admin_metrics_artifacts_raw(
         )
     return out
 
-from typing import Any, Dict, List, Optional, Tuple
-import re
-import unicodedata
-from fastapi import APIRouter, Query, HTTPException
-
-from src.db.pg import pg_conn
-
-_STOPWORDS = {
-    "fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"
-}
 
 def _norm_name(s: str) -> str:
     s = (s or "").strip().lower()
@@ -534,7 +562,12 @@ def _norm_name(s: str) -> str:
     parts = [p for p in s.split() if p and p not in _STOPWORDS]
     return " ".join(parts).strip()
 
-def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5) -> Tuple[Optional[int], str, List[Dict[str, Any]]]:
+
+def _find_team_id(
+    conn,
+    raw_name: str,
+    limit_suggestions: int = 5
+) -> Tuple[Optional[int], str, List[Dict[str, Any]]]:
     """
     Returns (team_id, match_type, suggestions[])
     match_type: EXACT | ILIKE | NONE
@@ -543,8 +576,6 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5) -> Tuple[Opti
     if not name_norm:
         return None, "NONE", []
 
-    # 1) EXACT match (normalized vs normalized in SQL)
-    # We don't have a normalized column, so do best-effort: exact on lower(name)
     sql_exact = """
       SELECT team_id, name, country_name
       FROM core.teams
@@ -557,9 +588,6 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5) -> Tuple[Opti
         if row:
             return int(row[0]), "EXACT", []
 
-    # 2) ILIKE contains (fast with pg_trgm index on name)
-    # Use the normalized tokens as pattern, but against raw "name"
-    # Pattern: all tokens must appear somewhere (AND)
     tokens = [t for t in name_norm.split() if t]
     if not tokens:
         return None, "NONE", []
@@ -583,7 +611,6 @@ def _find_team_id(conn, raw_name: str, limit_suggestions: int = 5) -> Tuple[Opti
     if not rows:
         return None, "NONE", []
 
-    # If top result is very likely, return it as match
     best_id = int(rows[0][0])
     suggestions = [{"team_id": int(r[0]), "name": str(r[1]), "country": (str(r[2]) if r[2] else None)} for r in rows]
     return best_id, "ILIKE", suggestions
@@ -608,6 +635,5 @@ def resolve_odds_teams(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from typing import Literal
 
 __all__ = ["admin_router", "admin_odds_router"]

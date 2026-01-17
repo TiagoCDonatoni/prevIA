@@ -6,20 +6,16 @@ from src.core.settings import load_settings, BASE_DIR
 from src.routes.debug_db import router as debug_db_router
 
 # Admin (DB/metrics/matchup etc.)
-from src.routers.admin_router import admin_router, admin_odds_router
+from src.http.admin_router import admin_router, admin_odds_router
 
-app.include_router(admin_router)
-app.include_router(admin_odds_router)
-
-# Odds admin
-from src.http.admin_odds_router import router as admin_odds_router
+# Odds admin (legado, se ainda existir e for necessário)
+from src.http.admin_odds_router import router as legacy_admin_odds_router
 
 
 def create_app() -> FastAPI:
     settings = load_settings()
     api = FastAPI(title="prevIA", version="v0")
 
-    # CORS — liberar Vite (localhost e 127.0.0.1, portas comuns)
     api.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -33,9 +29,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Routers (TODOS aqui dentro, antes do return)
+    # Routers
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
+    api.include_router(legacy_admin_odds_router)
     api.include_router(debug_db_router)
 
     @api.get("/", response_class=HTMLResponse)
