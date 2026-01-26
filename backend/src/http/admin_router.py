@@ -8,8 +8,51 @@ from fastapi import APIRouter, Query, HTTPException
 
 from src.db.pg import pg_conn
 
+from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
+
+from src.core.settings import load_settings
+from src.provider.apifootball.client import ApiFootballClient
+from src.etl.raw_ingest_pg import insert_raw_response
+from src.etl.core_etl_pg import run_core_etl
+
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 admin_odds_router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
+
+# --- AUDIT (reliability) helpers ---
+
+import math
+from datetime import datetime, timezone, timedelta
+
+def _artifact_filename_from_id(artifact_id: str) -> str:
+    a = (artifact_id or "").strip()
+    if not a:
+        raise HTTPException(status_code=400, detail="artifact_id is required")
+    return a if a.endswith(".json") else f"{a}.json"
+
+
+def _label_1x2(home_goals: int, away_goals: int) -> str:
+    if home_goals > away_goals:
+        return "H"
+    if home_goals == away_goals:
+        return "D"
+    return "A"
+
+def _safe_log(x: float, eps: float = 1e-15) -> float:
+    return math.log(max(min(x, 1.0 - eps), eps))
+
+def _brier_3(pH: float, pD: float, pA: float, y: str) -> float:
+    yH = 1.0 if y == "H" else 0.0
+    yD = 1.0 if y == "D" else 0.0
+    yA = 1.0 if y == "A" else 0.0
+    return (pH - yH) ** 2 + (pD - yD) ** 2 + (pA - yA) ** 2
+
+def _logloss_3(pH: float, pD: float, pA: float, y: str) -> float:
+    p = {"H": pH, "D": pD, "A": pA}.get(y, 0.0)
+    return -_safe_log(p)
+
+def _top1(pH: float, pD: float, pA: float) -> str:
+    m = max((pH, "H"), (pD, "D"), (pA, "A"), key=lambda t: t[0])
+    return m[1]
 
 # -----------------------------
 # /admin/teams
@@ -637,3 +680,437 @@ def resolve_odds_teams(
 
 
 __all__ = ["admin_router", "admin_odds_router"]
+
+@admin_odds_router.post("/audit/sync-results")
+def admin_odds_audit_sync_results(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    max_rows: int = Query(default=500, ge=1, le=5000),
+    finished_before_hours: int = Query(default=1, ge=0, le=168),
+) -> Dict[str, Any]:
+    """
+    Preenche odds.audit_result usando core.fixtures (quando is_finished=true).
+    Regra: busca fixtures finalizados e gera label H/D/A.
+    """
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=int(finished_before_hours))
+
+    sql_pick = """
+      SELECT
+        p.event_id,
+        p.fixture_id,
+        p.league_id,
+        p.season,
+        p.kickoff_utc,
+        f.goals_home,
+        f.goals_away
+      FROM odds.audit_prediction p
+      JOIN core.fixtures f ON f.fixture_id = p.fixture_id
+      LEFT JOIN odds.audit_result r ON r.event_id = p.event_id
+      WHERE p.fixture_id IS NOT NULL
+        AND r.event_id IS NULL
+        AND f.is_finished = true
+        AND COALESCE(f.is_cancelled, false) = false
+        AND p.kickoff_utc <= %(cutoff)s
+        AND (%(league_id)s IS NULL OR p.league_id = %(league_id)s)
+        AND (%(season)s IS NULL OR p.season = %(season)s)
+      ORDER BY p.kickoff_utc DESC
+      LIMIT %(max_rows)s
+    """
+
+    sql_ins = """
+      INSERT INTO odds.audit_result (
+        event_id, fixture_id, league_id, season, kickoff_utc,
+        result_1x2, home_goals, away_goals
+      )
+      VALUES (
+        %(event_id)s, %(fixture_id)s, %(league_id)s, %(season)s, %(kickoff_utc)s,
+        %(result_1x2)s, %(home_goals)s, %(away_goals)s
+      )
+      ON CONFLICT (event_id) DO UPDATE SET
+        fixture_id = EXCLUDED.fixture_id,
+        league_id = EXCLUDED.league_id,
+        season = EXCLUDED.season,
+        kickoff_utc = EXCLUDED.kickoff_utc,
+        result_1x2 = EXCLUDED.result_1x2,
+        home_goals = EXCLUDED.home_goals,
+        away_goals = EXCLUDED.away_goals,
+        finished_at_utc = now()
+    """
+
+    inserted = 0
+    rows = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql_pick, {"cutoff": cutoff, "league_id": league_id, "season": season, "max_rows": max_rows})
+            rows = cur.fetchall()
+
+        with conn.cursor() as cur:
+            for (event_id, fixture_id, l_id, s, kickoff_utc, gh, ga) in rows:
+                if gh is None or ga is None:
+                    continue
+                y = _label_1x2(int(gh), int(ga))
+                cur.execute(
+                    sql_ins,
+                    {
+                        "event_id": event_id,
+                        "fixture_id": fixture_id,
+                        "league_id": l_id,
+                        "season": s,
+                        "kickoff_utc": kickoff_utc,
+                        "result_1x2": y,
+                        "home_goals": int(gh),
+                        "away_goals": int(ga),
+                    },
+                )
+                inserted += 1
+
+        conn.commit()
+
+    return {"ok": True, "inserted": inserted, "scanned": len(rows), "cutoff_utc": cutoff.isoformat()}
+
+@admin_odds_router.get("/audit/reliability")
+def admin_odds_audit_reliability(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    window_days: int = Query(default=30, ge=1, le=365),
+    cutoff_hours: int = Query(default=6, ge=0, le=168),
+    artifact_filename: Optional[str] = Query(default=None),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+) -> Dict[str, Any]:
+    """
+    Retorna KPIs de confiabilidade (Modelo vs Mercado novig) em uma janela temporal,
+    escolhendo 1 snapshot por jogo: o mais recente capturado até (kickoff - cutoff_hours).
+    """
+    now_utc = datetime.now(timezone.utc)
+    start = now_utc - timedelta(days=int(window_days))
+
+    # min_confidence: NONE inclui tudo; ILIKE inclui ILIKE+EXACT; EXACT só EXACT
+    confs = None
+    if min_confidence == "EXACT":
+        confs = ("EXACT",)
+    elif min_confidence == "ILIKE":
+        confs = ("ILIKE", "EXACT")
+
+    sql = """
+      WITH cand AS (
+        SELECT
+          p.event_id,
+          p.kickoff_utc,
+          p.captured_at_utc,
+          p.league_id,
+          p.season,
+          p.match_confidence,
+
+          p.market_p_h, p.market_p_d, p.market_p_a,
+          p.model_p_h,  p.model_p_d,  p.model_p_a,
+
+          r.result_1x2
+        FROM odds.audit_prediction p
+        JOIN odds.audit_result r ON r.event_id = p.event_id
+        WHERE p.kickoff_utc >= %(start)s
+          AND p.kickoff_utc <= %(end)s
+          AND (%(league_id)s IS NULL OR p.league_id = %(league_id)s)
+          AND (%(season)s   IS NULL OR p.season   = %(season)s)
+          AND (%(artifact_filename)s IS NULL OR p.artifact_filename = %(artifact_filename)s)
+          AND (%(confs)s IS NULL OR p.match_confidence = ANY(%(confs)s))
+          AND p.captured_at_utc <= (p.kickoff_utc - (%(cutoff_hours)s || ' hours')::interval)
+      ),
+      picked AS (
+        SELECT DISTINCT ON (event_id)
+          *
+        FROM cand
+        ORDER BY event_id, captured_at_utc DESC
+      )
+      SELECT
+        event_id, kickoff_utc, captured_at_utc,
+        market_p_h, market_p_d, market_p_a,
+        model_p_h,  model_p_d,  model_p_a,
+        result_1x2
+      FROM picked
+      ORDER BY kickoff_utc DESC
+    """
+
+    rows = []
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "start": start,
+                    "end": now_utc,
+                    "league_id": league_id,
+                    "season": season,
+                    "artifact_filename": artifact_filename,
+                    "confs": confs,
+                    "cutoff_hours": int(cutoff_hours),
+                },
+            )
+            rows = cur.fetchall()
+
+    # métricas
+    n_total = len(rows)
+    n_model = 0
+    n_market = 0
+    n_both = 0
+
+    sum_brier_model = 0.0
+    sum_ll_model = 0.0
+    sum_top1_model = 0
+
+    sum_brier_mkt = 0.0
+    sum_ll_mkt = 0.0
+    sum_top1_mkt = 0
+
+    for (_event_id, _kickoff, _cap, mH, mD, mA, pH, pD, pA, y) in rows:
+        y = str(y)
+
+        has_model = (pH is not None and pD is not None and pA is not None)
+        has_mkt = (mH is not None and mD is not None and mA is not None)
+
+        if has_model:
+            n_model += 1
+            pHf, pDf, pAf = float(pH), float(pD), float(pA)
+            sum_brier_model += _brier_3(pHf, pDf, pAf, y)
+            sum_ll_model += _logloss_3(pHf, pDf, pAf, y)
+            sum_top1_model += (1 if _top1(pHf, pDf, pAf) == y else 0)
+
+        if has_mkt:
+            n_market += 1
+            mHf, mDf, mAf = float(mH), float(mD), float(mA)
+            sum_brier_mkt += _brier_3(mHf, mDf, mAf, y)
+            sum_ll_mkt += _logloss_3(mHf, mDf, mAf, y)
+            sum_top1_mkt += (1 if _top1(mHf, mDf, mAf) == y else 0)
+
+        if has_model and has_mkt:
+            n_both += 1
+
+    def _avg(s: float, n: int) -> Optional[float]:
+        return (s / n) if n > 0 else None
+
+    out = {
+        "meta": {
+            "league_id": league_id,
+            "season": season,
+            "window_days": window_days,
+            "cutoff_hours": cutoff_hours,
+            "artifact_filename": artifact_filename,
+            "min_confidence": min_confidence,
+            "start_utc": start.isoformat(),
+            "end_utc": now_utc.isoformat(),
+        },
+        "counts": {
+            "picked_games": n_total,
+            "with_model_probs": n_model,
+            "with_market_probs": n_market,
+            "with_both": n_both,
+        },
+        "model": {
+            "brier": _avg(sum_brier_model, n_model),
+            "logloss": _avg(sum_ll_model, n_model),
+            "top1_acc": (_avg(float(sum_top1_model), n_model)),
+        },
+        "market_novig": {
+            "brier": _avg(sum_brier_mkt, n_market),
+            "logloss": _avg(sum_ll_mkt, n_market),
+            "top1_acc": (_avg(float(sum_top1_mkt), n_market)),
+        },
+    }
+    return out
+
+@admin_router.get("/matchup/whatif")
+def admin_matchup_whatif(
+    home_team_id: int = Query(..., ge=1),
+    away_team_id: int = Query(..., ge=1),
+    league_id: int = Query(default=39, ge=1),  # default EPL
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    artifact_id: str = Query(...),
+) -> Dict[str, Any]:
+    artifact_filename = _artifact_filename_from_id(artifact_id)
+
+    # se season não vier, pega a última disponível na team_season_stats para essa liga
+    if season is None:
+        sql_season = "SELECT COALESCE(MAX(season), 0) FROM core.team_season_stats WHERE league_id = %s"
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_season, (league_id,))
+                (max_season,) = cur.fetchone()
+        if not max_season:
+            raise HTTPException(status_code=400, detail="no team_season_stats found for league_id")
+        season = int(max_season)
+
+    pred = predict_1x2_from_artifact(
+        artifact_filename=artifact_filename,
+        league_id=int(league_id),
+        season=int(season),
+        home_team_id=int(home_team_id),
+        away_team_id=int(away_team_id),
+    )
+
+    p = pred["probs"]
+    fair = {"H": 1.0 / p["H"], "D": 1.0 / p["D"], "A": 1.0 / p["A"]}
+
+    return {
+        "meta": {
+            "artifact_id": artifact_id,
+            "league_id": int(league_id),
+            "season": int(season),
+            "is_whatif": True,
+        },
+        "probs_1x2": p,
+        "fair_odds_1x2": fair,
+        # útil para depurar “sempre igual”: se isso variar, o modelo está variando
+        "debug": pred.get("debug"),
+        "features": pred.get("features"),
+    }
+
+@admin_router.get("/matchup/by-fixture")
+def admin_matchup_by_fixture(
+    fixture_id: int = Query(..., ge=1),
+    artifact_id: str = Query(...),
+) -> Dict[str, Any]:
+    artifact_filename = _artifact_filename_from_id(artifact_id)
+
+    sql = """
+      SELECT
+        f.fixture_id,
+        f.kickoff_utc,
+        f.league_id,
+        f.season,
+        f.home_team_id,
+        ht.name AS home_team_name,
+        f.away_team_id,
+        at.name AS away_team_name
+      FROM core.fixtures f
+      JOIN core.teams ht ON ht.team_id = f.home_team_id
+      JOIN core.teams at ON at.team_id = f.away_team_id
+      WHERE f.fixture_id = %(fixture_id)s
+      LIMIT 1
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"fixture_id": int(fixture_id)})
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="fixture not found")
+
+    (
+        fx_id,
+        kickoff_utc,
+        league_id,
+        season,
+        home_team_id,
+        home_team_name,
+        away_team_id,
+        away_team_name,
+    ) = row
+
+    pred = predict_1x2_from_artifact(
+        artifact_filename=artifact_filename,
+        league_id=int(league_id),
+        season=int(season),
+        home_team_id=int(home_team_id),
+        away_team_id=int(away_team_id),
+    )
+
+    p = pred["probs"]
+    fair = {"H": 1.0 / p["H"], "D": 1.0 / p["D"], "A": 1.0 / p["A"]}
+
+    return {
+        "meta": {
+            "fixture_id": int(fx_id),
+            "kickoff_utc": kickoff_utc.isoformat().replace("+00:00", "Z") if kickoff_utc else None,
+            "league_id": int(league_id),
+            "season": int(season),
+            "home": {"team_id": int(home_team_id), "name": str(home_team_name)},
+            "away": {"team_id": int(away_team_id), "name": str(away_team_name)},
+            "artifact_id": artifact_id,
+            "is_whatif": False,
+        },
+        "probs_1x2": p,
+        "fair_odds_1x2": fair,
+        "debug": pred.get("debug"),
+        "features": pred.get("features"),
+    }
+
+@admin_router.post("/fixtures/refresh")
+def admin_refresh_fixtures(
+    league_id: int = Query(default=39, ge=1),          # EPL = 39
+    season: int = Query(default=2025, ge=1900, le=2100),  # 2025 costuma representar 2025–26 em muitas bases
+    max_calls: int = Query(default=10, ge=1, le=200),
+) -> Dict[str, Any]:
+    """
+    Faz fetch na API-Football e atualiza o banco:
+      API-Football -> RAW (raw.api_responses) -> CORE (core.leagues/teams/fixtures)
+
+    Uso: botão/manual no Admin, sem cron.
+    """
+
+    s = load_settings()
+    client = ApiFootballClient(
+        base_url=s.apifootball_base_url,
+        api_key=s.apifootball_key,
+        timeout_s=int(s.app_defaults.get("http_timeout_s", 30)),
+    )
+
+    calls_left = int(max_calls)
+
+    report = {
+        "ok": True,
+        "plan": {"league_id": league_id, "season": season, "max_calls": max_calls},
+        "raw": {"leagues": 0, "teams": 0, "fixtures": 0, "dedup": 0},
+        "core": {},
+        "calls": {"ok": 0, "fail": 0},
+    }
+
+    def ingest(endpoint: str, path: str, params: Dict[str, Any]) -> bool:
+        nonlocal calls_left
+        if calls_left <= 0:
+            return False
+
+        status, payload = client.get(path, params)
+        if not isinstance(payload, dict):
+            payload = {"errors": {"non_dict_payload": True}, "response": None}
+
+        ok = 200 <= int(status) < 300
+
+        inserted, _ = insert_raw_response(
+            provider="apifootball",
+            endpoint=endpoint,
+            request_params={"path": path, "params": params},
+            response_body=payload,
+            http_status=int(status),
+            ok=ok,
+            error_message=None if ok else str(payload.get("errors")),
+        )
+
+        calls_left -= 1
+        if ok:
+            report["calls"]["ok"] += 1
+        else:
+            report["calls"]["fail"] += 1
+
+        if inserted:
+            report["raw"][endpoint] += 1
+        else:
+            report["raw"]["dedup"] += 1
+
+        return ok
+
+    # 1) leagues por season (dimensão)
+    ingest("leagues", "/leagues", {"season": season})
+
+    # 2) teams e fixtures por (league, season)
+    ingest("teams", "/teams", {"league": league_id, "season": season})
+    ingest("fixtures", "/fixtures", {"league": league_id, "season": season})
+
+    # aplica CORE a partir do RAW recém inserido
+    report["core"]["leagues"] = run_core_etl(provider="apifootball", endpoint="leagues", limit=5000, league_ids=[league_id])
+    report["core"]["teams"] = run_core_etl(provider="apifootball", endpoint="teams", limit=5000)
+    report["core"]["fixtures"] = run_core_etl(provider="apifootball", endpoint="fixtures", limit=20000)
+
+    report["plan"]["calls_left"] = calls_left
+    return report

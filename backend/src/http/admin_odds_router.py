@@ -480,8 +480,8 @@ def admin_odds_queue(
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> List[Dict[str, Any]]:
     """
-    Lê odds persistidas (último snapshot por evento) e retorna uma fila simples para UI.
-    NÃO chama provider externo.
+    Queue: lê odds persistidas (último snapshot por evento) para jogos futuros.
+    NÃO chama provider externo. Apenas DB.
     """
     now_utc = datetime.now(timezone.utc)
     end_utc = now_utc + timedelta(hours=hours_ahead)
@@ -519,7 +519,10 @@ def admin_odds_queue(
       FROM odds.odds_events e
       JOIN latest l ON l.event_id = e.event_id
       WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
-        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
+        AND (
+          e.commence_time_utc IS NULL
+          OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz)
+        )
       ORDER BY
         e.commence_time_utc ASC NULLS LAST,
         l.captured_at_utc DESC
@@ -536,52 +539,67 @@ def admin_odds_queue(
         raise HTTPException(status_code=500, detail=str(e))
 
     out: List[Dict[str, Any]] = []
-    for (
-        event_id,
-        sport_key_db,
-        commence_time_utc,
-        home_name,
-        away_name,
-        resolved_home_team_id,
-        resolved_away_team_id,
-        resolved_fixture_id,
-        match_confidence,
-        bookmaker,
-        market,
-        odds_home,
-        odds_draw,
-        odds_away,
-        captured_at_utc,
-        freshness_seconds,
-    ) in rows:
-        out.append(
-            {
-                "event_id": event_id,
-                "sport_key": sport_key_db,
-                "commence_time_utc": commence_time_utc.isoformat() if commence_time_utc else None,
-                "home_name": home_name,
-                "away_name": away_name,
-                "resolved": {
-                    "home_team_id": int(resolved_home_team_id) if resolved_home_team_id is not None else None,
-                    "away_team_id": int(resolved_away_team_id) if resolved_away_team_id is not None else None,
-                    "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
-                    "match_confidence": match_confidence,
-                },
-                "latest_snapshot": {
-                    "bookmaker": bookmaker,
-                    "market": market,
-                    "odds_1x2": {
-                        "H": float(odds_home) if odds_home is not None else None,
-                        "D": float(odds_draw) if odds_draw is not None else None,
-                        "A": float(odds_away) if odds_away is not None else None,
-                    },
-                    "captured_at_utc": captured_at_utc.isoformat() if captured_at_utc else None,
-                    "freshness_seconds": int(freshness_seconds) if freshness_seconds is not None else None,
-                },
-            }
-        )
-    return out
+    try:
+        for row in rows:
+            (
+                event_id,
+                sport_key_db,
+                commence_time_utc,
+                home_name,
+                away_name,
+                resolved_home_team_id,
+                resolved_away_team_id,
+                resolved_fixture_id,
+                match_confidence,
+                bookmaker,
+                market,
+                odds_home,
+                odds_draw,
+                odds_away,
+                captured_at_utc,
+                freshness_seconds,
+            ) = row
 
+            kickoff_iso = (
+                commence_time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                if commence_time_utc else None
+            )
+            captured_iso = (
+                captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                if captured_at_utc else None
+            )
+
+            out.append(
+                {
+                    "event_id": str(event_id),
+                    "sport_key": str(sport_key_db),
+                    "kickoff_utc": kickoff_iso,
+                    "home_name": home_name,
+                    "away_name": away_name,
+                    "resolved": {
+                        "home_team_id": int(resolved_home_team_id) if resolved_home_team_id is not None else None,
+                        "away_team_id": int(resolved_away_team_id) if resolved_away_team_id is not None else None,
+                        "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
+                        "match_confidence": match_confidence,
+                    },
+                    "latest_snapshot": {
+                        "bookmaker": bookmaker,
+                        "market": market,
+                        "odds_1x2": {
+                            "H": float(odds_home) if odds_home is not None else None,
+                            "D": float(odds_draw) if odds_draw is not None else None,
+                            "A": float(odds_away) if odds_away is not None else None,
+                        },
+                        "captured_at_utc": captured_iso,
+                        "freshness_seconds": int(freshness_seconds) if freshness_seconds is not None else None,
+                    },
+                }
+            )
+    except Exception as e:
+        # Se acontecer qualquer mismatch inesperado em row/unpack/tipos, devolve erro explícito
+        raise HTTPException(status_code=500, detail=f"queue_parse_failed: {e}")
+
+    return out
 
 @router.get("/queue/intel")
 def admin_odds_queue_intel(
@@ -928,5 +946,811 @@ def admin_odds_queue_intel(
     }
 
 
+
+# ---------------------------
+# AUDITORIA DO MODELO (comparacao com o real)
+# ---------------------------
+
+import math
+
+
+def _fixture_outcome_1x2(home_goals: int, away_goals: int) -> str:
+    if home_goals > away_goals:
+        return "H"
+    if home_goals < away_goals:
+        return "A"
+    return "D"
+
+
+def _brier_1x2(probs: Dict[str, float], outcome: str) -> float:
+    o_h = 1.0 if outcome == "H" else 0.0
+    o_d = 1.0 if outcome == "D" else 0.0
+    o_a = 1.0 if outcome == "A" else 0.0
+    p_h = float(probs.get("H", 0.0) or 0.0)
+    p_d = float(probs.get("D", 0.0) or 0.0)
+    p_a = float(probs.get("A", 0.0) or 0.0)
+    return (p_h - o_h) ** 2 + (p_d - o_d) ** 2 + (p_a - o_a) ** 2
+
+
+def _logloss_1x2(probs: Dict[str, float], outcome: str, eps: float = 1e-15) -> float:
+    p = float(probs.get(outcome, 0.0) or 0.0)
+    if p < eps:
+        p = eps
+    if p > 1.0 - eps:
+        p = 1.0 - eps
+    return -math.log(p)
+
+
+def _top1_acc_1x2(probs: Dict[str, float], outcome: str) -> float:
+    if not probs:
+        return 0.0
+    best = max(probs.keys(), key=lambda k: float(probs.get(k, 0.0) or 0.0))
+    return 1.0 if best == outcome else 0.0
+
+
+def _audit_upsert_fixture_prediction(
+    conn,
+    *,
+    fixture_id: int,
+    league_id: int,
+    season: int,
+    kickoff_utc: datetime,
+    home_team_id: int,
+    away_team_id: int,
+    artifact_filename: str,
+    probs_model: Dict[str, float],
+) -> None:
+    # Persistencia minima para auditoria retroativa (fixture-level).
+    # Requer tabela odds.audit_fixture_predictions (ver DDL sugerido abaixo).
+    sql = """
+      INSERT INTO odds.audit_fixture_predictions (
+        fixture_id,
+        league_id,
+        season,
+        kickoff_utc,
+        home_team_id,
+        away_team_id,
+        artifact_filename,
+        p_model_h,
+        p_model_d,
+        p_model_a,
+        created_at_utc,
+        updated_at_utc
+      )
+      VALUES (
+        %(fixture_id)s,
+        %(league_id)s,
+        %(season)s,
+        %(kickoff_utc)s,
+        %(home_team_id)s,
+        %(away_team_id)s,
+        %(artifact_filename)s,
+        %(p_model_h)s,
+        %(p_model_d)s,
+        %(p_model_a)s,
+        now(),
+        now()
+      )
+      ON CONFLICT (fixture_id, artifact_filename)
+      DO UPDATE SET
+        p_model_h = EXCLUDED.p_model_h,
+        p_model_d = EXCLUDED.p_model_d,
+        p_model_a = EXCLUDED.p_model_a,
+        updated_at_utc = now()
+    """
+
+    params = {
+        "fixture_id": int(fixture_id),
+        "league_id": int(league_id),
+        "season": int(season),
+        "kickoff_utc": kickoff_utc,
+        "home_team_id": int(home_team_id),
+        "away_team_id": int(away_team_id),
+        "artifact_filename": artifact_filename,
+        "p_model_h": float(probs_model.get("H", 0.0) or 0.0),
+        "p_model_d": float(probs_model.get("D", 0.0) or 0.0),
+        "p_model_a": float(probs_model.get("A", 0.0) or 0.0),
+    }
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+
+
+@router.post("/audit/backfill/fixtures")
+def admin_odds_audit_backfill_fixtures(
+    league_id: int = Query(..., ge=1),
+    season: int = Query(..., ge=1900, le=2100),
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+    # opcional: limitar por janela temporal
+    from_kickoff_utc: Optional[str] = Query(default=None, description="ISO8601 em UTC, ex: 2026-01-01T00:00:00Z"),
+    to_kickoff_utc: Optional[str] = Query(default=None, description="ISO8601 em UTC, ex: 2026-02-01T00:00:00Z"),
+    limit: int = Query(default=5000, ge=1, le=50000),
+) -> Dict[str, Any]:
+    """
+    Gera predictions retroativas para fixtures ja existentes (e ja finalizadas) no core.fixtures.
+
+    Objetivo: ter uma base objetiva de confiabilidade do modelo por temporada.
+
+    Importante:
+    - Nao usa Odds (mercado) aqui.
+    - Persiste em odds.audit_fixture_predictions.
+    """
+
+    def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+    t_from = _parse_iso(from_kickoff_utc)
+    t_to = _parse_iso(to_kickoff_utc)
+
+    sql = """
+      SELECT
+        fixture_id,
+        kickoff_utc,
+        home_team_id,
+        away_team_id
+      FROM core.fixtures
+      WHERE league_id = %(league_id)s
+        AND season = %(season)s
+        AND is_finished = TRUE
+        AND goals_home IS NOT NULL
+        AND goals_away IS NOT NULL
+        AND (%(t_from)s IS NULL OR kickoff_utc >= %(t_from)s)
+        AND (%(t_to)s IS NULL OR kickoff_utc <= %(t_to)s)
+      ORDER BY kickoff_utc ASC
+      LIMIT %(limit)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "league_id": league_id,
+                    "season": season,
+                    "t_from": t_from,
+                    "t_to": t_to,
+                    "limit": limit,
+                },
+            )
+            rows = cur.fetchall()
+
+        n_total = 0
+        n_ok = 0
+        n_err = 0
+        last_err: Optional[str] = None
+
+        for fixture_id, kickoff_db, home_id, away_id in rows:
+            n_total += 1
+            try:
+                pred = predict_1x2_from_artifact(
+                    artifact_filename=artifact_filename,
+                    league_id=int(league_id),
+                    season=int(season),
+                    home_team_id=int(home_id),
+                    away_team_id=int(away_id),
+                )
+
+                probs = pred.get("probs") or {}
+                _audit_upsert_fixture_prediction(
+                    conn,
+                    fixture_id=int(fixture_id),
+                    league_id=int(league_id),
+                    season=int(season),
+                    kickoff_utc=kickoff_db.astimezone(timezone.utc),
+                    home_team_id=int(home_id),
+                    away_team_id=int(away_id),
+                    artifact_filename=artifact_filename,
+                    probs_model=probs,
+                )
+                n_ok += 1
+            except Exception as e:
+                n_err += 1
+                last_err = str(e)
+
+        conn.commit()
+
+    return {
+        "meta": {
+            "league_id": league_id,
+            "season": season,
+            "artifact_filename": artifact_filename,
+            "from_kickoff_utc": from_kickoff_utc,
+            "to_kickoff_utc": to_kickoff_utc,
+            "limit": limit,
+        },
+        "counts": {"total": n_total, "ok": n_ok, "errors": n_err, "last_error": last_err},
+    }
+
+
+@router.post("/audit/refresh/results")
+def admin_odds_audit_refresh_results(
+    league_id: int = Query(..., ge=1),
+    season: int = Query(..., ge=1900, le=2100),
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+    limit: int = Query(default=20000, ge=1, le=50000),
+) -> Dict[str, Any]:
+    """
+    Atualiza audit_fixture_predictions com resultado real (gols / outcome) e scores (brier/logloss/top1_acc).
+
+    Requer que audit_fixture_predictions ja tenha sido preenchida.
+    """
+
+    sql = """
+      SELECT
+        a.fixture_id,
+        a.p_model_h,
+        a.p_model_d,
+        a.p_model_a,
+        f.goals_home,
+        f.goals_away
+      FROM odds.audit_fixture_predictions a
+      JOIN core.fixtures f ON f.fixture_id = a.fixture_id
+      WHERE a.league_id = %(league_id)s
+        AND a.season = %(season)s
+        AND a.artifact_filename = %(artifact_filename)s
+        AND f.is_finished = TRUE
+        AND f.goals_home IS NOT NULL
+        AND f.goals_away IS NOT NULL
+      ORDER BY f.kickoff_utc ASC
+      LIMIT %(limit)s
+    """
+
+    upd = """
+      UPDATE odds.audit_fixture_predictions
+      SET
+        goals_home = %(goals_home)s,
+        goals_away = %(goals_away)s,
+        outcome = %(outcome)s,
+        brier = %(brier)s,
+        logloss = %(logloss)s,
+        top1_acc = %(top1_acc)s,
+        updated_at_utc = now()
+      WHERE fixture_id = %(fixture_id)s
+        AND artifact_filename = %(artifact_filename)s
+    """
+
+    n_total = 0
+    n_updated = 0
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "league_id": league_id,
+                    "season": season,
+                    "artifact_filename": artifact_filename,
+                    "limit": limit,
+                },
+            )
+            rows = cur.fetchall()
+
+            for fixture_id, p_h, p_d, p_a, gh, ga in rows:
+                n_total += 1
+                probs = {"H": float(p_h or 0.0), "D": float(p_d or 0.0), "A": float(p_a or 0.0)}
+                outcome = _fixture_outcome_1x2(int(gh), int(ga))
+                brier = _brier_1x2(probs, outcome)
+                logloss = _logloss_1x2(probs, outcome)
+                top1 = _top1_acc_1x2(probs, outcome)
+
+                cur.execute(
+                    upd,
+                    {
+                        "fixture_id": int(fixture_id),
+                        "artifact_filename": artifact_filename,
+                        "goals_home": int(gh),
+                        "goals_away": int(ga),
+                        "outcome": outcome,
+                        "brier": float(brier),
+                        "logloss": float(logloss),
+                        "top1_acc": float(top1),
+                    },
+                )
+                n_updated += 1
+
+        conn.commit()
+
+    return {
+        "meta": {"league_id": league_id, "season": season, "artifact_filename": artifact_filename, "limit": limit},
+        "counts": {"scanned": n_total, "updated": n_updated},
+    }
+
+
+@router.get("/audit/metrics/summary")
+def admin_odds_audit_metrics_summary(
+    league_id: int = Query(..., ge=1),
+    season: int = Query(..., ge=1900, le=2100),
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+) -> Dict[str, Any]:
+    """
+    Agregado simples da auditoria (base para KPI no Admin).
+    """
+
+    sql = """
+      SELECT
+        COUNT(*) AS n,
+        AVG(brier) AS brier_avg,
+        AVG(logloss) AS logloss_avg,
+        AVG(top1_acc) AS top1_acc_avg,
+        MIN(kickoff_utc) AS kickoff_min,
+        MAX(kickoff_utc) AS kickoff_max
+      FROM odds.audit_fixture_predictions
+      WHERE league_id = %(league_id)s
+        AND season = %(season)s
+        AND artifact_filename = %(artifact_filename)s
+        AND outcome IS NOT NULL
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {"league_id": league_id, "season": season, "artifact_filename": artifact_filename},
+            )
+            row = cur.fetchone()
+
+    if not row:
+        return {
+            "meta": {"league_id": league_id, "season": season, "artifact_filename": artifact_filename},
+            "metrics": None,
+        }
+
+    n, brier_avg, logloss_avg, top1_acc_avg, kmin, kmax = row
+
+    return {
+        "meta": {"league_id": league_id, "season": season, "artifact_filename": artifact_filename},
+        "metrics": {
+            "n": int(n or 0),
+            "brier_avg": float(brier_avg) if brier_avg is not None else None,
+            "logloss_avg": float(logloss_avg) if logloss_avg is not None else None,
+            "top1_acc_avg": float(top1_acc_avg) if top1_acc_avg is not None else None,
+            "kickoff_min_utc": kmin.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if kmin else None,
+            "kickoff_max_utc": kmax.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if kmax else None,
+        },
+    }
+
 # compat: app.py costuma importar "admin_odds_router"
 admin_odds_router = router
+ 
+import math
+from datetime import datetime, timezone, timedelta
+
+def _outcome_from_goals(gh: int, ga: int) -> str:
+    if gh > ga:
+        return "H"
+    if gh < ga:
+        return "A"
+    return "D"
+
+def _brier_1x2(p: dict, outcome: str) -> float:
+    y = {"H": 0.0, "D": 0.0, "A": 0.0}
+    y[outcome] = 1.0
+    return (p["H"] - y["H"])**2 + (p["D"] - y["D"])**2 + (p["A"] - y["A"])**2
+
+def _logloss_1x2(p: dict, outcome: str, eps: float = 1e-15) -> float:
+    prob = max(eps, min(1.0 - eps, float(p[outcome])))
+    return -math.log(prob)
+
+def _top1_acc_1x2(p: dict, outcome: str) -> float:
+    top = max(("H", "D", "A"), key=lambda k: float(p[k]))
+    return 1.0 if top == outcome else 0.0
+
+@router.post("/audit/snapshot")
+def admin_odds_audit_snapshot(
+    sport_key: str = Query(..., description="Ex: soccer_epl"),
+    hours_back: int = Query(default=168, ge=0, le=720),
+
+    min_confidence: str = Query(default="EXACT", pattern="^(NONE|ILIKE|EXACT)$"),
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+    assume_league_id: int = Query(default=39, ge=1),
+    assume_season: int = Query(default=2024, ge=1900, le=2100),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    """
+    Cria/atualiza snapshots do modelo para os próximos jogos (baseado em odds persistidas).
+    Não busca provider externo. Apenas DB + modelo local.
+    """
+
+    # MVP: não deixamos janela gigante derrubar o servidor
+    if hours_ahead > 720:
+        hours_ahead = 720
+
+    now_utc = datetime.now(timezone.utc)
+    end_utc = now_utc + timedelta(hours=hours_ahead)
+
+    conf_clause = "TRUE"
+    if min_confidence == "EXACT":
+        conf_clause = "e.match_confidence = 'EXACT'"
+    elif min_confidence == "ILIKE":
+        conf_clause = "e.match_confidence IN ('ILIKE','EXACT')"
+
+    sql = f"""
+      WITH latest AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.bookmaker,
+          s.market,
+          s.odds_home,
+          s.odds_draw,
+          s.odds_away,
+          s.captured_at_utc
+        FROM odds.odds_snapshots_1x2 s
+        ORDER BY s.event_id, s.captured_at_utc DESC
+      )
+      SELECT
+        e.event_id,
+        e.commence_time_utc,
+        e.resolved_home_team_id,
+        e.resolved_away_team_id,
+        e.match_confidence,
+        l.bookmaker,
+        l.market,
+        l.odds_home,
+        l.odds_draw,
+        l.odds_away,
+        l.captured_at_utc
+      FROM odds.odds_events e
+      JOIN latest l ON l.event_id = e.event_id
+      WHERE e.sport_key = (%(sport_key)s)::text
+        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
+        AND ({conf_clause})
+      ORDER BY e.commence_time_utc ASC NULLS LAST
+      LIMIT %(limit)s
+    """
+
+    rows = []
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": limit})
+            rows = cur.fetchall()
+
+    inserted = 0
+    skipped = 0
+    errors = 0
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            for (
+                event_id,
+                commence_time_utc,
+                home_id,
+                away_id,
+                match_confidence_db,
+                bookmaker,
+                market,
+                odds_home,
+                odds_draw,
+                odds_away,
+                captured_at_utc,
+            ) in rows:
+                if not home_id or not away_id:
+                    skipped += 1
+                    continue
+
+                try:
+                    pred = predict_1x2_from_artifact(
+                        artifact_filename=artifact_filename,
+                        league_id=int(assume_league_id),
+                        season=int(assume_season),
+                        home_team_id=int(home_id),
+                        away_team_id=int(away_id),
+                    )
+                    p = pred["probs"]
+
+                    upsert = """
+                      INSERT INTO odds.audit_event_predictions (
+                        event_id, artifact_filename, league_id, season,
+                        home_team_id, away_team_id, kickoff_utc,
+                        bookmaker, market, odds_home, odds_draw, odds_away, captured_at_utc,
+                        p_model_h, p_model_d, p_model_a,
+                        updated_at_utc
+                      )
+                      VALUES (
+                        %(event_id)s, %(artifact_filename)s, %(league_id)s, %(season)s,
+                        %(home_team_id)s, %(away_team_id)s, %(kickoff_utc)s,
+                        %(bookmaker)s, %(market)s, %(odds_home)s, %(odds_draw)s, %(odds_away)s, %(captured_at_utc)s,
+                        %(p_model_h)s, %(p_model_d)s, %(p_model_a)s,
+                        now()
+                      )
+                      ON CONFLICT (event_id, artifact_filename) DO UPDATE SET
+                        league_id = EXCLUDED.league_id,
+                        season = EXCLUDED.season,
+                        home_team_id = EXCLUDED.home_team_id,
+                        away_team_id = EXCLUDED.away_team_id,
+                        kickoff_utc = EXCLUDED.kickoff_utc,
+                        bookmaker = EXCLUDED.bookmaker,
+                        market = EXCLUDED.market,
+                        odds_home = EXCLUDED.odds_home,
+                        odds_draw = EXCLUDED.odds_draw,
+                        odds_away = EXCLUDED.odds_away,
+                        captured_at_utc = EXCLUDED.captured_at_utc,
+                        p_model_h = EXCLUDED.p_model_h,
+                        p_model_d = EXCLUDED.p_model_d,
+                        p_model_a = EXCLUDED.p_model_a,
+                        updated_at_utc = now()
+                    """
+
+                    cur.execute(
+                        upsert,
+                        {
+                            "event_id": event_id,
+                            "artifact_filename": artifact_filename,
+                            "league_id": int(assume_league_id),
+                            "season": int(assume_season),
+                            "home_team_id": int(home_id),
+                            "away_team_id": int(away_id),
+                            "kickoff_utc": commence_time_utc,
+                            "bookmaker": bookmaker,
+                            "market": market,
+                            "odds_home": odds_home,
+                            "odds_draw": odds_draw,
+                            "odds_away": odds_away,
+                            "captured_at_utc": captured_at_utc,
+                            "p_model_h": float(p["H"]),
+                            "p_model_d": float(p["D"]),
+                            "p_model_a": float(p["A"]),
+                        },
+                    )
+                    inserted += 1
+                except Exception:
+                    errors += 1
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "sport_key": sport_key,
+        "artifact_filename": artifact_filename,
+        "assume_league_id": assume_league_id,
+        "assume_season": assume_season,
+        "window_hours": hours_ahead,
+        "counts": {"processed": len(rows), "upserted": inserted, "skipped": skipped, "errors": errors},
+    }
+
+@router.post("/audit/refresh_results")
+def admin_odds_audit_refresh_results(
+    league_id: int = Query(default=39, ge=1),
+    season: int = Query(default=2024, ge=1900, le=2100),
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+    days_back: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=20000, ge=1, le=50000),
+) -> dict:
+    """
+    Procura fixtures finalizados no core.fixtures e atualiza audit_event_predictions
+    (resultado + métricas) quando encontrar fixture_id compatível.
+    """
+
+    now_utc = datetime.now(timezone.utc)
+    t_from = now_utc - timedelta(days=days_back)
+
+    # 1) pega fixtures finalizados recentes
+    fx_sql = """
+      SELECT
+        fixture_id,
+        kickoff_utc,
+        home_team_id,
+        away_team_id,
+        goals_home,
+        goals_away
+      FROM core.fixtures
+      WHERE league_id = %(league_id)s
+        AND season = %(season)s
+        AND is_finished = TRUE
+        AND goals_home IS NOT NULL
+        AND goals_away IS NOT NULL
+        AND kickoff_utc >= %(t_from)s
+      ORDER BY kickoff_utc ASC
+      LIMIT %(limit)s
+    """
+
+    fixtures = []
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(fx_sql, {"league_id": league_id, "season": season, "t_from": t_from, "limit": limit})
+            fixtures = cur.fetchall()
+
+    updated = 0
+    matched = 0
+
+    # 2) para cada fixture, tenta achar snapshot por (home_id, away_id, kickoff próximo)
+    #    (janela de 6h para tolerar timezone/diferença do provider)
+    find_sql = """
+      SELECT audit_id, p_model_h, p_model_d, p_model_a
+      FROM odds.audit_event_predictions
+      WHERE artifact_filename = %(artifact_filename)s
+        AND league_id = %(league_id)s
+        AND season = %(season)s
+        AND home_team_id = %(home_id)s
+        AND away_team_id = %(away_id)s
+        AND kickoff_utc BETWEEN (%(k)s::timestamptz - interval '6 hours') AND (%(k)s::timestamptz + interval '6 hours')
+      ORDER BY ABS(EXTRACT(EPOCH FROM (kickoff_utc - %(k)s::timestamptz))) ASC
+      LIMIT 1
+    """
+
+    upd_sql = """
+      UPDATE odds.audit_event_predictions
+      SET
+        fixture_id = %(fixture_id)s,
+        goals_home = %(gh)s,
+        goals_away = %(ga)s,
+        outcome = %(outcome)s,
+        brier = %(brier)s,
+        logloss = %(logloss)s,
+        top1_acc = %(top1_acc)s,
+        updated_at_utc = now()
+      WHERE audit_id = %(audit_id)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            for (fixture_id, kickoff_utc, home_id, away_id, gh, ga) in fixtures:
+                cur.execute(
+                    find_sql,
+                    {
+                        "artifact_filename": artifact_filename,
+                        "league_id": league_id,
+                        "season": season,
+                        "home_id": int(home_id),
+                        "away_id": int(away_id),
+                        "k": kickoff_utc,
+                    },
+                )
+                row = cur.fetchone()
+                if not row:
+                    continue
+
+                matched += 1
+                audit_id, p_h, p_d, p_a = row
+
+                outcome = _outcome_from_goals(int(gh), int(ga))
+                p = {"H": float(p_h), "D": float(p_d), "A": float(p_a)}
+
+                cur.execute(
+                    upd_sql,
+                    {
+                        "audit_id": int(audit_id),
+                        "fixture_id": int(fixture_id),
+                        "gh": int(gh),
+                        "ga": int(ga),
+                        "outcome": outcome,
+                        "brier": float(_brier_1x2(p, outcome)),
+                        "logloss": float(_logloss_1x2(p, outcome)),
+                        "top1_acc": float(_top1_acc_1x2(p, outcome)),
+                    },
+                )
+                updated += 1
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "league_id": league_id,
+        "season": season,
+        "artifact_filename": artifact_filename,
+        "days_back": days_back,
+        "counts": {"fixtures_checked": len(fixtures), "matched": matched, "updated": updated},
+    }
+
+@router.get("/upcoming/intel_live")
+def admin_odds_upcoming_intel_live(
+    sport_key: str = Query(...),
+    regions: str = Query(default="eu"),
+    limit: int = Query(default=200, ge=1, le=500),
+
+    # MVP: EPL/season default
+    assume_league_id: int = Query(default=39, ge=1),
+    assume_season: int = Query(default=2025, ge=1900, le=2100),
+
+    artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
+) -> Dict[str, Any]:
+    """
+    Intel LIVE: chama o orquestrador (provider) e calcula intel sem persistir no DB.
+    Ideal para UI/produto enquanto auditoria/persistência não está 100%.
+    """
+    items = admin_odds_upcoming_orchestrate(
+        sport_key=sport_key,
+        regions=regions,
+        limit=limit,
+        assume_league_id=assume_league_id,
+        assume_season=assume_season,
+    )
+
+    out = []
+    counts = {"total": 0, "resolved_ok": 0, "ok_model": 0, "missing_team": 0, "model_error": 0}
+
+    for it in items:
+        counts["total"] += 1
+
+        # payload do orchestrate já vem com resolve + market_probs
+        resolve = it.get("resolve") or {}
+        ok_resolve = bool(resolve.get("ok"))
+        if ok_resolve:
+            counts["resolved_ok"] += 1
+
+        model_block = None
+        status = "ok"
+        reason = None
+
+        if not ok_resolve:
+            status = "incomplete"
+            reason = "missing_team_id_or_fixture_hint"
+            counts["missing_team"] += 1
+        else:
+            try:
+                home_id = (resolve.get("home") or {}).get("team_id")
+                away_id = (resolve.get("away") or {}).get("team_id")
+                if not home_id or not away_id:
+                    status = "incomplete"
+                    reason = "missing_team_id"
+                    counts["missing_team"] += 1
+                else:
+                    oh = (it.get("odds_1x2") or {}).get("H")
+                    od = (it.get("odds_1x2") or {}).get("D")
+                    oa = (it.get("odds_1x2") or {}).get("A")
+
+                    pred = predict_1x2_from_artifact(
+                        artifact_filename=artifact_filename,
+                        league_id=int(assume_league_id),
+                        season=int(assume_season),
+                        home_team_id=int(home_id),
+                        away_team_id=int(away_id),
+                    )
+                    p_model = pred["probs"]
+
+                    p_mkt = ((it.get("market_probs") or {}).get("novig")) or None
+                    edge = None
+                    if p_mkt:
+                        edge = {
+                            "H": p_model["H"] - (p_mkt.get("H") or 0.0) if p_mkt.get("H") is not None else None,
+                            "D": p_model["D"] - (p_mkt.get("D") or 0.0) if p_mkt.get("D") is not None else None,
+                            "A": p_model["A"] - (p_mkt.get("A") or 0.0) if p_mkt.get("A") is not None else None,
+                        }
+
+                    evv = {
+                        "H": (p_model["H"] * float(oh) - 1.0) if oh else None,
+                        "D": (p_model["D"] * float(od) - 1.0) if od else None,
+                        "A": (p_model["A"] * float(oa) - 1.0) if oa else None,
+                    }
+
+                    best_ev = None
+                    best_side = None
+                    for side in ("H", "D", "A"):
+                        v = evv.get(side)
+                        if v is None:
+                            continue
+                        if best_ev is None or v > best_ev:
+                            best_ev = v
+                            best_side = side
+
+                    model_block = {
+                        "artifact_filename": artifact_filename,
+                        "league_id": int(assume_league_id),
+                        "season": int(assume_season),
+                        "probs_model": p_model,
+                        "edge_vs_market": edge,
+                        "ev_decimal": evv,
+                        "best_ev": best_ev,
+                        "best_side": best_side,
+                        "artifact_meta": pred.get("artifact"),
+                    }
+                    counts["ok_model"] += 1
+
+            except Exception as e:
+                status = "incomplete"
+                reason = str(e)
+                counts["model_error"] += 1
+                model_block = {"error": str(e)}
+
+        out.append({**it, "model": model_block, "status": status, "reason": reason})
+
+    # sort default: best_ev desc
+    def _best_ev_key(x: Dict[str, Any]):
+        m = x.get("model") or {}
+        v = m.get("best_ev")
+        return v if v is not None else -10**9
+
+    out.sort(key=_best_ev_key, reverse=True)
+
+    return {"meta": {"counts": counts}, "items": out}
