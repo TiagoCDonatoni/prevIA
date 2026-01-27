@@ -284,8 +284,6 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
 
                 ok = bool(ok_http and not has_api_errors)
 
-                ok = bool(ok_http and not has_api_errors)
-
                 if not isinstance(payload, dict):
                     payload = {"errors": {"non_dict_payload": True}, "response": None}
 
@@ -324,8 +322,8 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
                 counters["calls_ok"] += 1
                 counters["pages_ok"] += 1
 
-                # CORE apply imediato
-                counters["core_upserts"] += _apply_core_from_payload(str(ep_id), payload)
+                # disabled
+                # counters["core_upserts"] += _apply_core_from_payload(str(ep_id), payload)
 
                 paging_info = payload.get("paging") or {}
                 tot = paging_info.get("total")
