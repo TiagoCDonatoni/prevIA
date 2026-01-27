@@ -1,33 +1,27 @@
 {
   "provider": "apifootball",
-
   "league_source": {
     "mode": "ids",
-    "league_ids": [39],
+    "league_ids": [
+      71, 72,
+      39, 40,
+      140, 141,
+      135, 136,
+      78, 79,
+      61, 62,
+      94,
+      88,
+      144,
+      179,
+      203,
+      197
+    ],
     "max_leagues": 50
   },
-
-  "seasons": {
-    "mode": "range",
-    "start": 2017,
-    "end": 2024
-  },
-
+  "seasons": { "mode": "range", "start": 2017, "end": 2024 },
   "endpoints": [
-    {
-      "id": "teams",
-      "path": "/teams",
-      "params": { "league": "{league_id}", "season": "{season}" }
-    },
-    {
-      "id": "fixtures",
-      "path": "/fixtures",
-      "params": { "league": "{league_id}", "season": "{season}" }
-    }
+    { "id": "teams", "path": "/teams", "params": { "league": "{league_id}", "season": "{season}" } },
+    { "id": "fixtures", "path": "/fixtures", "params": { "league": "{league_id}", "season": "{season}" } }
   ],
-
-  "paging": {
-    "page_param": "page",
-    "max_pages_safety": 50
-  }
+  "paging": { "page_param": "page", "max_pages_safety": 50 }
 }
