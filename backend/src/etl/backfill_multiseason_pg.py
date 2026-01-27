@@ -1,6 +1,8 @@
 # backend/src/etl/backfill_multiseason_pg.py
 from __future__ import annotations
 
+from psycopg.types.json import Json
+
 import argparse
 import json
 from typing import Any, Dict, List, Optional, Tuple
@@ -88,7 +90,7 @@ def _upsert_checkpoint(
                         "lp": last_page_done,
                         "tp": total_pages,
                         "st": status,
-                        "m": meta,
+                        "m": Json(meta),
                     },
                 )
 
