@@ -184,7 +184,7 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
     seasons = _resolve_seasons(plan)
     endpoints = plan.get("endpoints") or []
     paging = plan.get("paging") or {}
-    page_param = str(paging.get("page_param", "page"))
+    page_param = paging.get("page_param")  # None => sem paginação por parâmetro
     max_pages_safety = int(paging.get("max_pages_safety", 50))
 
     counters = {
@@ -265,7 +265,8 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
                     break
 
                 params = dict(base_params)
-                params[page_param] = page
+                if page_param:
+                    params[str(page_param)] = page
 
                 if dry_run:
                     status, payload = 200, {"response": [], "paging": {"current": page, "total": page}}
@@ -277,7 +278,11 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
 
                 ok_http = 200 <= int(status) < 300
                 api_errors = payload.get("errors") if isinstance(payload, dict) else None
+
+                # api-football costuma retornar [] quando ok; quando dá problema vem dict com campos
                 has_api_errors = isinstance(api_errors, dict) and len(api_errors) > 0
+
+                ok = bool(ok_http and not has_api_errors)
 
                 ok = bool(ok_http and not has_api_errors)
 

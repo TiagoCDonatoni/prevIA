@@ -23,6 +23,4 @@
     { "id": "teams", "path": "/teams", "params": { "league": "{league_id}", "season": "{season}" } },
     { "id": "fixtures", "path": "/fixtures", "params": { "league": "{league_id}", "season": "{season}" } }
   ],
-  "paging": { "page_param": "current", "max_pages_safety": 50 }
-
 }
