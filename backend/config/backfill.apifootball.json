@@ -14,7 +14,7 @@
       144,
       179,
       203,
-      197
+      197, 218, 207
     ],
     "max_leagues": 50
   },
@@ -23,5 +23,6 @@
     { "id": "teams", "path": "/teams", "params": { "league": "{league_id}", "season": "{season}" } },
     { "id": "fixtures", "path": "/fixtures", "params": { "league": "{league_id}", "season": "{season}" } }
   ],
-  "paging": { "page_param": "page", "max_pages_safety": 50 }
+  "paging": { "page_param": "current", "max_pages_safety": 50 }
+
 }

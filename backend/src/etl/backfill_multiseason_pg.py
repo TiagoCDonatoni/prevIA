@@ -275,7 +275,12 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
                     except Exception as ex:
                         status, payload = 599, {"errors": {"exception": str(ex)}, "response": None}
 
-                ok = 200 <= int(status) < 300
+                ok_http = 200 <= int(status) < 300
+                api_errors = payload.get("errors") if isinstance(payload, dict) else None
+                has_api_errors = isinstance(api_errors, dict) and len(api_errors) > 0
+
+                ok = bool(ok_http and not has_api_errors)
+
                 if not isinstance(payload, dict):
                     payload = {"errors": {"non_dict_payload": True}, "response": None}
 
