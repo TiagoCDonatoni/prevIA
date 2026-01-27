@@ -5,7 +5,9 @@ from psycopg.types.json import Json
 
 import argparse
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+from tqdm import tqdm  # <-- Opção B: barra de progresso
 
 from src.core.settings import load_settings, CONFIG_DIR
 from src.db.pg import pg_conn, pg_tx
@@ -141,7 +143,6 @@ def _resolve_league_ids(plan: Dict[str, Any]) -> List[int]:
         return ids[:max_leagues]
 
     if mode == "from_core":
-        # pega do core.leagues (determinístico por league_id)
         sql = "select league_id from core.leagues order by league_id asc limit %(n)s"
         with pg_conn() as conn:
             with conn.cursor() as cur:
@@ -196,130 +197,190 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
         "pages_fail": 0,
     }
 
-    total_units = 0
+    # Monta todas as unidades antes para ter barra de progresso global (Units)
+    plan_units: List[Dict[str, Any]] = []
     for league_id in league_ids:
         for season in seasons:
             for ep in endpoints:
-                total_units += 1
+                plan_units.append(
+                    {
+                        "league_id": int(league_id),
+                        "season": int(season),
+                        "ep_id": str(ep["id"]),
+                        "path": str(ep["path"]),
+                        "params_template": ep.get("params") or {},
+                    }
+                )
 
-                ep_id = ep["id"]
-                path = ep["path"]
-                params_template = ep.get("params") or {}
-                base_params = _fmt_params(params_template, league_id=league_id, season=season)
+    total_units = len(plan_units)
 
-                # checkpoint
-                ck = _get_checkpoint(provider, ep_id, league_id, season)
-                if resume and ck.get("status") == "done":
-                    continue
+    units_bar = tqdm(plan_units, desc="Units", unit="unit", dynamic_ncols=True, total=total_units)
 
-                start_page = int(ck.get("last_page_done") or 0) + 1 if resume else 1
-                seen_total_pages: Optional[int] = ck.get("total_pages")
+    for unit in units_bar:
+        league_id = int(unit["league_id"])
+        season = int(unit["season"])
+        ep_id = str(unit["ep_id"])
+        path = str(unit["path"])
+        params_template = unit["params_template"]
 
-                page = start_page
-                while True:
-                    if page > max_pages_safety:
-                        _upsert_checkpoint(
-                            provider, ep_id, league_id, season,
-                            last_page_done=page - 1,
-                            total_pages=seen_total_pages,
-                            status="failed",
-                            meta={"reason": "max_pages_safety_exceeded"},
-                        )
-                        counters["pages_fail"] += 1
-                        break
+        base_params = _fmt_params(params_template, league_id=league_id, season=season)
 
-                    params = dict(base_params)
-                    params[page_param] = page
+        # checkpoint
+        ck = _get_checkpoint(provider, ep_id, league_id, season)
+        if resume and ck.get("status") == "done":
+            continue
 
-                    if dry_run:
-                        status, payload = 200, {"response": [], "paging": {"current": page, "total": page}}
-                    else:
-                        try:
-                            status, payload = client.get(path, params)
-                        except Exception as ex:
-                            status, payload = 599, {"errors": {"exception": str(ex)}, "response": None}
+        start_page = int(ck.get("last_page_done") or 0) + 1 if resume else 1
+        seen_total_pages: Optional[int] = ck.get("total_pages")
 
-                    ok = 200 <= int(status) < 300
-                    if not isinstance(payload, dict):
-                        payload = {"errors": {"non_dict_payload": True}, "response": None}
+        # Atualiza descrição da unit atual
+        units_bar.set_postfix_str(f"{ep_id} L{league_id} S{season} p{start_page}")
 
-                    # RAW ingest (idempotente)
-                    inserted, _ = insert_raw_response(
-                        provider=provider,
-                        endpoint=str(ep_id),
-                        request_params={"path": path, "params": params, "league_id": league_id, "season": season},
-                        response_body=payload,
-                        http_status=int(status),
-                        ok=ok,
-                        error_message=None if ok else str(payload.get("errors")),
-                    )
-                    if inserted:
-                        counters["raw_inserted"] += 1
-                    else:
-                        counters["raw_dedup"] += 1
+        page = start_page
 
-                    if not ok:
-                        counters["calls_fail"] += 1
-                        counters["pages_fail"] += 1
-                        _upsert_checkpoint(
-                            provider, ep_id, league_id, season,
-                            last_page_done=page - 1,
-                            total_pages=seen_total_pages,
-                            status="failed",
-                            meta={"http_status": int(status), "errors": payload.get("errors")},
-                        )
-                        break
+        # Barra de páginas (Pages) com total dinâmico (só fica conhecido após a 1ª resposta)
+        pages_bar = tqdm(
+            desc=f"Pages {ep_id} L{league_id} S{season}",
+            unit="page",
+            dynamic_ncols=True,
+            leave=False,
+            total=seen_total_pages if isinstance(seen_total_pages, int) else None,
+            initial=page - 1,
+        )
 
-                    counters["calls_ok"] += 1
-                    counters["pages_ok"] += 1
-
-                    # CORE apply imediato
-                    counters["core_upserts"] += _apply_core_from_payload(str(ep_id), payload)
-
-                    paging_info = payload.get("paging") or {}
-                    cur = paging_info.get("current")
-                    tot = paging_info.get("total")
-
-                    if isinstance(tot, int):
-                        seen_total_pages = tot
-
-                    # checkpoint a cada página ok
+        try:
+            while True:
+                if page > max_pages_safety:
                     _upsert_checkpoint(
-                        provider, ep_id, league_id, season,
-                        last_page_done=page,
+                        provider,
+                        ep_id,
+                        league_id,
+                        season,
+                        last_page_done=page - 1,
                         total_pages=seen_total_pages,
-                        status="running",
-                        meta={"last_ok_status": int(status)},
+                        status="failed",
+                        meta={"reason": "max_pages_safety_exceeded"},
                     )
+                    counters["pages_fail"] += 1
+                    break
 
-                    # se não tem paginação, assume 1 página e encerra
-                    if not isinstance(tot, int):
-                        _upsert_checkpoint(
-                            provider, ep_id, league_id, season,
-                            last_page_done=page,
-                            total_pages=1,
-                            status="done",
-                            meta={"note": "no_paging_in_payload"},
-                        )
-                        break
+                params = dict(base_params)
+                params[page_param] = page
 
-                    # terminou?
-                    if page >= tot:
-                        _upsert_checkpoint(
-                            provider, ep_id, league_id, season,
-                            last_page_done=page,
-                            total_pages=tot,
-                            status="done",
-                            meta={"note": "completed"},
-                        )
-                        break
+                if dry_run:
+                    status, payload = 200, {"response": [], "paging": {"current": page, "total": page}}
+                else:
+                    try:
+                        status, payload = client.get(path, params)
+                    except Exception as ex:
+                        status, payload = 599, {"errors": {"exception": str(ex)}, "response": None}
 
-                    page += 1
+                ok = 200 <= int(status) < 300
+                if not isinstance(payload, dict):
+                    payload = {"errors": {"non_dict_payload": True}, "response": None}
 
-                if stop_after is not None:
-                    stop_after -= 1
-                    if stop_after <= 0:
-                        return {"provider": provider, "stopped_early": True, "counters": counters}
+                # RAW ingest (idempotente)
+                inserted, _ = insert_raw_response(
+                    provider=provider,
+                    endpoint=str(ep_id),
+                    request_params={"path": path, "params": params, "league_id": league_id, "season": season},
+                    response_body=payload,
+                    http_status=int(status),
+                    ok=ok,
+                    error_message=None if ok else str(payload.get("errors")),
+                )
+                if inserted:
+                    counters["raw_inserted"] += 1
+                else:
+                    counters["raw_dedup"] += 1
+
+                if not ok:
+                    counters["calls_fail"] += 1
+                    counters["pages_fail"] += 1
+                    _upsert_checkpoint(
+                        provider,
+                        ep_id,
+                        league_id,
+                        season,
+                        last_page_done=page - 1,
+                        total_pages=seen_total_pages,
+                        status="failed",
+                        meta={"http_status": int(status), "errors": payload.get("errors")},
+                    )
+                    # Mostra erro na barra
+                    pages_bar.set_postfix_str(f"FAIL {status}")
+                    break
+
+                counters["calls_ok"] += 1
+                counters["pages_ok"] += 1
+
+                # CORE apply imediato
+                counters["core_upserts"] += _apply_core_from_payload(str(ep_id), payload)
+
+                paging_info = payload.get("paging") or {}
+                tot = paging_info.get("total")
+
+                if isinstance(tot, int):
+                    seen_total_pages = tot
+                    # Atualiza total do tqdm quando descoberto
+                    if pages_bar.total is None:
+                        pages_bar.total = tot
+
+                # checkpoint a cada página ok
+                _upsert_checkpoint(
+                    provider,
+                    ep_id,
+                    league_id,
+                    season,
+                    last_page_done=page,
+                    total_pages=seen_total_pages,
+                    status="running",
+                    meta={"last_ok_status": int(status)},
+                )
+
+                # Atualiza a barra
+                pages_bar.set_postfix_str(
+                    f"ok={counters['calls_ok']} raw={counters['raw_inserted']} dedup={counters['raw_dedup']}"
+                )
+                pages_bar.update(1)
+
+                # se não tem paginação, assume 1 página e encerra
+                if not isinstance(tot, int):
+                    _upsert_checkpoint(
+                        provider,
+                        ep_id,
+                        league_id,
+                        season,
+                        last_page_done=page,
+                        total_pages=1,
+                        status="done",
+                        meta={"note": "no_paging_in_payload"},
+                    )
+                    break
+
+                # terminou?
+                if page >= tot:
+                    _upsert_checkpoint(
+                        provider,
+                        ep_id,
+                        league_id,
+                        season,
+                        last_page_done=page,
+                        total_pages=tot,
+                        status="done",
+                        meta={"note": "completed"},
+                    )
+                    break
+
+                page += 1
+
+        finally:
+            pages_bar.close()
+
+        if stop_after is not None:
+            stop_after -= 1
+            if stop_after <= 0:
+                return {"provider": provider, "stopped_early": True, "counters": counters, "units": total_units}
 
     return {"provider": provider, "stopped_early": False, "counters": counters, "units": total_units}
 
