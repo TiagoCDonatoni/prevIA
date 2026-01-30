@@ -418,9 +418,12 @@ def admin_odds_upcoming_orchestrate(
                         artifact_filename=artifact_filename,
                         league_id=int(league_id),
                         season=int(season),
-                        home_team_id=int(home_id),
-                        away_team_id=int(away_id),
+                        home_team_id=int(home_team_id),
+                        away_team_id=int(away_team_id),
                     )
+                except FileNotFoundError as e:
+                    raise HTTPException(status_code=404, detail=str(e))
+
                     p_model = pred["probs"]
                     p_mkt = market["novig"]
 

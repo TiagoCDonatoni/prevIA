@@ -925,8 +925,15 @@ def admin_matchup_whatif(
     away_team_id: int = Query(..., ge=1),
     league_id: int = Query(default=39, ge=1),  # default EPL
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
+
+    # compat com UI (por enquanto ignorados)
+    venue_mode: Optional[str] = Query(default=None),
+    reference_date_utc: Optional[str] = Query(default=None),
+    competition_id: Optional[int] = Query(default=None, ge=1),
+
     artifact_id: str = Query(...),
 ) -> Dict[str, Any]:
+
     artifact_filename = _artifact_filename_from_id(artifact_id)
 
     # se season não vier, pega a última disponível na team_season_stats para essa liga
@@ -940,16 +947,42 @@ def admin_matchup_whatif(
             raise HTTPException(status_code=400, detail="no team_season_stats found for league_id")
         season = int(max_season)
 
-    pred = predict_1x2_from_artifact(
-        artifact_filename=artifact_filename,
-        league_id=int(league_id),
-        season=int(season),
-        home_team_id=int(home_team_id),
-        away_team_id=int(away_team_id),
-    )
+    try:
+        pred = predict_1x2_from_artifact(
+            artifact_filename=artifact_filename,
+            league_id=int(league_id),
+            season=int(season),
+            home_team_id=int(home_team_id),
+            away_team_id=int(away_team_id),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
     p = pred["probs"]
     fair = {"H": 1.0 / p["H"], "D": 1.0 / p["D"], "A": 1.0 / p["A"]}
+
+    feats = pred.get("features") or {}
+    drivers = []
+    for k, label in [
+        ("delta_ppg", "Δ PPG (home - away)"),
+        ("delta_gf_pg", "Δ Goals For / game"),
+        ("delta_ga_pg", "Δ Goals Against / game"),
+        ("delta_gd_pg", "Δ Goal Diff / game"),
+        ("delta_home_adv", "Δ HomeAdv (home_ppg - away_ppg)"),
+    ]:
+        if k in feats:
+            drivers.append({"key": k, "label": label, "value": f"{float(feats[k]):+.4f}"})
+
+    # info extra compat com a UI atual (advanced)
+    if venue_mode:
+        drivers.insert(0, {"key": "venue_mode", "label": "Venue mode", "value": str(venue_mode)})
+    if reference_date_utc:
+        drivers.append({"key": "reference_date_utc", "label": "Reference date", "value": str(reference_date_utc)})
+    if competition_id:
+        drivers.append({"key": "competition_id", "label": "Competition", "value": str(competition_id)})
+
 
     return {
         "meta": {
@@ -960,6 +993,7 @@ def admin_matchup_whatif(
         },
         "probs_1x2": p,
         "fair_odds_1x2": fair,
+        "drivers": drivers,
         # útil para depurar “sempre igual”: se isso variar, o modelo está variando
         "debug": pred.get("debug"),
         "features": pred.get("features"),
@@ -977,12 +1011,14 @@ def admin_matchup_by_fixture(
         f.fixture_id,
         f.kickoff_utc,
         f.league_id,
+        l.name AS competition_name,
         f.season,
         f.home_team_id,
         ht.name AS home_team_name,
         f.away_team_id,
         at.name AS away_team_name
       FROM core.fixtures f
+      JOIN core.leagues l ON l.league_id = f.league_id
       JOIN core.teams ht ON ht.team_id = f.home_team_id
       JOIN core.teams at ON at.team_id = f.away_team_id
       WHERE f.fixture_id = %(fixture_id)s
@@ -1001,6 +1037,7 @@ def admin_matchup_by_fixture(
         fx_id,
         kickoff_utc,
         league_id,
+        competition_name,
         season,
         home_team_id,
         home_team_name,
@@ -1034,6 +1071,8 @@ def admin_matchup_by_fixture(
         "fair_odds_1x2": fair,
         "debug": pred.get("debug"),
         "features": pred.get("features"),
+        "competition_name": str(competition_name) if competition_name else None,
+
     }
 
 @admin_router.post("/fixtures/refresh")

@@ -150,42 +150,28 @@ export async function findUpcomingFixturesBetweenTeams(_homeTeamId: number, _awa
 }
 
 export async function matchupByFixture(req: MatchupByFixtureRequest): Promise<MatchupResponse> {
-  await sleep(200);
-  return {
-    meta: {
-      fixture_id: req.fixture_id,
-      competition_name: "Premier League",
-      season: 2026,
-      kickoff_utc: "2026-01-12T04:36:17Z",
-      artifact_id: req.artifact_id ?? MOCK_ARTIFACTS[0].artifact_id,
-      is_whatif: false,
-    },
-    probs_1x2: { H: 0.55, D: 0.25, A: 0.20 },
-    fair_odds_1x2: { H: 1/0.55, D: 1/0.25, A: 1/0.20 },
-    drivers: [
-      { key: "form_home", label: "Home recent form", value: "+0.31" },
-      { key: "elo_gap", label: "Strength gap", value: "+42" },
-      { key: "xg_diff", label: "xG diff (rolling)", value: "+0.28" },
-      { key: "injuries", label: "Injuries impact", value: "-0.06" },
-    ],
-  };
+  const url = new URL("/admin/matchup/by-fixture", API_BASE_URL);
+  url.searchParams.set("fixture_id", String(req.fixture_id));
+  if (req.artifact_id) url.searchParams.set("artifact_id", req.artifact_id);
+
+  return fetchJson<MatchupResponse>(url.toString(), { headers: { Accept: "application/json" } });
 }
 
 export async function matchupWhatIf(req: MatchupWhatIfRequest): Promise<MatchupResponse> {
-  await sleep(200);
-  return {
-    meta: {
-      artifact_id: req.artifact_id ?? MOCK_ARTIFACTS[0].artifact_id,
-      is_whatif: true,
-    },
-    probs_1x2: { H: 0.47, D: 0.27, A: 0.26 },
-    fair_odds_1x2: { H: 1/0.47, D: 1/0.27, A: 1/0.26 },
-    drivers: [
-      { key: "neutral_adjust", label: "Venue mode", value: req.venue_mode ?? "HOME" },
-      { key: "ref_date", label: "Reference date", value: req.reference_date_utc ?? "auto" },
-      { key: "competition", label: "Competition", value: req.competition_id ? String(req.competition_id) : "auto" },
-    ],
-  };
+  const url = new URL("/admin/matchup/whatif", API_BASE_URL);
+
+  url.searchParams.set("home_team_id", String(req.home_team_id));
+  url.searchParams.set("away_team_id", String(req.away_team_id));
+
+  // Mantém compat com a UI atual (advanced), mesmo que backend ignore por enquanto
+  if (req.venue_mode) url.searchParams.set("venue_mode", req.venue_mode);
+  if (req.reference_date_utc) url.searchParams.set("reference_date_utc", req.reference_date_utc);
+  if (req.competition_id != null) url.searchParams.set("competition_id", String(req.competition_id));
+
+  // Obrigatório no backend atual
+  if (req.artifact_id) url.searchParams.set("artifact_id", req.artifact_id);
+
+  return fetchJson<MatchupResponse>(url.toString(), { headers: { Accept: "application/json" } });
 }
 
 import type { TeamSummary } from "./contracts";
