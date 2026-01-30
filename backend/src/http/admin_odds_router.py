@@ -1756,4 +1756,3 @@ def admin_odds_upcoming_intel_live(
 
     out.sort(key=_best_ev_key, reverse=True)
 
-    return {"meta": {"counts": counts}, "items": out}
