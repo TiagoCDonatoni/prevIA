@@ -353,6 +353,173 @@ def admin_odds_upcoming(
         )
     return out
 
+from pydantic import BaseModel
+
+
+class AdminOddsRefreshResponse(BaseModel):
+    ok: bool = True
+    sport_key: str
+    regions: str
+    captured_at_utc: str
+    counters: Dict[str, int]
+
+
+def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        # TheOdds costuma vir ISO com Z
+        if s.endswith("Z"):
+            s = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, Any]], captured_at_utc: datetime) -> Dict[str, int]:
+    """
+    Persiste:
+      - odds.odds_events (upsert por event_id)
+      - odds.odds_snapshots_1x2 (dedup via unique index)
+    """
+    c_events_upsert = 0
+    c_snapshots_inserted = 0
+    c_snapshots_skipped = 0
+
+    sql_upsert_event = """
+      INSERT INTO odds.odds_events (
+        event_id, sport_key, commence_time_utc, home_name, away_name, updated_at_utc
+      )
+      VALUES (
+        %(event_id)s, %(sport_key)s, %(commence_time_utc)s, %(home_name)s, %(away_name)s, now()
+      )
+      ON CONFLICT (event_id) DO UPDATE SET
+        sport_key = EXCLUDED.sport_key,
+        commence_time_utc = EXCLUDED.commence_time_utc,
+        home_name = EXCLUDED.home_name,
+        away_name = EXCLUDED.away_name,
+        updated_at_utc = now()
+    """
+
+    # Com unique index: (event_id, bookmaker, market, captured_at_utc)
+    sql_insert_snapshot = """
+      INSERT INTO odds.odds_snapshots_1x2 (
+        event_id, bookmaker, market, odds_home, odds_draw, odds_away, captured_at_utc
+      )
+      VALUES (
+        %(event_id)s, %(bookmaker)s, %(market)s, %(odds_home)s, %(odds_draw)s, %(odds_away)s, %(captured_at_utc)s
+      )
+      ON CONFLICT DO NOTHING
+    """
+
+    with conn.cursor() as cur:
+        for ev in raw_events:
+            event_id = ev.get("id") or ev.get("event_id")
+            home = ev.get("home_team") or ev.get("home_name")
+            away = ev.get("away_team") or ev.get("away_name")
+            commence = _parse_iso_dt(ev.get("commence_time") or ev.get("commence_time_utc"))
+
+            if not event_id or not home or not away:
+                continue
+
+            cur.execute(
+                sql_upsert_event,
+                {
+                    "event_id": str(event_id),
+                    "sport_key": str(sport_key),
+                    "commence_time_utc": commence,
+                    "home_name": str(home),
+                    "away_name": str(away),
+                },
+            )
+            c_events_upsert += 1
+
+            # snapshots: varrer bookmakers -> market h2h
+            bookmakers = ev.get("bookmakers") or []
+            for bk in bookmakers:
+                bk_title = bk.get("title") or bk.get("key") or None
+                markets = bk.get("markets") or []
+                for mk in markets:
+                    if (mk.get("key") or mk.get("market") or "h2h") != "h2h":
+                        continue
+                    outcomes = mk.get("outcomes") or []
+
+                    odds_home = None
+                    odds_draw = None
+                    odds_away = None
+
+                    # outcomes: {name, price}
+                    for oc in outcomes:
+                        nm = oc.get("name")
+                        pr = oc.get("price")
+                        if nm == home:
+                            odds_home = pr
+                        elif nm == away:
+                            odds_away = pr
+                        else:
+                            # draw costuma vir como "Draw"
+                            if isinstance(nm, str) and nm.strip().lower() == "draw":
+                                odds_draw = pr
+
+                    cur.execute(
+                        sql_insert_snapshot,
+                        {
+                            "event_id": str(event_id),
+                            "bookmaker": str(bk_title) if bk_title else None,
+                            "market": "h2h",
+                            "odds_home": odds_home,
+                            "odds_draw": odds_draw,
+                            "odds_away": odds_away,
+                            "captured_at_utc": captured_at_utc,
+                        },
+                    )
+                    if cur.rowcount == 1:
+                        c_snapshots_inserted += 1
+                    else:
+                        c_snapshots_skipped += 1
+
+    return {
+        "events_upserted": c_events_upsert,
+        "snapshots_inserted": c_snapshots_inserted,
+        "snapshots_skipped": c_snapshots_skipped,
+    }
+
+
+@router.post("/refresh", response_model=AdminOddsRefreshResponse)
+def admin_odds_refresh(
+    sport_key: str = Query(..., min_length=2),
+    regions: str = Query(default="eu"),
+) -> AdminOddsRefreshResponse:
+    """
+    Admin-only: chama provider e persiste no DB (odds_events + odds_snapshots_1x2).
+    Isso abastece o Produto (/odds/*) no modo DB-only.
+    """
+    try:
+        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+    except TheOddsApiError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    captured_at = datetime.now(timezone.utc)
+
+    try:
+        with pg_conn() as conn:
+            conn.autocommit = False
+            counters = _persist_odds_h2h_batch(conn, sport_key=sport_key, raw_events=raw, captured_at_utc=captured_at)
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"persist_failed: {e}")
+
+    return AdminOddsRefreshResponse(
+        ok=True,
+        sport_key=sport_key,
+        regions=regions,
+        captured_at_utc=captured_at.isoformat().replace("+00:00", "Z"),
+        counters=counters,
+    )
+
 
 @router.get("/upcoming/orchestrate")
 def admin_odds_upcoming_orchestrate(
