@@ -8,6 +8,8 @@ from src.routes.debug_db import router as debug_db_router
 # Admin (DB/metrics/matchup etc.)
 from src.http.admin_router import admin_router, admin_odds_router
 
+from src.http.odds_router import router as odds_router
+
 # Odds admin (legado, se ainda existir e for necessário)
 from src.http.admin_odds_router import router as legacy_admin_odds_router
 
@@ -34,6 +36,7 @@ def create_app() -> FastAPI:
     api.include_router(admin_odds_router)
     api.include_router(legacy_admin_odds_router)
     api.include_router(debug_db_router)
+    api.include_router(odds_router)
 
     @api.get("/", response_class=HTMLResponse)
     def index():

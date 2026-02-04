@@ -1153,3 +1153,32 @@ def admin_refresh_fixtures(
 
     report["plan"]["calls_left"] = calls_left
     return report
+
+
+@admin_router.get("/teams/by-league-season")
+def admin_teams_by_league_season(
+    league_id: int = Query(..., ge=1),
+    season: int = Query(..., ge=1900, le=2100),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> Dict[str, Any]:
+    with pg_conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            """
+            select t.team_id, t.name
+            from core.team_season_stats s
+            join core.teams t on t.team_id = s.team_id
+            where s.league_id = %(league_id)s and s.season = %(season)s
+            order by t.name
+            limit %(limit)s
+            """,
+            {"league_id": league_id, "season": season, "limit": limit},
+        )
+        rows = cur.fetchall()
+
+    return {
+        "league_id": int(league_id),
+        "season": int(season),
+        "teams": [{"team_id": int(tid), "name": str(name)} for (tid, name) in rows],
+    }
+
