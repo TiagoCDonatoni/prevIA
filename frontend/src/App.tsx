@@ -8,6 +8,14 @@ import TeamExplorer from "./views/TeamExplorer";
 import OddsIntel from "./views/OddsIntel";
 import ProductOdds from "./views/ProductOdds";
 
+import React from "react";
+import App from "../App";
+
+export function AdminApp() {
+  return <App />;
+}
+
+
 type Page = "dashboard" | "matchup" | "team" | "odds" | "product";
 
 export default function App() {

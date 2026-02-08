@@ -1,0 +1,25 @@
+import React from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+
+// Produto
+import { ProductApp } from "./product/ProductApp";
+
+// Admin (mantém o que você já tem)
+import { AdminApp } from "./admin/AdminApp";
+
+export function AppRoutes() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Produto */}
+        <Route path="/*" element={<ProductApp />} />
+
+        {/* Admin */}
+        <Route path="/admin/*" element={<AdminApp />} />
+
+        {/* fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
