@@ -1,0 +1,14 @@
+{
+  "gamesTitle": "Partidos",
+  "analysisTitle": "Análisis",
+  "selectGame": "Selecciona un partido.",
+  "available": "Análisis disponible",
+  "probabilities": "Probabilidades",
+  "marketOdds": "Cuotas",
+  "valueDetected": "Value detectado",
+  "details": "Ver detalles",
+  "confidence": "Confianza del modelo",
+  "sampleSize": "Base histórica",
+  "fairOdds": "Cuota justa estimada",
+  "edge": "Diferencia"
+}

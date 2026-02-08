@@ -1,0 +1,9 @@
+{
+  "counter": "Credits: {remaining}/{limit}",
+  "usedUpTitle": "You’ve used all credits for today.",
+  "usedUpBody": "They will reset tomorrow.",
+  "gainBySignup": "Create a free account and get +2 credits per day.",
+  "revealCost": "Use {cost} credit to view",
+  "reveal": "View analysis",
+  "alreadyRevealed": "Viewed today"
+}

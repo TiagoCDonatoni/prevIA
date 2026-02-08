@@ -13,6 +13,10 @@ import type {
   MatchupWhatIfRequest,
   RunRow,
   TeamLite,
+  TeamSummary,
+  ProductOddsEventsResponse,
+  ProductOddsQuoteRequest,
+  ProductOddsQuoteResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -47,7 +51,7 @@ const MOCK_FIXTURES: FixtureLite[] = [
 
 const MOCK_ARTIFACTS: ArtifactRow[] = [
   {
-    artifact_id: "epl_1x2_logreg_tempcal_v1_C0.3_cal2023",
+    artifact_id: "epl_1x2_logreg_tempcal_v1_C_2021_2023_C0.3_cal2023",
     model_id: "1x2_logreg_v1",
     league_or_competition: "Premier League",
     seasons_train: "2021–2023",
@@ -168,13 +172,14 @@ export async function matchupWhatIf(req: MatchupWhatIfRequest): Promise<MatchupR
   if (req.reference_date_utc) url.searchParams.set("reference_date_utc", req.reference_date_utc);
   if (req.competition_id != null) url.searchParams.set("competition_id", String(req.competition_id));
 
+  if (req.league_id != null) url.searchParams.set("league_id", String(req.league_id));
+  if (req.season != null) url.searchParams.set("season", String(req.season));
+
   // Obrigatório no backend atual
   if (req.artifact_id) url.searchParams.set("artifact_id", req.artifact_id);
 
   return fetchJson<MatchupResponse>(url.toString(), { headers: { Accept: "application/json" } });
 }
-
-import type { TeamSummary } from "./contracts";
 
 export async function getTeamSummary(teamId: number, lastN = 20, season?: number): Promise<TeamSummary> {
   const url = new URL("/admin/team/summary", API_BASE_URL);
@@ -189,8 +194,6 @@ export async function getTeamSummary(teamId: number, lastN = 20, season?: number
   }
   return (await res.json()) as TeamSummary;
 }
-
-import type { TeamLite } from "./contracts";
 
 export async function listTeams(limit = 300, offset = 0): Promise<TeamLite[]> {
   const url = new URL("/admin/teams/list", API_BASE_URL);
@@ -269,3 +272,46 @@ export async function getOddsQueueIntel(params: {
   url.search = qs.toString();
   return fetchJson<OddsIntelResponse>(url.toString());
 }
+
+export async function listTeamsByLeagueSeason(leagueId: number, season: number, limit = 200): Promise<TeamLite[]> {
+  const url = new URL("/admin/teams/by-league-season", API_BASE_URL);
+  url.searchParams.set("league_id", String(leagueId));
+  url.searchParams.set("season", String(season));
+  url.searchParams.set("limit", String(limit));
+
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`GET /admin/teams/by-league-season failed: ${res.status} ${txt}`);
+  }
+
+  const data = (await res.json()) as { teams: TeamLite[] };
+  return data.teams;
+}
+
+import type { ProductOddsEventsResponse, ProductOddsQuoteRequest, ProductOddsQuoteResponse } from "./contracts";
+
+export async function productListOddsEvents(params: {
+  sport_key: string;
+  hours_ahead?: number;
+  limit?: number;
+}): Promise<ProductOddsEventsResponse> {
+  const qs = new URLSearchParams();
+  qs.set("sport_key", params.sport_key);
+  if (params.hours_ahead != null) qs.set("hours_ahead", String(params.hours_ahead));
+  if (params.limit != null) qs.set("limit", String(params.limit));
+
+  const url = new URL("/odds/events", API_BASE_URL);
+  url.search = qs.toString();
+  return fetchJson<ProductOddsEventsResponse>(url.toString(), { headers: { Accept: "application/json" } });
+}
+
+export async function productQuoteOdds(req: ProductOddsQuoteRequest): Promise<ProductOddsQuoteResponse> {
+  const url = new URL("/odds/quote", API_BASE_URL);
+  return fetchJson<ProductOddsQuoteResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+

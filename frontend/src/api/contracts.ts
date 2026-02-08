@@ -54,6 +54,8 @@ export type MatchupWhatIfRequest = {
   venue_mode?: "HOME" | "NEUTRAL"; // default: HOME
   competition_id?: number; // optional
   artifact_id?: string;
+  league_id?: number;
+  season?: number;
 };
 
 export type MatchupResponse = {
@@ -216,4 +218,68 @@ export type OddsIntelMeta = {
 export type OddsIntelResponse = {
   meta: OddsIntelMeta;
   items: OddsIntelItem[];
+};
+
+// -------------------------
+// Produto (MVP) — Odds v1
+// -------------------------
+
+export type ProductOdds1x2 = { H: number; D: number; A: number };
+
+export type ProductOddsEvent = {
+  event_id: string;
+  sport_key: string;
+  commence_time_utc: string; // vem como ISO (pode vir com -03:00 hoje)
+  home_name: string;
+  away_name: string;
+  latest_captured_at_utc: string | null;
+  odds_best: ProductOdds1x2 | null;
+  match_status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | null;
+  match_score: number | null;
+};
+
+export type ProductOddsEventsResponse = {
+  ok: boolean;
+  generated_at_utc: string;
+  sport_key: string;
+  events: ProductOddsEvent[];
+};
+
+export type ProductOddsQuoteRequest = {
+  event_id: string;
+  assume_league_id: number;
+  assume_season: number;
+  artifact_filename: string;
+  tol_hours?: number;
+};
+
+export type ProductOddsQuoteResponse = {
+  ok: boolean;
+  event_id: string;
+  matchup: {
+    status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND";
+    confidence: number;
+    league_id: number;
+    season: number;
+    fixture_id: number | null;
+    home_team_id: number | null;
+    away_team_id: number | null;
+    reason?: string | null;
+
+    model_season_requested?: number;
+    model_season_used?: number | null;
+    model_season_mode?: "requested" | "fallback_latest" | "none";
+    model_status?: string;
+    model_error?: string;
+  };
+  probs: ProductOdds1x2 | null;
+  odds: {
+    source: "db";
+    latest_captured_at_utc: string | null;
+    best: ProductOdds1x2 | null;
+  };
+  value?: {
+    market?: string;
+    edge?: ProductOdds1x2 | null;
+  };
 };

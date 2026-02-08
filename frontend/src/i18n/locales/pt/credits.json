@@ -1,0 +1,9 @@
+{
+  "counter": "Créditos: {remaining}/{limit}",
+  "usedUpTitle": "Você usou todos os créditos de hoje.",
+  "usedUpBody": "Eles serão renovados amanhã.",
+  "gainBySignup": "Crie uma conta gratuita e ganhe +2 créditos por dia.",
+  "revealCost": "Usar {cost} crédito para ver",
+  "reveal": "Ver análise",
+  "alreadyRevealed": "Já visto hoje"
+}

@@ -6,11 +6,13 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
 from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
+from src.odds.matchup_resolver import resolve_odds_event
 
 
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
@@ -518,6 +520,120 @@ def admin_odds_refresh(
         regions=regions,
         captured_at_utc=captured_at.isoformat().replace("+00:00", "Z"),
         counters=counters,
+    )
+
+class AdminOddsResolveBatchResponse(BaseModel):
+    ok: bool = True
+    sport_key: str
+    window_hours: int
+    assume_league_id: int
+    assume_season: int
+    tol_hours: int
+    counters: Dict[str, int]
+    sample_issues: List[Dict[str, Any]] = []
+
+
+@router.post("/resolve/batch", response_model=AdminOddsResolveBatchResponse)
+def admin_odds_resolve_batch(
+    sport_key: str = Query(..., min_length=2),
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    assume_league_id: int = Query(..., ge=1),
+    assume_season: int = Query(..., ge=1900),
+    tol_hours: int = Query(default=6, ge=1, le=48),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> AdminOddsResolveBatchResponse:
+    """
+    Admin-only: resolve em lote odds_events -> core.fixtures e persiste status/score/resolved ids.
+    DB-only: não chama provider.
+    """
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(hours=int(hours_ahead))
+
+    sql = """
+      SELECT event_id
+      FROM odds.odds_events
+      WHERE sport_key = %(sport_key)s
+        AND commence_time_utc IS NOT NULL
+        AND commence_time_utc >= %(now)s
+        AND commence_time_utc <= %(end)s
+      ORDER BY commence_time_utc ASC
+      LIMIT %(limit)s
+    """
+
+    counters = {
+        "events_scanned": 0,
+        "exact": 0,
+        "probable": 0,
+        "ambiguous": 0,
+        "not_found": 0,
+        "errors": 0,
+        "persisted": 0,
+    }
+    sample_issues: List[Dict[str, Any]] = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)},
+            )
+            event_ids = [r[0] for r in cur.fetchall()]
+
+        for event_id in event_ids:
+            counters["events_scanned"] += 1
+            try:
+                res = resolve_odds_event(
+                    conn,
+                    event_id=str(event_id),
+                    assume_league_id=int(assume_league_id),
+                    assume_season=int(assume_season),
+                    tol_hours=int(tol_hours),
+                    max_candidates=5,
+                    persist_resolution=True,
+                )
+                counters["persisted"] += 1
+
+                if res.status == "EXACT":
+                    counters["exact"] += 1
+                elif res.status == "PROBABLE":
+                    counters["probable"] += 1
+                    if len(sample_issues) < 8:
+                        sample_issues.append(
+                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason}
+                        )
+                elif res.status == "AMBIGUOUS":
+                    counters["ambiguous"] += 1
+                    if len(sample_issues) < 8:
+                        sample_issues.append(
+                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason, "candidates": res.candidates[:3]}
+                        )
+                else:
+                    counters["not_found"] += 1
+                    if len(sample_issues) < 8:
+                        sample_issues.append(
+                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason}
+                        )
+
+            except Exception as e:
+                counters["errors"] += 1
+                if len(sample_issues) < 8:
+                    sample_issues.append({"event_id": str(event_id), "status": "ERROR", "error": str(e)})
+
+        # garante persistência (o resolve_odds_event já faz UPDATE, mas commit explícito ajuda)
+        try:
+            conn.commit()
+        except Exception:
+            pass
+
+    return AdminOddsResolveBatchResponse(
+        ok=True,
+        sport_key=sport_key,
+        window_hours=int(hours_ahead),
+        assume_league_id=int(assume_league_id),
+        assume_season=int(assume_season),
+        tol_hours=int(tol_hours),
+        counters=counters,
+        sample_issues=sample_issues,
     )
 
 

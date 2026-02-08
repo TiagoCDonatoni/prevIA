@@ -1,0 +1,14 @@
+{
+  "gamesTitle": "Games",
+  "analysisTitle": "Analysis",
+  "selectGame": "Select a game.",
+  "available": "Analysis available",
+  "probabilities": "Probabilities",
+  "marketOdds": "Odds",
+  "valueDetected": "Value detected",
+  "details": "View details",
+  "confidence": "Model confidence",
+  "sampleSize": "Historical sample",
+  "fairOdds": "Estimated fair odds",
+  "edge": "Edge"
+}

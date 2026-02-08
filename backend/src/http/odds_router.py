@@ -196,6 +196,40 @@ def _fetch_event_and_best_odds(conn, event_id: str) -> Dict[str, Any]:
         } if (odds_home is not None or odds_draw is not None or odds_away is not None) else None,
     }
 
+def _pick_model_season(conn, *, league_id: int, requested_season: int) -> Dict[str, Any]:
+    """
+    MVP: se não existir team_season_stats para requested_season, cai para o MAX(season) disponível.
+    Retorna {season_used, season_mode}.
+    season_mode:
+      - "requested" (usou a season pedida)
+      - "fallback_latest" (caiu para a última season disponível)
+      - "none" (não existe stats nenhuma)
+    """
+    sql_has = """
+      SELECT 1
+      FROM core.team_season_stats
+      WHERE league_id = %(league_id)s AND season = %(season)s
+      LIMIT 1
+    """
+    sql_max = """
+      SELECT MAX(season)
+      FROM core.team_season_stats
+      WHERE league_id = %(league_id)s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_has, {"league_id": int(league_id), "season": int(requested_season)})
+        if cur.fetchone():
+            return {"season_used": int(requested_season), "season_mode": "requested"}
+
+        cur.execute(sql_max, {"league_id": int(league_id)})
+        row = cur.fetchone()
+        max_season = row[0] if row else None
+
+    if max_season is None:
+        return {"season_used": None, "season_mode": "none"}
+
+    return {"season_used": int(max_season), "season_mode": "fallback_latest"}
+
 
 # ---------------------------
 # Endpoints (Produto)
@@ -372,17 +406,29 @@ def quote(req: QuoteRequest) -> QuoteResponse:
 
         # 3) modelo (só se tiver ids resolvidos)
         if res.resolved_home_team_id and res.resolved_away_team_id:
-            pred = predict_1x2_from_artifact(
-                artifact_filename=req.artifact_filename,
-                league_id=int(req.assume_league_id),
-                season=int(req.assume_season),
-                home_team_id=int(res.resolved_home_team_id),
-                away_team_id=int(res.resolved_away_team_id),
-            )
-            # o modelo já retorna probs em pred["probs"]
-            probs = pred.get("probs") or pred.get("probs_1x2") or None
-            if probs:
-                probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+            pick = _pick_model_season(conn, league_id=int(req.assume_league_id), requested_season=int(req.assume_season))
+
+            matchup["model_season_requested"] = int(req.assume_season)
+            matchup["model_season_used"] = pick["season_used"]
+            matchup["model_season_mode"] = pick["season_mode"]
+
+            if pick["season_mode"] == "none":
+                matchup["model_status"] = "NO_STATS_ANY_SEASON"
+            else:
+                try:
+                    pred = predict_1x2_from_artifact(
+                        artifact_filename=req.artifact_filename,
+                        league_id=int(req.assume_league_id),
+                        season=int(pick["season_used"]),
+                        home_team_id=int(res.resolved_home_team_id),
+                        away_team_id=int(res.resolved_away_team_id),
+                    )
+                    probs = pred.get("probs") or pred.get("probs_1x2") or None
+                    if probs:
+                        probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+                except ValueError as e:
+                    matchup["model_status"] = "NO_STATS_FOR_MATCH"
+                    matchup["model_error"] = str(e)
 
         # 4) value/edge (opcional)
         if probs_block and ev.get("odds_best"):

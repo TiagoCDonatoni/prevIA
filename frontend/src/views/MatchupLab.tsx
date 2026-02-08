@@ -7,7 +7,7 @@ import {
   matchupByFixture,
   matchupWhatIf,
   listArtifacts,
-  listTeams,
+  listTeamsByLeagueSeason,
 } from "../api/client";
 
 import { Card } from "../ui/Card";
@@ -15,6 +15,10 @@ import { Pill } from "../ui/Pill";
 import { fmtIsoToShort, fmtNum, fmtPct } from "../ui/components";
 
 export default function MatchupLab() {
+  
+  const [leagueId, setLeagueId] = useState<number>(39); // EPL
+  const [season, setSeason] = useState<number>(2024);
+
   const [qHome, setQHome] = useState("");
   const [qAway, setQAway] = useState("");
 
@@ -47,13 +51,19 @@ export default function MatchupLab() {
     })();
   }, []);
 
-  // Load teams once (preload default list)
+  // Load teams for selected league+season (IDs compatíveis com team_season_stats)
   useEffect(() => {
     void (async () => {
-      const teams = await listTeams(1000, 0); // ajuste se quiser (300/500/1000)
+      const teams = await listTeamsByLeagueSeason(leagueId, season, 200);
       setAllTeams(teams);
+      // reset selections porque o universo mudou
+      setHome(null);
+      setAway(null);
+      setFixtures([]);
+      setSelectedFixtureId("");
+      setResult(null);
     })();
-  }, []);
+  }, [leagueId, season]);
 
   // Filter locally (no backend calls while typing)
   const homeOptions = useMemo(() => {
@@ -91,6 +101,8 @@ export default function MatchupLab() {
     const res = await matchupWhatIf({
       home_team_id: home.team_id,
       away_team_id: away.team_id,
+      league_id: leagueId,
+      season,
       venue_mode: venueMode,
       reference_date_utc: referenceDateUtc || undefined,
       artifact_id: artifactId || undefined,
