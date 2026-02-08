@@ -54,7 +54,7 @@ function writeReveals(map: RevealsMap) {
 
 export default function ProductOdds() {
   const { t } = useI18n();
-  const { plan, remainingToday, consumeCredit, resetNonce } = useEntitlements();
+  const { plan, remainingToday, tryConsume, resetNonce } = useEntitlements();
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<ProductOddsEvent[]>([]);
@@ -118,18 +118,17 @@ export default function ProductOdds() {
   function revealSelected() {
     if (!selectedId) return;
 
-    // idempotente: se já revelou, não consome crédito
+    // idempotente: se já revelou, não consome
     if (reveals[selectedId]) return;
 
-    if (noCredits) return;
+    // tenta consumir 1 crédito de forma atômica (source of truth)
+    const ok = tryConsume(1);
+    if (!ok) return;
 
-    // 1) grava reveal
+    // só grava o reveal se o crédito foi consumido
     const next = { ...reveals, [selectedId]: true as const };
     setReveals(next);
     writeReveals(next);
-
-    // 2) consome 1 crédito do dia (fonte única)
-    consumeCredit();
   }
 
   const filtered = useMemo(() => {
