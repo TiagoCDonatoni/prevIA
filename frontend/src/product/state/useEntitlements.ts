@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type Plan = "FREE_ANON" | "FREE" | "BASIC" | "LIGHT" | "PRO";
 
-const STORAGE_PLAN = "previa_plan_v1";
-const STORAGE_CREDITS = "previa_credits_v1";
-const STORAGE_REVEALS = "previa_reveals_v1";
+export const STORAGE_PLAN = "previa_plan_v1";
+export const STORAGE_CREDITS = "previa_credits_v1";
+export const STORAGE_REVEALS = "previa_reveals_v1";
 
 function getTodayKey() {
   // America/Sao_Paulo: para MVP local, usamos o dia local da máquina.
@@ -107,10 +107,7 @@ export function useEntitlements() {
 
   const resetForTesting = useCallback(() => {
     // reset créditos
-    const today = new Date();
-    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
-      today.getDate()
-    ).padStart(2, "0")}`;
+    const todayKey = getTodayKey();
 
     const resetCredits = {
       date: todayKey,
@@ -138,8 +135,18 @@ export function useEntitlements() {
       setUsedToday,
       creditsLabel,
       resetForTesting,
-
     }),
-    [plan, setPlan, dailyLimit, credits.used, remaining, consumeCredit, setUsedToday, creditsLabel]
+    [
+      plan,
+      setPlan,
+      dailyLimit,
+      credits.used,
+      remaining,
+      consumeCredit,
+      setUsedToday,
+      creditsLabel,
+      resetForTesting,
+    ]
   );
+
 }
