@@ -6,7 +6,7 @@ import { useEntitlements } from "../state/useEntitlements"; // ajuste se seu est
 
 export function ProductLayout() {
   const { lang, setLang, t } = useI18n();
-  const { plan, setPlan, creditsLabel } = useEntitlements();
+  const { plan, setPlan, creditsLabel, resetForTesting } = useEntitlements();
 
   return (
     <div className="product-shell">
@@ -41,6 +41,15 @@ export function ProductLayout() {
               <option value="PRO">Pro</option>
             </select>
           </div>
+
+          {/* BOTÃO DEV — remover depois */}
+          <button
+            className="product-reset-btn"
+            onClick={resetForTesting}
+            title="Resetar créditos e análises (DEV)"
+          >
+            Reset
+          </button>
 
           <div className="product-credits">{creditsLabel}</div>
         </div>
