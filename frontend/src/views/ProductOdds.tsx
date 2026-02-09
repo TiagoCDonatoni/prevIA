@@ -70,7 +70,7 @@ export default function ProductOdds() {
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
-  // ✅ você já usa creditError no JSX e no revealSelected — precisa existir
+  // ✅ necessário (você já usa isso no fluxo do reveal)
   const [creditError, setCreditError] = useState<string | null>(null);
 
   // 🔑 Reveals sincronizados com STORAGE_REVEALS
@@ -81,7 +81,7 @@ export default function ProductOdds() {
     [reveals, selectedId]
   );
 
-  // ⚠️ noCredits fica só para UI (mensagem), não para bloquear clique.
+  // ⚠️ Só para UI (mensagem). NÃO use isso para bloquear clique.
   const noCredits = remainingToday <= 0;
 
   async function load() {
@@ -133,7 +133,7 @@ export default function ProductOdds() {
     // idempotente
     if (reveals[selectedId]) return;
 
-    // ✅ fonte única: tryConsume decide se pode ou não
+    // ✅ fonte única: bloqueio real é aqui
     const ok = tryConsume(1);
     if (!ok) {
       setCreditError(t("errors.noCredits"));
@@ -175,7 +175,6 @@ export default function ProductOdds() {
   useEffect(() => {
     setQuote(null);
     setQuoteError(null);
-
     if (selectedId && revealed) runQuote(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, revealed]);
@@ -189,8 +188,6 @@ export default function ProductOdds() {
     setQuoteError(null);
     setQuoteLoading(false);
     setCreditError(null);
-
-    console.log("[DEV] ProductOdds: resetNonce mudou -> state ressincronizado");
   }, [resetNonce]);
 
   return (
@@ -237,8 +234,8 @@ export default function ProductOdds() {
                     textAlign: "left",
                     padding: 12,
                     borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.10)",
-                    background: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    background: active ? "rgba(0,0,0,0.04)" : "rgba(0,0,0,0.02)",
                     cursor: "pointer",
                     transition: "background 0.15s ease, border-color 0.15s ease",
                   }}
@@ -293,7 +290,7 @@ export default function ProductOdds() {
                     </div>
                   ) : null}
 
-                  {/* ✅ não desabilita o botão por remainingToday; tryConsume decide */}
+                  {/* ✅ NÃO desabilita pelo remainingToday; tryConsume decide */}
                   <button className="btn" type="button" onClick={revealSelected}>
                     {t("credits.revealCost", { cost: 1 })}
                   </button>
