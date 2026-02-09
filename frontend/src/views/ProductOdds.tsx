@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
@@ -24,7 +24,9 @@ function fmtPct(x: number) {
   return `${(x * 100).toFixed(1)}%`;
 }
 
-function bestSideFromEdge(edge?: { H?: number | null; D?: number | null; A?: number | null } | null): "H" | "D" | "A" | null {
+function bestSideFromEdge(
+  edge?: { H?: number | null; D?: number | null; A?: number | null } | null
+): "H" | "D" | "A" | null {
   if (!edge) return null;
   const pairs: Array<["H" | "D" | "A", number]> = [
     ["H", edge.H ?? -Infinity],
@@ -47,8 +49,6 @@ export default function ProductOdds() {
   const [onlyGood, setOnlyGood] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Product state (plan/lang/credits) is persisted via ProductStoreProvider.
-  const productState = store.state;
   const ent = store.entitlements;
 
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -57,6 +57,11 @@ export default function ProductOdds() {
 
   const lang = ent.lang;
   const tr = (k: string, vars?: Record<string, any>) => t(lang, k, vars);
+
+  // Race control
+  const quoteReqIdRef = useRef(0);
+  const quoteEpochRef = useRef(0);
+  const lastQuotedIdRef = useRef<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -67,9 +72,17 @@ export default function ProductOdds() {
         hours_ahead: DEFAULTS.hoursAhead,
         limit: DEFAULTS.limit,
       });
-      setEvents(res.events || []);
-      const first = (res.events || []).find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE");
-      if (!selectedId && first) setSelectedId(first.event_id);
+
+      const list = res.events || [];
+      setEvents(list);
+
+      const firstGood =
+        list.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? list[0] ?? null;
+
+      setSelectedId((prev) => {
+        if (prev && list.some((e) => e.event_id === prev)) return prev;
+        return firstGood?.event_id ?? null;
+      });
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
@@ -78,9 +91,13 @@ export default function ProductOdds() {
   }
 
   async function runQuote(eventId: string) {
+    const myReqId = ++quoteReqIdRef.current;
+    const myEpoch = quoteEpochRef.current;
+
     setQuoteLoading(true);
     setQuote(null);
     setQuoteError(null);
+
     try {
       const res = await productQuoteOdds({
         event_id: eventId,
@@ -89,23 +106,34 @@ export default function ProductOdds() {
         artifact_filename: DEFAULTS.artifactFilename,
         tol_hours: DEFAULTS.tolHours,
       });
+
+      if (quoteEpochRef.current !== myEpoch) return;
+      if (quoteReqIdRef.current !== myReqId) return;
+
       setQuote(res);
+      lastQuotedIdRef.current = eventId;
     } catch (e: any) {
+      if (quoteEpochRef.current !== myEpoch) return;
+      if (quoteReqIdRef.current !== myReqId) return;
+
       setQuoteError(e?.message ?? String(e));
     } finally {
+      if (quoteEpochRef.current !== myEpoch) return;
+      if (quoteReqIdRef.current !== myReqId) return;
+
       setQuoteLoading(false);
     }
   }
-
-  // Auth modal removed for this iteration (kept for later when we add real login).
 
   function revealSelected() {
     if (!selectedId) return;
 
     const res = store.tryReveal(selectedId);
-    if (!res.ok) return;
+    if (!res.ok) {
+      setQuoteError(res.reason === "ALREADY_REVEALED" ? tr("credits.alreadyRevealed") : tr("errors.noCredits"));
+      return;
+    }
 
-    // MVP fix: evita depender do useEffect (selectedId/revealed) para disparar o quote
     runQuote(selectedId);
   }
 
@@ -124,21 +152,10 @@ export default function ProductOdds() {
   }, [events, query, onlyGood]);
 
   const selected = useMemo(() => events.find((e) => e.event_id === selectedId) ?? null, [events, selectedId]);
-  const revealed = useMemo(
-    () => (selectedId ? !!productState.credits.revealed_today?.[selectedId] : false),
-    [productState, selectedId]
-  );
 
-  function deriveBestSideFromEdge(edge?: { H?: number | null; D?: number | null; A?: number | null } | null): "H" | "D" | "A" | "—" {
-    if (!edge) return "—";
-    const entries: Array<["H" | "D" | "A", number]> = [
-      ["H", edge.H ?? 0],
-      ["D", edge.D ?? 0],
-      ["A", edge.A ?? 0],
-    ];
-    entries.sort((a, b) => b[1] - a[1]);
-    return entries[0]?.[0] ?? "—";
-  }
+  // ✅ Fonte ÚNICA: store
+  const revealed = useMemo(() => (selectedId ? store.isRevealed(selectedId) : false), [store, selectedId]);
+  const canReveal = useMemo(() => (selectedId ? store.canReveal(selectedId) : false), [store, selectedId]);
 
   // Load events on mount
   useEffect(() => {
@@ -146,19 +163,11 @@ export default function ProductOdds() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reset quote state when selection or reveal state changes
-  useEffect(() => {
-    setQuote(null);
-    setQuoteError(null);
-    setQuoteLoading(false);
-  }, [selectedId, revealed]);
-
   const noCredits = ent.credits.remaining_today <= 0;
   const showSignupNudge = ent.plan === "FREE_ANON";
 
   return (
     <div className="container">
-
       {showSignupNudge ? (
         <div
           className="card"
@@ -204,7 +213,7 @@ export default function ProductOdds() {
             {filtered.map((e) => {
               const active = e.event_id === selectedId;
               const status = e.match_status ?? "—";
-              const isRevealed = !!productState.credits.revealed_today?.[e.event_id];
+              const isRevealed = store.isRevealed(e.event_id);
 
               return (
                 <button
@@ -219,12 +228,6 @@ export default function ProductOdds() {
                     background: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)",
                     cursor: "pointer",
                     transition: "background 0.15s ease, border-color 0.15s ease",
-                  }}
-                  onMouseEnter={(evt) => {
-                    if (!active) evt.currentTarget.style.background = "rgba(255,255,255,0.07)";
-                  }}
-                  onMouseLeave={(evt) => {
-                    if (!active) evt.currentTarget.style.background = "rgba(255,255,255,0.04)";
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
@@ -273,16 +276,19 @@ export default function ProductOdds() {
                     </div>
                   ) : null}
 
-                  <button className="btn" onClick={revealSelected} disabled={noCredits}>
-                    {noCredits ? tr("errors.noCredits") : tr("credits.revealCost", { cost: 1 })}
+                  <button className="btn" onClick={revealSelected} disabled={!canReveal || noCredits || quoteLoading}>
+                    {!canReveal || noCredits ? tr("errors.noCredits") : tr("credits.revealCost", { cost: 1 })}
                   </button>
 
                   {showSignupNudge ? <div style={{ fontSize: 12, opacity: 0.75 }}>{tr("credits.gainBySignup")}</div> : null}
                 </>
-              ) : null}
-
-              {revealed ? (
+              ) : (
                 <>
+                  {/* ✅ ÓBVIO: sempre existe CTA quando já está revelado */}
+                  <button className="btn" onClick={() => selectedId && runQuote(selectedId)} disabled={!selectedId || quoteLoading}>
+                    Recalcular
+                  </button>
+
                   {quoteLoading ? <div style={{ opacity: 0.7 }}>Calculando…</div> : null}
                   {quoteError ? <div className="error">{quoteError}</div> : null}
 
@@ -301,7 +307,6 @@ export default function ProductOdds() {
                         <div className="kpi">
                           <div className="kpi-label">{tr("matchup.marketOdds")}</div>
                           <div className="kpi-value">
-                            {/* MVP: backend currently returns best odds snapshot. We'll show a single book label for all plans. */}
                             <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
                               <span style={{ opacity: 0.8 }}>Casa Parceira</span> <span style={{ opacity: 0.6 }}>★</span>
                               {ent.visibility.odds.show_partner_label ? (
@@ -337,7 +342,7 @@ export default function ProductOdds() {
                     </>
                   )}
                 </>
-              ) : null}
+              )}
 
               <div style={{ fontSize: 12, opacity: 0.7 }}>
                 artifact: <b>{DEFAULTS.artifactFilename}</b>
@@ -346,8 +351,6 @@ export default function ProductOdds() {
           ) : null}
         </Card>
       </div>
-    
-
     </div>
   );
 }
