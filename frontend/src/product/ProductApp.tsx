@@ -1,21 +1,26 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import "./product.css";
-
 import { ProductLayout } from "./layout/ProductLayout";
-import ProductOdds from "../views/ProductOdds"; // reaproveita sua tela atual do produto
+import ProductOdds from "../views/ProductOdds";
+import "./product.css";
+import { ProductStoreProvider } from "./state/productStore";
+import { useProductStore } from "./state/productStore";
+
+function ProductOddsWithResetKey() {
+  const store = useProductStore();
+  return <ProductOdds key={store.resetNonce} />;
+}
 
 export function ProductApp() {
   return (
-    <Routes>
-      <Route element={<ProductLayout />}>
-        <Route index element={<ProductOdds />} />
-        {/* Futuras rotas do produto */}
-        {/* <Route path="history" element={<History />} /> */}
-        {/* <Route path="about" element={<About />} /> */}
-      </Route>
+    <ProductStoreProvider>
+      <Routes>
+        <Route element={<ProductLayout />}>
+          <Route index element={<ProductOddsWithResetKey />} />
+        </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/index" replace />} />
+      </Routes>
+    </ProductStoreProvider>
   );
 }
