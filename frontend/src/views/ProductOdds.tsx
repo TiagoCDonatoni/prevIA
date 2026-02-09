@@ -146,12 +146,11 @@ export default function ProductOdds() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reveal-gated quote fetch
+  // Reset quote state when selection or reveal state changes
   useEffect(() => {
     setQuote(null);
     setQuoteError(null);
-    if (selectedId && revealed) runQuote(selectedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setQuoteLoading(false);
   }, [selectedId, revealed]);
 
   const noCredits = ent.credits.remaining_today <= 0;
