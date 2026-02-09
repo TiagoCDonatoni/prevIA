@@ -1,12 +1,21 @@
 import React from "react";
 import { Outlet } from "react-router-dom";
 
-import { useI18n } from "../i18n/useI18n"; // ajuste se o seu hook tiver outro caminho/nome
-import { useEntitlements } from "../state/useEntitlements"; // ajuste se seu estado estiver em outro lugar
+import { LANGS, t } from "../../i18n";
+import { PLAN_LABELS, type PlanId } from "../entitlements";
+import { useProductStore } from "../state/productStore";
+
+function buildCreditsLabel(remaining: number, limit: number) {
+  return `Créditos: ${remaining}/${limit}`;
+}
 
 export function ProductLayout() {
-  const { lang, setLang, t } = useI18n();
-  const { plan, setPlan, creditsLabel, resetForTesting } = useEntitlements();
+  const store = useProductStore();
+  const lang = store.state.lang;
+  const plan = store.state.plan;
+
+  const remaining = store.entitlements.credits.remaining_today;
+  const limit = store.entitlements.credits.daily_limit;
 
   return (
     <div className="product-shell">
@@ -15,48 +24,50 @@ export function ProductLayout() {
 
         <div className="product-header-right">
           <div className="product-pill">
-            <span className="product-pill-label">{t("nav.language")}</span>
+            <span className="product-pill-label">{t(lang, "nav.language")}</span>
             <select
               className="product-select"
               value={lang}
-              onChange={(e) => setLang(e.target.value as any)}
+              onChange={(e) => store.setLang(e.target.value as any)}
             >
-              <option value="pt">PT</option>
-              <option value="en">EN</option>
-              <option value="es">ES</option>
+              {LANGS.map((l) => (
+                <option key={l.lang} value={l.lang}>
+                  {l.label}
+                </option>
+              ))}
             </select>
           </div>
 
           <div className="product-pill">
-            <span className="product-pill-label">{t("nav.plan")}</span>
+            <span className="product-pill-label">{t(lang, "nav.plan")}</span>
             <select
               className="product-select"
               value={plan}
-              onChange={(e) => setPlan(e.target.value as any)}
+              onChange={(e) => store.setPlan(e.target.value as PlanId)}
             >
-              <option value="FREE_ANON">Free</option>
-              <option value="FREE">Free+</option>
-              <option value="BASIC">Basic</option>
-              <option value="LIGHT">Light</option>
-              <option value="PRO">Pro</option>
+              {PLAN_LABELS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
             </select>
           </div>
 
-          {/* BOTÃO DEV — remover depois */}
+          {/* DEV-only: remover depois */}
           <button
             className="product-reset-btn"
-            onClick={resetForTesting}
+            onClick={store.resetForTesting}
             title="Resetar créditos e análises (DEV)"
           >
             Reset
           </button>
 
-          <div className="product-credits">{creditsLabel}</div>
+          <div className="product-credits">{buildCreditsLabel(remaining, limit)}</div>
         </div>
       </header>
 
       <main className="product-main">
-        <Outlet />
+        <Outlet key={store.resetNonce} />
       </main>
 
       <footer className="product-footer">
