@@ -23,7 +23,9 @@ function fmtPct(x: number) {
   return `${(x * 100).toFixed(1)}%`;
 }
 
-function bestSideFromEdge(edge?: { H?: number | null; D?: number | null; A?: number | null } | null): "H" | "D" | "A" | null {
+function bestSideFromEdge(
+  edge?: { H?: number | null; D?: number | null; A?: number | null } | null
+): "H" | "D" | "A" | null {
   if (!edge) return null;
   const pairs: Array<["H" | "D" | "A", number]> = [
     ["H", edge.H ?? -Infinity],
@@ -68,10 +70,18 @@ export default function ProductOdds() {
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
+  // ✅ você já usa creditError no JSX e no revealSelected — precisa existir
+  const [creditError, setCreditError] = useState<string | null>(null);
+
   // 🔑 Reveals sincronizados com STORAGE_REVEALS
   const [reveals, setReveals] = useState<RevealsMap>(() => readReveals());
 
-  const revealed = useMemo(() => (selectedId ? !!reveals[selectedId] : false), [reveals, selectedId]);
+  const revealed = useMemo(
+    () => (selectedId ? !!reveals[selectedId] : false),
+    [reveals, selectedId]
+  );
+
+  // ⚠️ noCredits fica só para UI (mensagem), não para bloquear clique.
   const noCredits = remainingToday <= 0;
 
   async function load() {
@@ -116,16 +126,21 @@ export default function ProductOdds() {
   }
 
   function revealSelected() {
+    setCreditError(null);
+
     if (!selectedId) return;
 
-    // idempotente: se já revelou, não consome
+    // idempotente
     if (reveals[selectedId]) return;
 
-    // tenta consumir 1 crédito de forma atômica (source of truth)
+    // ✅ fonte única: tryConsume decide se pode ou não
     const ok = tryConsume(1);
-    if (!ok) return;
+    if (!ok) {
+      setCreditError(t("errors.noCredits"));
+      return;
+    }
 
-    // só grava o reveal se o crédito foi consumido
+    // ✅ só grava reveal se consumiu
     const next = { ...reveals, [selectedId]: true as const };
     setReveals(next);
     writeReveals(next);
@@ -145,7 +160,10 @@ export default function ProductOdds() {
       .sort((a, b) => (a.commence_time_utc < b.commence_time_utc ? -1 : 1));
   }, [events, query, onlyGood]);
 
-  const selected = useMemo(() => events.find((e) => e.event_id === selectedId) ?? null, [events, selectedId]);
+  const selected = useMemo(
+    () => events.find((e) => e.event_id === selectedId) ?? null,
+    [events, selectedId]
+  );
 
   // Load events on mount
   useEffect(() => {
@@ -157,20 +175,20 @@ export default function ProductOdds() {
   useEffect(() => {
     setQuote(null);
     setQuoteError(null);
+
     if (selectedId && revealed) runQuote(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, revealed]);
 
-  // ✅ FIX PRINCIPAL: quando clicar Reset (DEV), limpar state em memória também
+  // Reset DEV: ressincroniza reveals + limpa quote/erros
   useEffect(() => {
-    // storage já foi limpo no reset, então sincroniza
     const next = readReveals();
     setReveals(next);
 
-    // também limpa quote/seleção da análise para evitar “fantasma”
     setQuote(null);
     setQuoteError(null);
     setQuoteLoading(false);
+    setCreditError(null);
 
     console.log("[DEV] ProductOdds: resetNonce mudou -> state ressincronizado");
   }, [resetNonce]);
@@ -269,8 +287,15 @@ export default function ProductOdds() {
                     </div>
                   ) : null}
 
-                  <button className="btn" onClick={revealSelected} disabled={noCredits}>
-                    {noCredits ? t("errors.noCredits") : t("credits.revealCost", { cost: 1 })}
+                  {creditError ? (
+                    <div className="error" style={{ fontSize: 12 }}>
+                      {creditError}
+                    </div>
+                  ) : null}
+
+                  {/* ✅ não desabilita o botão por remainingToday; tryConsume decide */}
+                  <button className="btn" type="button" onClick={revealSelected}>
+                    {t("credits.revealCost", { cost: 1 })}
                   </button>
                 </>
               ) : null}
