@@ -90,27 +90,33 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
    * tryReveal MUST be deterministic and race-safe.
    * Use current state snapshot (functional update) to avoid stale closures.
    */
-  const tryReveal = useCallback(
-    (fixtureKey: string) => {
-      if (!fixtureKey) return { ok: false as const, reason: "NO_CREDITS" as const };
+  const tryReveal = useCallback((fixtureKey: string) => {
+    if (!fixtureKey) return { ok: false as const, reason: "NO_CREDITS" as const };
 
-      // Use latest state snapshot
-      const curr = state;
+    let result: { ok: true } | { ok: false; reason: "NO_CREDITS" | "ALREADY_REVEALED" } = {
+      ok: false,
+      reason: "NO_CREDITS",
+    };
 
-      if (curr.credits.revealed_today?.[fixtureKey]) {
-        return { ok: false as const, reason: "ALREADY_REVEALED" as const };
+    setState((prev) => {
+      if (prev.credits.revealed_today?.[fixtureKey]) {
+        result = { ok: false as const, reason: "ALREADY_REVEALED" as const };
+        return prev;
       }
 
-      if (!canRevealFixture(curr, fixtureKey)) {
-        return { ok: false as const, reason: "NO_CREDITS" as const };
+      if (!canRevealFixture(prev, fixtureKey)) {
+        result = { ok: false as const, reason: "NO_CREDITS" as const };
+        return prev;
       }
 
-      const next = consumeCreditForReveal(curr, fixtureKey);
-      persist(next);
-      return { ok: true as const };
-    },
-    [persist, state]
-  );
+      const next = consumeCreditForReveal(prev, fixtureKey);
+      result = { ok: true as const };
+      saveProductState(next);
+      return next;
+    });
+
+    return result as any;
+  }, []);
 
   /**
    * DEV Reset: keep plan/lang/auth, but reset ONLY the reveal/credit usage fields,
