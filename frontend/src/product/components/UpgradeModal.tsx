@@ -76,24 +76,26 @@ function getText(
         title: "Seus créditos acabaram",
         body:
           delta != null && totalNext != null
-            ? `Com o próximo plano você teria +${delta} créditos (${totalNext} no total).`
-            : "Faça upgrade para obter mais créditos.",
+            ? `Obtenha +${delta} créditos agora mesmo. Faça upgrade para liberar ${totalNext} créditos no total.`
+            : "Obtenha mais créditos agora mesmo. Faça upgrade da sua conta.",
         extra: "",
         primary:
           delta != null ? `Obter +${delta} créditos agora` : "Fazer upgrade",
         secondary: "Agora não",
       },
+
       upgrade_feature_locked: {
         title: "Disponível em um plano superior",
         body:
           delta != null && totalNext != null
-            ? `Desbloqueie esta função com +${delta} créditos (${totalNext} no total) no próximo plano.`
-            : "Faça upgrade para desbloquear esta função.",
+            ? `Desbloqueie esta função agora. Faça upgrade e ganhe +${delta} créditos (${totalNext} no total).`
+            : "Desbloqueie esta função fazendo upgrade do seu plano.",
         extra: "",
         primary:
           delta != null ? `Fazer upgrade (+${delta} créditos)` : "Fazer upgrade",
         secondary: "Agora não",
       },
+
     },
     en: {
       anon: {
