@@ -53,22 +53,14 @@ export function ProductLayout() {
             </select>
           </div>
 
-          {/* DEV-only: remover depois */}
-          <button
-            className="product-reset-btn"
-            onClick={() => {
-              // limpa tudo do produto (persistência)
-              Object.keys(localStorage)
-                .filter((k) => k.toLowerCase().includes("previa"))
-                .forEach((k) => localStorage.removeItem(k));
-
-              // hard reload (zera UI state e re-hidrata do zero)
-              window.location.reload();
-            }}
-            title="Resetar tudo e recarregar (DEV)"
-          >
-            Reset
-          </button>
+            {/* DEV-only: manter enquanto testamos o core (créditos) */}
+            <button
+              className="product-reset-btn"
+              onClick={() => store.resetForTesting()}
+              title="Resetar apenas créditos/reveals de hoje (mantém plan/lang)"
+            >
+              Reset (créditos)
+            </button>
 
           <div className="product-credits">{buildCreditsLabel(remaining, limit)}</div>
         </div>
