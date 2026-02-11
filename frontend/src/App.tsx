@@ -6,17 +6,8 @@ import Dashboard from "./views/Dashboard";
 import MatchupLab from "./views/MatchupLab";
 import TeamExplorer from "./views/TeamExplorer";
 import OddsIntel from "./views/OddsIntel";
-import ProductOdds from "./views/ProductOdds";
 
-import React from "react";
-import App from "../App";
-
-export function AdminApp() {
-  return <App />;
-}
-
-
-type Page = "dashboard" | "matchup" | "team" | "odds" | "product";
+type Page = "dashboard" | "matchup" | "team" | "odds";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -54,12 +45,6 @@ export default function App() {
           >
             Odds Intel
           </button>
-          <button
-            className={`nav-btn ${page === "product" ? "active" : ""}`}
-            onClick={() => setPage("product")}
-          >
-            Produto
-          </button>
         </div>
       </div>
 
@@ -68,7 +53,6 @@ export default function App() {
         {page === "matchup" && <MatchupLab />}
         {page === "team" && <TeamExplorer />}
         {page === "odds" && <OddsIntel />}
-        {page === "product" && <ProductOdds />}
       </div>
     </div>
   );

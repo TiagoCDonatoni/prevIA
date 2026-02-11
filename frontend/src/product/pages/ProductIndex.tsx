@@ -30,8 +30,6 @@ function fmtOdds(x: number | null | undefined) {
 }
 
 function fmtKickoff(iso: string, lang: string) {
-  // Exibir em pt/en/es respeitando a máquina do usuário; MVP ok.
-  // Se quiser "sempre SP", dá pra forçar timeZone: "America/Sao_Paulo".
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return new Intl.DateTimeFormat(lang === "pt" ? "pt-BR" : lang, {
@@ -50,47 +48,6 @@ function statusBadge(status: ProductOddsEvent["match_status"]) {
   if (status === "AMBIGUOUS") return { text: "AMBIGUOUS", cls: "pi-badge pi-badge-bad" };
   if (status === "NOT_FOUND") return { text: "NOT_FOUND", cls: "pi-badge pi-badge-bad" };
   return { text: String(status), cls: "pi-badge pi-badge-muted" };
-}
-
-function ymdInSaoPaulo(iso: string) {
-  const d = new Date(iso);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-
-  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
-  const m = parts.find((p) => p.type === "month")?.value ?? "00";
-  const day = parts.find((p) => p.type === "day")?.value ?? "00";
-  return `${y}-${m}-${day}`;
-}
-
-function ymdTodaySP(offsetDays = 0) {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-
-  const y = Number(parts.find((p) => p.type === "year")?.value ?? "1970");
-  const m = Number(parts.find((p) => p.type === "month")?.value ?? "1");
-  const d = Number(parts.find((p) => p.type === "day")?.value ?? "1");
-
-  // base em UTC só pra somar dias de forma estável
-  const base = new Date(Date.UTC(y, m - 1, d));
-  base.setUTCDate(base.getUTCDate() + offsetDays);
-
-  // retorna YYYY-MM-DD
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "UTC",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(base);
 }
 
 function LockedPanel({
@@ -112,8 +69,12 @@ function LockedPanel({
   return (
     <div className="pi-panel pi-locked" role="button" tabIndex={0} onClick={onUnlock}>
       <div className="pi-panel-label">{title}</div>
-      <div className="pi-muted" style={{ marginTop: 8 }}>{txt.body}</div>
-      <div className="pi-locked-cta" style={{ marginTop: 10 }}>{txt.cta} →</div>
+      <div className="pi-muted" style={{ marginTop: 8 }}>
+        {txt.body}
+      </div>
+      <div className="pi-locked-cta" style={{ marginTop: 10 }}>
+        {txt.cta} →
+      </div>
     </div>
   );
 }
@@ -132,14 +93,15 @@ export default function ProductIndex() {
   const [events, setEvents] = useState<ProductOddsEvent[]>([]);
   const [eventsError, setEventsError] = useState<string>("");
 
+  // Filtros
+  const [windowDays, setWindowDays] = useState<number>(7);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "EXACT" | "NOT_FOUND">("ALL");
+  const [sortBy, setSortBy] = useState<"DATE" | "CONFIDENCE">("DATE");
+
   const [selectedId, setSelectedId] = useState<string>("");
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
-
-  type DateFilter = "tomorrow" | "today" | "next7" | "all";
-
-  const [dateFilter, setDateFilter] = useState<DateFilter>("tomorrow");
 
   async function loadEvents() {
     setLoadingEvents(true);
@@ -155,9 +117,13 @@ export default function ProductIndex() {
       setEvents(list);
 
       // Seleciona automaticamente o primeiro "bom" (EXACT/PROBABLE) para reduzir fricção
-      const firstGood = list.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? list[0] ?? null;
-      const nextSelected = selectedId && list.some((e) => e.event_id === selectedId) ? selectedId : firstGood?.event_id ?? "";
-      setSelectedId(nextSelected);
+      const firstGood =
+        list.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? list[0] ?? null;
+      const nextSelected =
+        selectedId && list.some((e) => String(e.event_id) === String(selectedId))
+          ? selectedId
+          : firstGood?.event_id ?? "";
+      setSelectedId(String(nextSelected));
     } catch (e: any) {
       setEventsError(e?.message ?? String(e));
     } finally {
@@ -224,42 +190,48 @@ export default function ProductIndex() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // lista visível (filtros client-side)
+  const visibleEvents = useMemo(() => {
+    const now = new Date();
+    const max = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+
+    let list = events.filter((e) => {
+      const kickoff = new Date(e.commence_time_utc);
+      if (Number.isNaN(kickoff.getTime())) return false;
+
+      if (kickoff < now || kickoff > max) return false;
+
+      if (statusFilter !== "ALL" && e.match_status !== statusFilter) return false;
+
+      return true;
+    });
+
+    if (sortBy === "DATE") {
+      list.sort((a, b) => new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime());
+    } else if (sortBy === "CONFIDENCE") {
+      list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+    }
+
+    return list;
+  }, [events, windowDays, statusFilter, sortBy]);
+
+  // garante que selectedId é válido dentro do filtro atual
   useEffect(() => {
-    // se o selecionado saiu do filtro atual, seleciona o primeiro do filtro
-    if (selectedId && filteredEvents.some((e) => String(e.event_id) === String(selectedId))) return;
+    if (!visibleEvents.length) return;
 
-    const first = filteredEvents[0]?.event_id ?? "";
-    setSelectedId(first);
-    clearQuoteUI();
+    const stillExists = selectedId && visibleEvents.some((e) => String(e.event_id) === String(selectedId));
+    if (!stillExists) {
+      const firstGood =
+        visibleEvents.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? visibleEvents[0];
+      setSelectedId(String(firstGood.event_id));
+      clearQuoteUI();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, events.length]);
-
-  const filteredEvents = useMemo(() => {
-    const today = ymdTodaySP(0);
-    const tomorrow = ymdTodaySP(1);
-
-    if (dateFilter === "all") return events;
-
-    if (dateFilter === "today") {
-      return events.filter((e) => ymdInSaoPaulo(e.commence_time_utc) === today);
-    }
-
-    if (dateFilter === "tomorrow") {
-      return events.filter((e) => ymdInSaoPaulo(e.commence_time_utc) === tomorrow);
-    }
-
-    if (dateFilter === "next7") {
-      const set = new Set<string>();
-      for (let i = 0; i < 7; i++) set.add(ymdTodaySP(i));
-      return events.filter((e) => set.has(ymdInSaoPaulo(e.commence_time_utc)));
-    }
-
-    return events;
-  }, [events, dateFilter]);
+  }, [visibleEvents]);
 
   const selected = useMemo(
-    () => filteredEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
-    [filteredEvents, selectedId]
+    () => visibleEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
+    [visibleEvents, selectedId]
   );
 
   const key = selectedId ? String(selectedId) : "";
@@ -270,23 +242,39 @@ export default function ProductIndex() {
     <div className="pi">
       <div className="pi-topline">
         <div className="pi-title">Jogos (Odds)</div>
-          <div className="pi-meta">
-            sport_key: <b>{DEFAULTS.sportKey}</b> • janela: <b>{DEFAULTS.hoursAhead}h</b> • exibindo: <b>{filteredEvents.length}</b>{" "}
-            <span style={{ opacity: 0.6 }}>({events.length} carregados)</span>
-          </div>
-          <div style={{ flex: 1 }} />
 
-          <select className="pi-select" value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}>
-            <option value="tomorrow">{lang === "en" ? "Tomorrow" : lang === "es" ? "Mañana" : "Amanhã"}</option>
-            <option value="today">{lang === "en" ? "Today" : lang === "es" ? "Hoy" : "Hoje"}</option>
-            <option value="next7">{lang === "en" ? "Next 7 days" : lang === "es" ? "Next 7 days" : "Próx. 7 dias"}</option>
-            <option value="all">{lang === "en" ? "All" : lang === "es" ? "Todos" : "Todos"}</option>
-          </select>
+        <div className="pi-meta">
+          sport_key: <b>{DEFAULTS.sportKey}</b> • janela API: <b>{DEFAULTS.hoursAhead}h</b> • exibindo:{" "}
+          <b>{visibleEvents.length}</b> <span style={{ opacity: 0.6 }}>({events.length} carregados)</span>
+        </div>
 
-          <button className="pi-btn pi-btn-ghost" onClick={loadEvents} disabled={loadingEvents}>
-            {loadingEvents ? "Carregando…" : "Recarregar"}
-          </button>
+        <div style={{ flex: 1 }} />
 
+        <button className="pi-btn pi-btn-ghost" onClick={loadEvents} disabled={loadingEvents}>
+          {loadingEvents ? "Carregando…" : "Recarregar"}
+        </button>
+      </div>
+
+      {/* filtros */}
+      <div className="pi-filters" style={{ display: "flex", gap: 12, margin: "12px 0", flexWrap: "wrap" }}>
+        <select className="pi-select" value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
+          <option value={1}>Hoje</option>
+          <option value={3}>3 dias</option>
+          <option value={7}>7 dias</option>
+          <option value={30}>30 dias</option>
+          <option value={60}>60 dias</option>
+        </select>
+
+        <select className="pi-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>
+          <option value="ALL">Todos</option>
+          <option value="EXACT">EXACT</option>
+          <option value="NOT_FOUND">NOT_FOUND</option>
+        </select>
+
+        <select className="pi-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}>
+          <option value="DATE">Ordenar por data</option>
+          <option value="CONFIDENCE">Ordenar por confiança</option>
+        </select>
       </div>
 
       <div className="pi-grid">
@@ -295,7 +283,7 @@ export default function ProductIndex() {
           {eventsError ? <div className="pi-error">{eventsError}</div> : null}
 
           <div className="pi-list" aria-label="Lista de jogos">
-            {filteredEvents.map((e) => {
+            {visibleEvents.map((e) => {
               const active = String(e.event_id) === String(selectedId);
               const b = statusBadge(e.match_status);
 
@@ -333,6 +321,12 @@ export default function ProductIndex() {
                 </button>
               );
             })}
+
+            {!loadingEvents && visibleEvents.length === 0 ? (
+              <div className="pi-muted" style={{ padding: 12 }}>
+                Nenhum jogo encontrado para esses filtros.
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -363,19 +357,47 @@ export default function ProductIndex() {
 
                 <button
                   className="pi-btn"
-                  onClick={onRevealAndOpen}
+                  onClick={() => {
+                    if (!canReveal && !alreadyRevealed) {
+                      setUpgradeReason("NO_CREDITS");
+                      setUpgradeOpen(true);
+                      return;
+                    }
+                    onRevealAndOpen();
+                  }}
                   disabled={!selectedId || quoteLoading}
-                  title={!canReveal && !alreadyRevealed ? (lang === "en" ? "No credits" : lang === "es" ? "Sin créditos" : "Sem créditos") : ""}
-                  >
-                    {quoteLoading
-                      ? (lang === "en" ? "Calculating…" : lang === "es" ? "Calculando…" : "Calculando…")
-                      : alreadyRevealed
-                      ? (lang === "en" ? "View analysis" : lang === "es" ? "Ver análisis" : "Ver análise")
-                      : !canReveal
-                      ? (lang === "en" ? "Get more credits" : lang === "es" ? "Obtener más créditos" : "Obter mais créditos")
-                      : (lang === "en" ? "Reveal analysis (1 credit)" : lang === "es" ? "Revelar análisis (1 crédito)" : "Revelar análise (1 crédito)")}
-                  </button>
-
+                  title={
+                    !canReveal && !alreadyRevealed
+                      ? lang === "en"
+                        ? "No credits"
+                        : lang === "es"
+                        ? "Sin créditos"
+                        : "Sem créditos"
+                      : ""
+                  }
+                >
+                  {quoteLoading
+                    ? lang === "en"
+                      ? "Calculating…"
+                      : "Calculando…"
+                    : alreadyRevealed
+                    ? lang === "en"
+                      ? "View analysis"
+                      : lang === "es"
+                      ? "Ver análisis"
+                      : "Ver análise"
+                    : !canReveal
+                    ? lang === "en"
+                      ? "Get more credits"
+                      : lang === "es"
+                      ? "Obtener más créditos"
+                      : "Obter mais créditos"
+                    : lang === "en"
+                    ? "Reveal analysis (1 credit)"
+                    : lang === "es"
+                    ? "Revelar análisis (1 crédito)"
+                    : "Revelar análise (1 crédito)"}
+                </button>
               </div>
 
               {quoteError ? <div className="pi-error">{quoteError}</div> : null}
@@ -448,7 +470,7 @@ export default function ProductIndex() {
                           A {fmtPct(quote.value.edge.A)}
                         </div>
 
-                        {vis.value.show_value_detected && (
+                        {vis.value.show_value_detected ? (
                           <div className="pi-muted">
                             {lang === "en"
                               ? "Value detection enabled"
@@ -456,7 +478,7 @@ export default function ProductIndex() {
                               ? "Detección de valor habilitada"
                               : "Value detection habilitado"}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     ) : (
                       <div className="pi-panel">
@@ -481,19 +503,13 @@ export default function ProductIndex() {
                     />
                   )}
                 </div>
-
               )}
             </div>
           )}
         </aside>
       </div>
 
-      <UpgradeModal
-        open={upgradeOpen}
-        reason={upgradeReason}
-        onClose={() => setUpgradeOpen(false)}
-      />
-
+      <UpgradeModal open={upgradeOpen} reason={upgradeReason} onClose={() => setUpgradeOpen(false)} />
     </div>
   );
 }

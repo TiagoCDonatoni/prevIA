@@ -10,7 +10,9 @@ type Props = {
 export default function UpgradeModal({ open, reason, onClose }: Props) {
   const store = useProductStore();
   const lang = store.state.lang;
-  const currentPlan = store.state.plan as PlanKey;
+  const rawPlan = String(store.state.plan ?? "");
+  const currentPlan: PlanKey =
+    Object.prototype.hasOwnProperty.call(PLAN_CREDITS, rawPlan) ? (rawPlan as PlanKey) : "basic";
 
   if (!open) return null;
 

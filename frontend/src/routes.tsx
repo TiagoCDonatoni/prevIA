@@ -11,14 +11,17 @@ export function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Produto */}
-        <Route path="/*" element={<ProductApp />} />
+        {/* Produto (Index comercial) */}
+        <Route path="/index/*" element={<ProductApp />} />
+
+        {/* Raiz -> Index */}
+        <Route path="/" element={<Navigate to="/index" replace />} />
 
         {/* Admin */}
         <Route path="/admin/*" element={<AdminApp />} />
 
         {/* fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/index" replace />} />
       </Routes>
     </BrowserRouter>
   );

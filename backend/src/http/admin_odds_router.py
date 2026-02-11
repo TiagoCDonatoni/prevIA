@@ -13,7 +13,7 @@ from src.db.pg import pg_conn
 from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 from src.odds.matchup_resolver import resolve_odds_event
-
+from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
 
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
@@ -531,6 +531,166 @@ class AdminOddsResolveBatchResponse(BaseModel):
     tol_hours: int
     counters: Dict[str, int]
     sample_issues: List[Dict[str, Any]] = []
+
+@router.post("/refresh_and_resolve")
+def admin_odds_refresh_and_resolve(
+    sport_key: str = Query(..., min_length=2),
+    regions: str = Query(default="eu"),
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    limit: int = Query(default=500, ge=1, le=2000),
+    assume_league_id: int = Query(..., ge=1),
+    assume_season: int = Query(..., ge=1900),
+    tol_hours: int = Query(default=6, ge=1, le=48),
+):
+    """
+    Admin-only (cron-ready): provider refresh + persist + resolve/batch num único passo.
+    """
+    out = run_odds_refresh_and_resolve(
+        sport_key=sport_key,
+        regions=regions,
+        hours_ahead=int(hours_ahead),
+        limit=int(limit),
+        assume_league_id=int(assume_league_id),
+        assume_season=int(assume_season),
+        tol_hours=int(tol_hours),
+    )
+
+    if not out.get("ok"):
+        # manter erro claro no Admin
+        raise HTTPException(status_code=500, detail=out)
+
+    return out
+
+class AdminOddsRefreshAndResolveResponse(BaseModel):
+    ok: bool = True
+    sport_key: str
+    regions: str
+    captured_at_utc: str
+    refresh: Dict[str, Any]
+    resolve: Dict[str, Any]
+
+
+@router.post("/refresh_and_resolve", response_model=AdminOddsRefreshAndResolveResponse)
+def admin_odds_refresh_and_resolve(
+    sport_key: str = Query(..., min_length=2),
+    regions: str = Query(default="eu"),
+
+    # resolve params (iguais ao /resolve/batch)
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    assume_league_id: int = Query(..., ge=1),
+    assume_season: int = Query(..., ge=1900, le=2100),
+    tol_hours: int = Query(default=6, ge=1, le=48),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> AdminOddsRefreshAndResolveResponse:
+    """
+    Admin-only: fluxo oficial de atualização de odds:
+      1) /refresh  (provider -> persist)
+      2) /resolve/batch (db-only -> match status)
+    Ideal para botão no Admin e para virar cron/job depois.
+    """
+    # 1) REFRESH (provider -> persist)
+    try:
+        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+    except TheOddsApiError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    captured_at = datetime.now(timezone.utc)
+
+    try:
+        with pg_conn() as conn:
+            conn.autocommit = False
+
+            refresh_counters = _persist_odds_h2h_batch(
+                conn,
+                sport_key=sport_key,
+                raw_events=raw,
+                captured_at_utc=captured_at,
+            )
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh_persist_failed: {e}")
+
+    # 2) RESOLVE (db-only -> persist status/score/ids)
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(hours=int(hours_ahead))
+
+    sql = """
+      SELECT event_id
+      FROM odds.odds_events
+      WHERE sport_key = %(sport_key)s
+        AND commence_time_utc IS NOT NULL
+        AND commence_time_utc >= %(now)s
+        AND commence_time_utc <= %(end)s
+      ORDER BY commence_time_utc ASC
+      LIMIT %(limit)s
+    """
+
+    resolve_counters = {
+        "events_scanned": 0,
+        "exact": 0,
+        "probable": 0,
+        "ambiguous": 0,
+        "not_found": 0,
+        "errors": 0,
+        "persisted": 0,
+    }
+    sample_issues: List[Dict[str, Any]] = []
+
+    try:
+        with pg_conn() as conn:
+            conn.autocommit = False
+
+            with conn.cursor() as cur:
+                cur.execute(sql, {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)})
+                event_ids = [r[0] for r in cur.fetchall()]
+
+            for event_id in event_ids:
+                resolve_counters["events_scanned"] += 1
+                try:
+                    res = resolve_odds_event(
+                        conn,
+                        event_id=str(event_id),
+                        assume_league_id=int(assume_league_id),
+                        assume_season=int(assume_season),
+                        tol_hours=int(tol_hours),
+                        max_candidates=5,
+                        persist_resolution=True,
+                    )
+                    resolve_counters["persisted"] += 1
+
+                    if res.status == "EXACT":
+                        resolve_counters["exact"] += 1
+                    elif res.status == "PROBABLE":
+                        resolve_counters["probable"] += 1
+                        if len(sample_issues) < 8:
+                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
+                    elif res.status == "AMBIGUOUS":
+                        resolve_counters["ambiguous"] += 1
+                        if len(sample_issues) < 8:
+                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason, "candidates": res.candidates[:3]})
+                    else:
+                        resolve_counters["not_found"] += 1
+                        if len(sample_issues) < 8:
+                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
+
+                except Exception as e:
+                    resolve_counters["errors"] += 1
+                    if len(sample_issues) < 8:
+                        sample_issues.append({"event_id": str(event_id), "status": "ERROR", "error": str(e)})
+
+            conn.commit()
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"resolve_failed: {e}")
+
+    return AdminOddsRefreshAndResolveResponse(
+        ok=True,
+        sport_key=sport_key,
+        regions=regions,
+        captured_at_utc=captured_at.isoformat().replace("+00:00", "Z"),
+        refresh={"counters": refresh_counters},
+        resolve={"counters": resolve_counters, "sample_issues": sample_issues},
+    )
 
 
 @router.post("/resolve/batch", response_model=AdminOddsResolveBatchResponse)
