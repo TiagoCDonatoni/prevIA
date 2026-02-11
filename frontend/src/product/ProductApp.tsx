@@ -4,7 +4,7 @@ import { ProductLayout } from "./layout/ProductLayout";
 import "./product.css";
 import { ProductStoreProvider } from "./state/productStore";
 
-import IndexBlank from "../views/IndexBlank";
+import ProductIndex from "./pages/ProductIndex";
 
 export function ProductApp() {
   return (
@@ -12,7 +12,7 @@ export function ProductApp() {
       <Routes>
         <Route element={<ProductLayout />}>
           {/* INDEX NOVO "do zero" */}
-          <Route index element={<IndexBlank />} />
+          <Route index element={<ProductIndex />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/index" replace />} />
