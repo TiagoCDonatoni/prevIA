@@ -242,7 +242,7 @@ export async function getArtifactMetrics(params?: {
   return fetchJson(url.toString());
 }
 
-import type { OddsIntelResponse } from "./contracts";
+import type { OddsIntelResponse, AdminOddsRefreshAndResolveResponse } from "./contracts";
 
 export async function getOddsQueueIntel(params: {
   sport_key: string;
@@ -271,6 +271,33 @@ export async function getOddsQueueIntel(params: {
   const url = new URL("/admin/odds/queue/intel", API_BASE_URL);
   url.search = qs.toString();
   return fetchJson<OddsIntelResponse>(url.toString());
+}
+
+export async function adminOddsRefreshAndResolve(params: {
+  sport_key: string;
+  regions: string;
+  hours_ahead: number;
+  assume_league_id: number;
+  assume_season: number;
+  tol_hours: number;
+  limit: number;
+}): Promise<AdminOddsRefreshAndResolveResponse> {
+  const qs = new URLSearchParams();
+  qs.set("sport_key", params.sport_key);
+  qs.set("regions", params.regions);
+  qs.set("hours_ahead", String(params.hours_ahead));
+  qs.set("assume_league_id", String(params.assume_league_id));
+  qs.set("assume_season", String(params.assume_season));
+  qs.set("tol_hours", String(params.tol_hours));
+  qs.set("limit", String(params.limit));
+
+  const url = new URL("/admin/odds/refresh_and_resolve", API_BASE_URL);
+  url.search = qs.toString();
+
+  return fetchJson<AdminOddsRefreshAndResolveResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
 }
 
 export async function listTeamsByLeagueSeason(leagueId: number, season: number, limit = 200): Promise<TeamLite[]> {

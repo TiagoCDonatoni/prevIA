@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getOddsQueueIntel } from "../api/client";
+import { getOddsQueueIntel, adminOddsRefreshAndResolve } from "../api/client";
 import type { OddsIntelItem, OddsIntelResponse } from "../api/contracts";
 import { Card } from "../ui/Card";
 import { Kpi } from "../ui/Kpi";
@@ -27,12 +27,48 @@ export default function OddsIntel() {
   const [limit, setLimit] = useState(50);
   const [minConfidence, setMinConfidence] = useState<"EXACT" | "ILIKE" | "FUZZY" | "NONE">("NONE");
 
+  // Ops (refresh + resolve)
+  const [regions, setRegions] = useState("eu");
+  const [assumeLeagueId, setAssumeLeagueId] = useState(39);
+  const [assumeSeason, setAssumeSeason] = useState(2025);
+  const [tolHours, setTolHours] = useState(6);
+  const [opsLimit, setOpsLimit] = useState(500);
+
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
+  const [opsOut, setOpsOut] = useState<any>(null);
+
   const [sort, setSort] = useState("best_ev"); // best_ev | ev_h | ev_d | ev_a
   const [order, setOrder] = useState<"asc" | "desc">("desc");
 
   const [data, setData] = useState<OddsIntelResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const runOps = async () => {
+    setOpsLoading(true);
+    setOpsErr(null);
+    try {
+      const out = await adminOddsRefreshAndResolve({
+        sport_key: sportKey,
+        regions,
+        hours_ahead: hoursAhead,
+        assume_league_id: assumeLeagueId,
+        assume_season: assumeSeason,
+        tol_hours: tolHours,
+        limit: opsLimit,
+      });
+      setOpsOut(out);
+      // depois de rodar ops, já atualiza a tela intel
+      await refresh();
+    } catch (e: any) {
+      setOpsOut(null);
+      setOpsErr(String(e?.message || e));
+    } finally {
+      setOpsLoading(false);
+    }
+  };
+
 
   const refresh = async () => {
     setLoading(true);
@@ -129,6 +165,81 @@ export default function OddsIntel() {
   return (
     <>
       <div className="section-title">Odds Intel</div>
+
+      <Card title="Ops — Atualizar odds agora (refresh + resolve)">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          <label className="note">
+            regions&nbsp;
+            <input
+              className="input"
+              style={{ width: 90, marginLeft: 6 }}
+              value={regions}
+              onChange={(e) => setRegions(e.target.value)}
+            />
+          </label>
+
+          <label className="note">
+            assume_league_id&nbsp;
+            <input
+              className="input"
+              style={{ width: 90, marginLeft: 6 }}
+              value={assumeLeagueId}
+              onChange={(e) => setAssumeLeagueId(Number(e.target.value || 0))}
+            />
+          </label>
+
+          <label className="note">
+            assume_season&nbsp;
+            <input
+              className="input"
+              style={{ width: 90, marginLeft: 6 }}
+              value={assumeSeason}
+              onChange={(e) => setAssumeSeason(Number(e.target.value || 0))}
+            />
+          </label>
+
+          <label className="note">
+            tol_hours&nbsp;
+            <input
+              className="input"
+              style={{ width: 80, marginLeft: 6 }}
+              value={tolHours}
+              onChange={(e) => setTolHours(Number(e.target.value || 0))}
+            />
+          </label>
+
+          <label className="note">
+            limit&nbsp;
+            <input
+              className="input"
+              style={{ width: 90, marginLeft: 6 }}
+              value={opsLimit}
+              onChange={(e) => setOpsLimit(Number(e.target.value || 0))}
+            />
+          </label>
+
+          <button className="btn" onClick={() => void runOps()} disabled={opsLoading}>
+            {opsLoading ? "Atualizando…" : "Atualizar odds agora"}
+          </button>
+        </div>
+
+        {opsErr ? (
+          <div className="note" style={{ marginTop: 10 }}>
+            Error: <b>{opsErr}</b>
+          </div>
+        ) : null}
+
+        {opsOut ? (
+          <pre className="mono" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+{JSON.stringify(opsOut, null, 2)}
+          </pre>
+        ) : (
+          <div className="note" style={{ marginTop: 10 }}>
+            Dica: esse botão executa <span className="mono">refresh</span> (provider→DB) +{" "}
+            <span className="mono">resolve</span> (EXACT/NOT_FOUND…) em sequência.
+          </div>
+        )}
+      </Card>
 
       <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
         <label className="note">

@@ -283,3 +283,46 @@ export type ProductOddsQuoteResponse = {
     edge?: ProductOdds1x2 | null;
   };
 };
+
+// -------------------------
+// Admin — Odds Ops (refresh + resolve)
+// -------------------------
+
+export type AdminOddsRefreshCounters = {
+  events_upserted: number;
+  snapshots_inserted: number;
+  snapshots_skipped: number;
+};
+
+export type AdminOddsResolveCounters = {
+  events_scanned: number;
+  exact: number;
+  probable: number;
+  ambiguous: number;
+  not_found: number;
+  errors: number;
+  persisted: number;
+};
+
+export type AdminOddsResolveIssue = {
+  event_id: string;
+  status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | string;
+  confidence: number;
+  reason: string;
+};
+
+export type AdminOddsRefreshAndResolveResponse = {
+  ok: boolean;
+  sport_key: string;
+  regions: string;
+  captured_at_utc: string;
+  refresh: AdminOddsRefreshCounters;
+  resolve: {
+    window_hours: number;
+    assume_league_id: number;
+    assume_season: number;
+    tol_hours: number;
+    counters: AdminOddsResolveCounters;
+    sample_issues: AdminOddsResolveIssue[];
+  };
+};
