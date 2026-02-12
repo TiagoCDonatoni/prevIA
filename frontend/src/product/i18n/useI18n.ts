@@ -9,20 +9,19 @@ const STORAGE_KEY = "previa_lang_v1";
 
 // Carrega JSONs do produto (ajuste paths se necessário)
 async function loadLocale(lang: Lang): Promise<Dict> {
-  // Import dinâmico (Vite) — mantém split por idioma
-  const [nav, plans, credits, matchup, odds, auth, errors, common] =
+  const [nav, plans, credits, matchup, odds, auth, errors, common, product] =
     await Promise.all([
-      import(`../../i18n/locales/${lang}/nav.json`),
-      import(`../../i18n/locales/${lang}/plans.json`),
-      import(`../../i18n/locales/${lang}/credits.json`),
-      import(`../../i18n/locales/${lang}/matchup.json`),
-      import(`../../i18n/locales/${lang}/odds.json`),
-      import(`../../i18n/locales/${lang}/auth.json`),
-      import(`../../i18n/locales/${lang}/errors.json`),
-      import(`../../i18n/locales/${lang}/common.json`),
+      import(`./locales/${lang}/nav.json`),
+      import(`./locales/${lang}/plans.json`),
+      import(`./locales/${lang}/credits.json`),
+      import(`./locales/${lang}/matchup.json`),
+      import(`./locales/${lang}/odds.json`),
+      import(`./locales/${lang}/auth.json`),
+      import(`./locales/${lang}/errors.json`),
+      import(`./locales/${lang}/common.json`),
+      import(`./locales/${lang}/product.json`),
     ]);
 
-  // Flatten por namespace
   return {
     nav: nav.default ?? nav,
     plans: plans.default ?? plans,
@@ -32,6 +31,7 @@ async function loadLocale(lang: Lang): Promise<Dict> {
     auth: auth.default ?? auth,
     errors: errors.default ?? errors,
     common: common.default ?? common,
+    product: product.default ?? product,
   };
 }
 
