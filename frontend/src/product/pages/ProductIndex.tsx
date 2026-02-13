@@ -47,7 +47,6 @@ function getLeagueCfg(id: LeagueId): LeagueCfg {
 }
 
 type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
-type StatusFilter = "ALL" | "EXACT" | "NOT_FOUND";
 type SortBy = "DATE" | "CONFIDENCE";
 
 function fmtPct(x: number | null | undefined) {
@@ -100,15 +99,6 @@ function fmtKickoff(iso: string, lang: string) {
   }).format(d);
 }
 
-function statusBadge(status: ProductOddsEvent["match_status"]) {
-  if (!status) return { text: "—", cls: "pi-badge pi-badge-muted" };
-  if (status === "EXACT") return { text: "EXACT", cls: "pi-badge pi-badge-good" };
-  if (status === "PROBABLE") return { text: "PROBABLE", cls: "pi-badge pi-badge-warn" };
-  if (status === "AMBIGUOUS") return { text: "AMBIGUOUS", cls: "pi-badge pi-badge-bad" };
-  if (status === "NOT_FOUND") return { text: "NOT_FOUND", cls: "pi-badge pi-badge-bad" };
-  return { text: String(status), cls: "pi-badge pi-badge-muted" };
-}
-
 function LockedPanel({
   title,
   onUnlock,
@@ -148,7 +138,6 @@ export default function ProductIndex() {
   const league = useMemo(() => getLeagueCfg(leagueId), [leagueId]);
 
   const [windowDays, setWindowDays] = useState<number>(7);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [sortBy, setSortBy] = useState<SortBy>("DATE");
 
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -173,19 +162,12 @@ export default function ProductIndex() {
       const list = res?.events ?? [];
       setEvents(list);
       setLastLoadedAt(Date.now());
-
-      // opcional: se o selecionado não existe mais, limpa
-      // (evita UI presa em item que sumiu)
-      // if (selectedId && !list.some((x) => String(x.event_id) === String(selectedId))) {
-      //   setSelectedId("");
-      //   clearQuoteUI();
-      // }
     } catch (e: any) {
       setEventsError(e?.message ?? "Failed to load events");
     } finally {
       setLoadingEvents(false);
     }
-  }, [league.sportKey, windowDays, statusFilter, sortBy]); // ajuste deps se você filtra no server
+  }, [league.sportKey]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -225,13 +207,21 @@ export default function ProductIndex() {
     setQuoteLoading(true);
     setQuote(null);
     setQuoteError("");
+
+    const eventIdNum = Number(eventId);
+    if (!Number.isFinite(eventIdNum) || eventIdNum <= 0) {
+      setQuoteLoading(false);
+      setQuoteError("Invalid event_id");
+      return;
+    }
+
     try {
       const res = await productQuoteOdds({
-        event_id: eventId,
-        assume_league_id: league.assumeLeagueId,
-        assume_season: league.assumeSeason,
+        event_id: eventIdNum,
+        assume_league_id: Number(league.assumeLeagueId),
+        assume_season: Number(league.assumeSeason),
         artifact_filename: league.artifactFilename,
-        tol_hours: DEFAULTS.tolHours,
+        tol_hours: Number(DEFAULTS.tolHours),
       });
       setQuote(res);
     } catch (e: any) {
@@ -280,7 +270,6 @@ export default function ProductIndex() {
       if (Number.isNaN(kickoff.getTime())) return false;
       if (kickoff < now || kickoff > max) return false;
 
-      if (statusFilter !== "ALL" && e.match_status !== statusFilter) return false;
       return true;
     });
 
@@ -293,7 +282,7 @@ export default function ProductIndex() {
     }
 
     return list;
-  }, [events, windowDays, statusFilter, sortBy]);
+  }, [events, windowDays, sortBy]);
 
   // garante selection válida dentro dos filtros atuais
   useEffect(() => {
@@ -321,14 +310,6 @@ export default function ProductIndex() {
   const key = selectedId ? String(selectedId) : "";
   const alreadyRevealed = key ? store.isRevealed(key) : false;
   const canReveal = key ? store.canReveal(key) : false;
-
-  const revealBtnLabel = quoteLoading
-    ? t(lang, "common.loading")
-    : alreadyRevealed
-    ? t(lang, "credits.reveal")
-    : !canReveal
-    ? t(lang, "plans.cta.upgrade")
-    : t(lang, "credits.revealCost", { cost: 1 });
 
   return (
     <div className="pi">
@@ -368,17 +349,6 @@ export default function ProductIndex() {
 
           <select
             className="pi-select"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            aria-label={t(lang, "odds.filterStatus")}
-          >
-            <option value="ALL">{t(lang, "odds.statusAll")}</option>
-            <option value="EXACT">{t(lang, "odds.statusExact")}</option>
-            <option value="NOT_FOUND">{t(lang, "odds.statusNotFound")}</option>
-          </select>
-
-          <select
-            className="pi-select"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortBy)}
             aria-label={t(lang, "odds.sortBy")}
@@ -412,7 +382,6 @@ export default function ProductIndex() {
           <div className="pi-list" aria-label={t(lang, "odds.listAria")}>
             {visibleEvents.map((e) => {
               const active = String(e.event_id) === String(selectedId);
-              const b = statusBadge(e.match_status);
 
               return (
                 <button
@@ -431,8 +400,6 @@ export default function ProductIndex() {
                     </div>
 
                     <div className="pi-row-sub">
-                      <span className={b.cls}>{b.text}</span>
-                      <span className="pi-subsep">•</span>
                       <span className="pi-league">{league.name[lang]}</span>
                       <span className="pi-subsep">•</span>
                       <span className="pi-kick">{fmtKickoff(e.commence_time_utc, lang)}</span>
