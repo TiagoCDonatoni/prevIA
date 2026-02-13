@@ -167,6 +167,23 @@ function detectBrowserLang(): Lang {
   return "en";
 }
 
+function normalizeLang(raw: string | null | undefined): Lang {
+  const v = String(raw ?? "").toLowerCase();
+
+  // aceita formas completas do navegador tipo "pt-BR", "en-US", "es-419"
+  if (v.startsWith("pt")) return "pt";
+  if (v.startsWith("es")) return "es";
+  if (v.startsWith("en")) return "en";
+
+  // fallback mundial
+  return "en";
+}
+
+function detectBrowserLang(): Lang {
+  const raw = navigator.languages?.[0] ?? navigator.language ?? "en";
+  return normalizeLang(raw);
+}
+
 export function loadProductState(): PersistedState {
   const raw = localStorage.getItem(LS_KEY);
   const today = dateKeySaoPaulo();
