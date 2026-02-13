@@ -502,17 +502,147 @@
 }
 
 .pl-credits-cta {
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 12px;
+  padding: 8px 14px;          /* maior */
+  border-radius: 999px;       /* totalmente arredondado */
+  font-size: 13px;
   font-weight: 800;
   border: none;
   cursor: pointer;
   background: #111827;
   color: #fff;
   white-space: nowrap;
+  transition: all 0.2s ease;
 }
 
 .pl-credits-cta:hover {
   background: #0b1220;
+  transform: translateY(-1px);
+}
+
+.pl-credits {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #f1f5f9;     /* leve contraste */
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.lang-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.lang-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 12px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.lang-btn:hover {
+  background: #f8fafc;
+}
+
+.lang-btn.is-active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.lang-flag {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.lang-code {
+  letter-spacing: 0.4px;
+}
+
+/* Language dropdown */
+.lang-dd {
+  position: relative;
+}
+
+.lang-dd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 12px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.lang-dd-btn:hover {
+  background: #f8fafc;
+}
+
+.lang-caret {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.lang-dd-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  z-index: 50;
+}
+
+.lang-dd-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 12px;
+  color: #0f172a;
+  text-align: left;
+}
+
+.lang-dd-item:hover {
+  background: #f8fafc;
+}
+
+.lang-dd-item.is-active {
+  background: #0f172a;
+  color: #fff;
+}
+
+.lang-flag {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.lang-code {
+  letter-spacing: 0.4px;
+}
+
+.lang-name {
+  font-weight: 700;
+  opacity: 0.75;
 }
