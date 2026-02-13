@@ -1,0 +1,16 @@
+{
+  "modalNoCreditsTitle": "You’ve used all your credits",
+  "modalNoCreditsBody": "Get +{delta} credits right now. Upgrade to unlock {total} credits in total.",
+  "modalNoCreditsPrimary": "Get +{delta} credits now",
+
+  "modalFeatureTitle": "Available on a higher plan",
+  "modalFeatureBody": "Unlock this feature now. Upgrade and get +{delta} credits ({total} total).",
+  "modalFeaturePrimary": "Upgrade (+{delta} credits)",
+
+  "modalAnonTitle": "Create your free account",
+  "modalAnonBody": "Create your account to unlock more analyses today (+{delta} credits per day).",
+  "modalAnonPrimary": "Create free account",
+
+  "featureLockedBody": "Available on a higher plan.",
+  "featureLockedCta": "Unlock now"
+}

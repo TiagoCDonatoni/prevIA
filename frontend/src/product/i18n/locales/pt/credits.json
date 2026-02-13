@@ -1,0 +1,16 @@
+{
+  "modalNoCreditsTitle": "Seus créditos acabaram",
+  "modalNoCreditsBody": "Obtenha +{delta} créditos agora mesmo. Faça upgrade para liberar {total} créditos no total.",
+  "modalNoCreditsPrimary": "Obter +{delta} créditos agora",
+
+  "modalFeatureTitle": "Disponível em um plano superior",
+  "modalFeatureBody": "Desbloqueie esta função agora. Faça upgrade e ganhe +{delta} créditos ({total} no total).",
+  "modalFeaturePrimary": "Fazer upgrade (+{delta} créditos)",
+
+  "modalAnonTitle": "Crie sua conta gratuita",
+  "modalAnonBody": "Crie sua conta para desbloquear mais análises hoje (+{delta} créditos por dia).",
+  "modalAnonPrimary": "Criar conta grátis",
+
+  "featureLockedBody": "Disponível em um plano superior.",
+  "featureLockedCta": "Desbloquear agora"
+}

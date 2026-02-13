@@ -1,0 +1,44 @@
+{
+  "title": "Partidos (Odds)",
+  "reload": "Recargar",
+  "loading": "Cargando…",
+  "meta_sport": "sport_key",
+  "meta_api_window": "ventana API",
+  "meta_showing": "mostrando",
+  "meta_loaded": "cargados",
+
+  "filters_today": "Hoy",
+  "filters_days3": "3 días",
+  "filters_days7": "7 días",
+  "filters_days30": "30 días",
+  "filters_days60": "60 días",
+  "filters_all": "Todos",
+  "filters_sort_date": "Ordenar por fecha",
+  "filters_sort_confidence": "Ordenar por confianza",
+
+  "empty_list": "No se encontraron partidos para estos filtros.",
+  "select_prompt": "Selecciona un partido para ver detalles.",
+
+  "btn_reveal": "Revelar análisis (1 crédito)",
+  "btn_view": "Ver análisis",
+  "btn_get_credits": "Obtener más créditos",
+  "btn_calculating": "Calculando…",
+  "btn_title_no_credits": "Sin créditos",
+
+  "err_unreliable_match": "Este partido no se puede emparejar con fiabilidad ahora.",
+
+  "artifact_label": "Artifact",
+
+  "panel_probs": "Probabilidades",
+  "panel_odds_best": "Odds (best)",
+  "panel_confidence": "Confianza",
+  "panel_edge": "Edge (vs mercado)",
+  "panel_status": "status",
+  "panel_no_probs": "Sin probabilidades (modelo no disponible).",
+  "panel_no_odds": "Sin odds en este momento.",
+  "panel_no_edge": "Sin datos de edge para este partido.",
+  "value_detection_enabled": "Detección de valor habilitada",
+
+  "locked_body": "Disponible en un plan superior.",
+  "locked_cta": "Desbloquear ahora"
+}

@@ -1,4 +1,4 @@
-import type { Lang } from "../i18n";
+import type { Lang } from "./i18n";
 
 export type PlanId = "FREE_ANON" | "FREE" | "BASIC" | "LIGHT" | "PRO";
 

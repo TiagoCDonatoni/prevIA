@@ -1,28 +1,32 @@
-// frontend/src/i18n/index.ts
-export type Lang = "pt" | "en" | "es";
+// frontend/src/product/i18n/index.ts
 
+export type Lang = "pt" | "en" | "es";
 type Dict = Record<string, any>;
 
 const CACHE: Partial<Record<Lang, Dict>> = {};
 const STORAGE_KEY = "previa_lang_v1";
 
-// IMPORTANT: agora o source-of-truth do produto está em src/product/i18n/locales
+export const LANGS: { lang: Lang; label: string }[] = [
+  { lang: "pt", label: "PT" },
+  { lang: "en", label: "EN" },
+  { lang: "es", label: "ES" },
+];
+
 async function loadLang(lang: Lang): Promise<Dict> {
   if (CACHE[lang]) return CACHE[lang] as Dict;
 
   try {
-    const [nav, plans, credits, matchup, odds, auth, errors, common, product] =
-      await Promise.all([
-        import(`../product/i18n/locales/${lang}/nav.json`),
-        import(`../product/i18n/locales/${lang}/plans.json`),
-        import(`../product/i18n/locales/${lang}/credits.json`),
-        import(`../product/i18n/locales/${lang}/matchup.json`),
-        import(`../product/i18n/locales/${lang}/odds.json`),
-        import(`../product/i18n/locales/${lang}/auth.json`),
-        import(`../product/i18n/locales/${lang}/errors.json`),
-        import(`../product/i18n/locales/${lang}/common.json`),
-        import(`../product/i18n/locales/${lang}/product.json`),
-      ]);
+    const [nav, plans, credits, matchup, odds, auth, errors, common, product] = await Promise.all([
+      import(`./locales/${lang}/nav.json`),
+      import(`./locales/${lang}/plans.json`),
+      import(`./locales/${lang}/credits.json`),
+      import(`./locales/${lang}/matchup.json`),
+      import(`./locales/${lang}/odds.json`),
+      import(`./locales/${lang}/auth.json`),
+      import(`./locales/${lang}/errors.json`),
+      import(`./locales/${lang}/common.json`),
+      import(`./locales/${lang}/product.json`),
+    ]);
 
     const dict: Dict = {
       nav: nav.default ?? nav,
@@ -39,8 +43,7 @@ async function loadLang(lang: Lang): Promise<Dict> {
     CACHE[lang] = dict;
     return dict;
   } catch (err) {
-    // Ajuda MUITO quando algum json/path falha
-    console.error("[i18n] loadLang failed:", { lang, err });
+    console.error("[product/i18n] loadLang failed:", { lang, err });
     CACHE[lang] = {}; // evita loop
     return {};
   }
@@ -53,6 +56,15 @@ function interpolate(template: string, vars?: Record<string, any>) {
   );
 }
 
+function getDeep(obj: any, path: string[]) {
+  let cur = obj;
+  for (const p of path) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
 export function getStoredLang(): Lang {
   const v = localStorage.getItem(STORAGE_KEY);
   if (v === "pt" || v === "en" || v === "es") return v;
@@ -63,25 +75,21 @@ export function setStoredLang(next: Lang) {
   localStorage.setItem(STORAGE_KEY, next);
 }
 
-// Util: suporta apenas "ns.key" (1 nível), que é seu padrão atual
-export function t(lang: Lang, key: string, vars?: Record<string, any>) {
-  const [ns, k] = key.split(".");
-  const dict = CACHE[lang];
+export async function warmI18n(lang: Lang) {
+  await loadLang(lang);
+}
 
-  const raw = dict?.[ns]?.[k];
+export function t(lang: Lang, key: string, vars?: Record<string, any>) {
+  const dict = CACHE[lang];
+  if (!dict) return key; // ainda não carregou
+
+  const parts = key.split(".");
+  const ns = parts[0];
+  const path = parts.slice(1);
+
+  const raw = getDeep(dict?.[ns], path);
   if (raw == null) return key;
 
   if (typeof raw === "string") return interpolate(raw, vars);
   return String(raw);
 }
-
-// Opcional: garantir preload (você pode chamar no bootstrap/layout)
-export async function warmI18n(lang: Lang) {
-  await loadLang(lang);
-}
-
-export const LANGS: { lang: Lang; label: string }[] = [
-  { lang: "pt", label: "PT" },
-  { lang: "en", label: "EN" },
-  { lang: "es", label: "ES" },
-];

@@ -1,0 +1,9 @@
+{
+  "probabilities": "Probabilidades",
+  "confidence": "Confiança",
+  "status": "status",
+  "edge": "Edge (vs market)",
+  "valueEnabled": "Value detection habilitado",
+  "noProbs": "Sem probs (modelo indisponível).",
+  "noEdge": "Sem dados de edge para este jogo."
+}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { t, type Lang } from "../../i18n";
+import { t, type Lang } from "../i18n";
 
 type Mode = "login" | "signup";
 

@@ -1,0 +1,44 @@
+{
+  "title": "Jogos (Odds)",
+  "reload": "Recarregar",
+  "loading": "Carregando…",
+  "meta_sport": "sport_key",
+  "meta_api_window": "janela API",
+  "meta_showing": "exibindo",
+  "meta_loaded": "carregados",
+
+  "filters_today": "Hoje",
+  "filters_days3": "3 dias",
+  "filters_days7": "7 dias",
+  "filters_days30": "30 dias",
+  "filters_days60": "60 dias",
+  "filters_all": "Todos",
+  "filters_sort_date": "Ordenar por data",
+  "filters_sort_confidence": "Ordenar por confiança",
+
+  "empty_list": "Nenhum jogo encontrado para esses filtros.",
+  "select_prompt": "Selecione um jogo para ver detalhes.",
+
+  "btn_reveal": "Revelar análise (1 crédito)",
+  "btn_view": "Ver análise",
+  "btn_get_credits": "Obter mais créditos",
+  "btn_calculating": "Calculando…",
+  "btn_title_no_credits": "Sem créditos",
+
+  "err_unreliable_match": "Este jogo ainda não pode ser pareado com confiança.",
+
+  "artifact_label": "Artifact",
+
+  "panel_probs": "Probabilidades",
+  "panel_odds_best": "Odds (best)",
+  "panel_confidence": "Confiança",
+  "panel_edge": "Edge (vs market)",
+  "panel_status": "status",
+  "panel_no_probs": "Sem probs (modelo indisponível).",
+  "panel_no_odds": "Sem odds no momento.",
+  "panel_no_edge": "Sem dados de edge para este jogo.",
+  "value_detection_enabled": "Value detection habilitado",
+
+  "locked_body": "Disponível em um plano superior.",
+  "locked_cta": "Desbloquear agora"
+}

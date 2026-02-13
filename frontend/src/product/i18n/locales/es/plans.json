@@ -1,0 +1,12 @@
+{
+  "freeAnon": { "name": "Free", "badge": "Sin cuenta" },
+  "free": { "name": "Free+", "badge": "Con cuenta" },
+  "basic": { "name": "Basic", "badge": "Más créditos" },
+  "light": { "name": "Light", "badge": "Más contexto" },
+  "pro": { "name": "Pro", "badge": "Avanzado" },
+  "cta": {
+    "createAccount": "Crear cuenta",
+    "seePlans": "Ver planes",
+    "upgrade": "Mejorar plan"
+  }
+}

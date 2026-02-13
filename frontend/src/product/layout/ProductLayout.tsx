@@ -1,17 +1,13 @@
 import React from "react";
 import { Outlet } from "react-router-dom";
 
-import { LANGS, t } from "../../i18n";
+import { LANGS, t, type Lang } from "../i18n";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
 
-function buildCreditsLabel(remaining: number, limit: number) {
-  return `Créditos: ${remaining}/${limit}`;
-}
-
 export function ProductLayout() {
   const store = useProductStore();
-  const lang = store.state.lang;
+  const lang = store.state.lang as Lang;
   const plan = store.state.plan;
 
   const remaining = store.entitlements.credits.remaining_today;
@@ -20,7 +16,7 @@ export function ProductLayout() {
   return (
     <div className="product-shell">
       <header className="product-header">
-        <div className="product-brand">prevIA</div>
+        <div className="product-brand">{t(lang, "common.appName")}</div>
 
         <div className="product-header-right">
           <div className="product-pill">
@@ -53,16 +49,23 @@ export function ProductLayout() {
             </select>
           </div>
 
-            {/* DEV-only: manter enquanto testamos o core (créditos) */}
-            <button
-              className="product-reset-btn"
-              onClick={() => store.resetForTesting()}
-              title="Resetar apenas créditos/reveals de hoje (mantém plan/lang)"
-            >
-              Reset (créditos)
-            </button>
+          {/* DEV-only: remover depois */}
+          <button
+            className="product-reset-btn"
+            onClick={() => {
+              Object.keys(localStorage)
+                .filter((k) => k.toLowerCase().includes("previa"))
+                .forEach((k) => localStorage.removeItem(k));
+              window.location.reload();
+            }}
+            title={t(lang, "common.devResetTitle")}
+          >
+            {t(lang, "common.devReset")}
+          </button>
 
-          <div className="product-credits">{buildCreditsLabel(remaining, limit)}</div>
+          <div className="product-credits">
+            {t(lang, "credits.counter", { remaining, limit })}
+          </div>
         </div>
       </header>
 
@@ -71,7 +74,9 @@ export function ProductLayout() {
       </main>
 
       <footer className="product-footer">
-        <span className="product-footer-muted">© {new Date().getFullYear()} prevIA</span>
+        <span className="product-footer-muted">
+          © {new Date().getFullYear()} {t(lang, "common.appName")}
+        </span>
       </footer>
     </div>
   );

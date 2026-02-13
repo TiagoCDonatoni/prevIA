@@ -1,6 +1,8 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useState, useEffect } from "react";
 
-import type { Lang } from "../../i18n";
+import type { Lang } from "../i18n";
+import { warmI18n } from "../i18n";
+
 import {
   buildEntitlements,
   canRevealFixture,

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-// Tipos básicos
 export type Lang = "pt" | "en" | "es";
-
 type Dict = Record<string, any>;
+
+export const LANGS: { key: Lang; label: string }[] = [
+  { key: "pt", label: "PT" },
+  { key: "en", label: "EN" },
+  { key: "es", label: "ES" },
+];
 
 const STORAGE_KEY = "previa_lang_v1";
 
-// Carrega JSONs do produto (ajuste paths se necessário)
 async function loadLocale(lang: Lang): Promise<Dict> {
   const [nav, plans, credits, matchup, odds, auth, errors, common, product] =
     await Promise.all([
@@ -48,22 +51,33 @@ function interpolate(template: string, vars?: Record<string, any>) {
   );
 }
 
+function getDeep(obj: any, path: string[]) {
+  let cur = obj;
+  for (const p of path) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
 export function useI18n() {
   const [lang, setLangState] = useState<Lang>(getStoredLang);
   const [dict, setDict] = useState<Dict | null>(null);
 
   useEffect(() => {
     let alive = true;
+
     loadLocale(lang)
       .then((d) => {
         if (!alive) return;
         setDict(d);
       })
-      .catch(() => {
-        // fallback simples
+      .catch((err) => {
+        console.error("[i18n] loadLocale failed:", err);
         if (!alive) return;
         setDict(null);
       });
+
     return () => {
       alive = false;
     };
@@ -76,12 +90,17 @@ export function useI18n() {
 
   const t = useCallback(
     (key: string, vars?: Record<string, any>) => {
-      // key no formato "nav.language"
-      const [ns, k] = key.split(".");
-      const raw =
-        dict?.[ns]?.[k] ??
-        // fallback básico: retorna a chave se não achar
-        key;
+      // enquanto carrega, evita “piscar” de key crua
+      if (!dict) return "";
+
+      const parts = key.split(".");
+      const ns = parts[0];
+      const path = parts.slice(1);
+
+      const raw = getDeep(dict?.[ns], path);
+
+      // debug-friendly: se não achou, devolve a key
+      if (raw == null) return key;
 
       if (typeof raw === "string") return interpolate(raw, vars);
       return String(raw);
@@ -89,5 +108,5 @@ export function useI18n() {
     [dict]
   );
 
-  return useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
+  return useMemo(() => ({ lang, setLang, t, ready: !!dict }), [lang, setLang, t, dict]);
 }

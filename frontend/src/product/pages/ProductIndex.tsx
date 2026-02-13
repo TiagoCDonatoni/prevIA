@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import type { ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
 import { productListOddsEvents, productQuoteOdds } from "../../api/client";
+import { t, type Lang } from "../i18n";
 import { useProductStore } from "../state/productStore";
 import UpgradeModal from "../components/UpgradeModal";
 
 // MVP: defaults do produto (TUDO fácil de mover para config depois)
-// Mantive aqui para destravar o core com consistência.
 const DEFAULTS = {
   sportKey: "soccer_epl",
   hoursAhead: 720,
@@ -16,6 +16,10 @@ const DEFAULTS = {
   artifactFilename: "epl_1x2_logreg_tempcal_v1_C_2021_2023_C0.3_cal2023.json",
   tolHours: 6,
 };
+
+type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
+type StatusFilter = "ALL" | "EXACT" | "NOT_FOUND";
+type SortBy = "DATE" | "CONFIDENCE";
 
 function fmtPct(x: number | null | undefined) {
   const v = typeof x === "number" && Number.isFinite(x) ? x : 0;
@@ -57,23 +61,16 @@ function LockedPanel({
 }: {
   title: string;
   onUnlock: () => void;
-  lang: string;
+  lang: Lang;
 }) {
-  const txt =
-    lang === "en"
-      ? { body: "Available on a higher plan.", cta: "Unlock now" }
-      : lang === "es"
-      ? { body: "Disponible en un plan superior.", cta: "Desbloquear ahora" }
-      : { body: "Disponível em um plano superior.", cta: "Desbloquear agora" };
-
   return (
     <div className="pi-panel pi-locked" role="button" tabIndex={0} onClick={onUnlock}>
       <div className="pi-panel-label">{title}</div>
       <div className="pi-muted" style={{ marginTop: 8 }}>
-        {txt.body}
+        {t(lang, "credits.featureLockedBody")}
       </div>
       <div className="pi-locked-cta" style={{ marginTop: 10 }}>
-        {txt.cta} →
+        {t(lang, "credits.featureLockedCta")} →
       </div>
     </div>
   );
@@ -81,10 +78,8 @@ function LockedPanel({
 
 export default function ProductIndex() {
   const store = useProductStore();
-  const lang = store.state.lang;
+  const lang = store.state.lang as Lang;
   const vis = store.entitlements.visibility;
-
-  type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>("NO_CREDITS");
@@ -93,12 +88,13 @@ export default function ProductIndex() {
   const [events, setEvents] = useState<ProductOddsEvent[]>([]);
   const [eventsError, setEventsError] = useState<string>("");
 
-  // Filtros
+  // filtros
   const [windowDays, setWindowDays] = useState<number>(7);
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "EXACT" | "NOT_FOUND">("ALL");
-  const [sortBy, setSortBy] = useState<"DATE" | "CONFIDENCE">("DATE");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [sortBy, setSortBy] = useState<SortBy>("DATE");
 
   const [selectedId, setSelectedId] = useState<string>("");
+
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
@@ -116,13 +112,17 @@ export default function ProductIndex() {
       const list = res.events || [];
       setEvents(list);
 
-      // Seleciona automaticamente o primeiro "bom" (EXACT/PROBABLE) para reduzir fricção
+      // seleciona automaticamente o primeiro "bom"
       const firstGood =
-        list.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? list[0] ?? null;
+        list.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ??
+        list[0] ??
+        null;
+
       const nextSelected =
         selectedId && list.some((e) => String(e.event_id) === String(selectedId))
           ? selectedId
           : firstGood?.event_id ?? "";
+
       setSelectedId(String(nextSelected));
     } catch (e: any) {
       setEventsError(e?.message ?? String(e));
@@ -159,29 +159,19 @@ export default function ProductIndex() {
   async function onRevealAndOpen() {
     if (!selectedId) return;
 
-    const ev = events.find((e) => String(e.event_id) === String(selectedId));
+    const ev = visibleEvents.find((e) => String(e.event_id) === String(selectedId));
     if (ev && (ev.match_status === "NOT_FOUND" || ev.match_status === "AMBIGUOUS")) {
-      setQuoteError(
-        lang === "en"
-          ? "This match can’t be matched reliably right now."
-          : lang === "es"
-          ? "Este partido no se puede emparejar con fiabilidad ahora."
-          : "Este jogo ainda não pode ser pareado com confiança."
-      );
+      setQuoteError(t(lang, "errors.matchUnreliable"));
       return;
     }
 
-    // CORE DO PRODUTO:
-    // 1) Revela (consome 1 crédito se ainda não revelado hoje)
     const r = store.tryReveal(String(selectedId));
-
     if (!r.ok && r.reason === "NO_CREDITS") {
       setUpgradeReason("NO_CREDITS");
       setUpgradeOpen(true);
       return;
     }
 
-    // Se já revelado, não é erro: apenas abre normalmente (não consome novamente)
     await runQuote(String(selectedId));
   }
 
@@ -190,7 +180,7 @@ export default function ProductIndex() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // lista visível (filtros client-side)
+  // lista visível (filtro client-side)
   const visibleEvents = useMemo(() => {
     const now = new Date();
     const max = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
@@ -198,31 +188,35 @@ export default function ProductIndex() {
     let list = events.filter((e) => {
       const kickoff = new Date(e.commence_time_utc);
       if (Number.isNaN(kickoff.getTime())) return false;
-
       if (kickoff < now || kickoff > max) return false;
 
       if (statusFilter !== "ALL" && e.match_status !== statusFilter) return false;
-
       return true;
     });
 
     if (sortBy === "DATE") {
-      list.sort((a, b) => new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime());
-    } else if (sortBy === "CONFIDENCE") {
+      list.sort(
+        (a, b) => new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime()
+      );
+    } else {
       list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
     }
 
     return list;
   }, [events, windowDays, statusFilter, sortBy]);
 
-  // garante que selectedId é válido dentro do filtro atual
+  // garante selection válida dentro dos filtros atuais
   useEffect(() => {
     if (!visibleEvents.length) return;
 
-    const stillExists = selectedId && visibleEvents.some((e) => String(e.event_id) === String(selectedId));
+    const stillExists =
+      selectedId && visibleEvents.some((e) => String(e.event_id) === String(selectedId));
+
     if (!stillExists) {
       const firstGood =
-        visibleEvents.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ?? visibleEvents[0];
+        visibleEvents.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ??
+        visibleEvents[0];
+
       setSelectedId(String(firstGood.event_id));
       clearQuoteUI();
     }
@@ -238,43 +232,68 @@ export default function ProductIndex() {
   const alreadyRevealed = key ? store.isRevealed(key) : false;
   const canReveal = key ? store.canReveal(key) : false;
 
+  const revealBtnLabel = quoteLoading
+    ? t(lang, "common.loading")
+    : alreadyRevealed
+    ? t(lang, "credits.reveal")
+    : !canReveal
+    ? t(lang, "plans.cta.upgrade")
+    : t(lang, "credits.revealCost", { cost: 1 });
+
   return (
     <div className="pi">
       <div className="pi-topline">
-        <div className="pi-title">Jogos (Odds)</div>
+        <div className="pi-filters" style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+          <select
+            className="pi-select"
+            value={windowDays}
+            onChange={(e) => setWindowDays(Number(e.target.value))}
+            aria-label={t(lang, "odds.filterWindow")}
+          >
+            <option value={1}>{t(lang, "odds.windowToday")}</option>
+            <option value={3}>{t(lang, "odds.window3d")}</option>
+            <option value={7}>{t(lang, "odds.window7d")}</option>
+            <option value={30}>{t(lang, "odds.window30d")}</option>
+          </select>
+
+          <select
+            className="pi-select"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            aria-label={t(lang, "odds.filterStatus")}
+          >
+            <option value="ALL">{t(lang, "odds.statusAll")}</option>
+            <option value="EXACT">{t(lang, "odds.statusExact")}</option>
+            <option value="NOT_FOUND">{t(lang, "odds.statusNotFound")}</option>
+          </select>
+
+          <select
+            className="pi-select"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortBy)}
+            aria-label={t(lang, "odds.sortBy")}
+          >
+            <option value="DATE">{t(lang, "odds.sortDate")}</option>
+            <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
+          </select>
+        </div>
+
+        <div className="pi-title">{t(lang, "odds.pageTitle")}</div>
 
         <div className="pi-meta">
-          sport_key: <b>{DEFAULTS.sportKey}</b> • janela API: <b>{DEFAULTS.hoursAhead}h</b> • exibindo:{" "}
-          <b>{visibleEvents.length}</b> <span style={{ opacity: 0.6 }}>({events.length} carregados)</span>
+          {t(lang, "odds.meta", {
+            sportKey: DEFAULTS.sportKey,
+            hoursAhead: DEFAULTS.hoursAhead,
+            showing: visibleEvents.length,
+            loaded: events.length,
+          })}
         </div>
 
         <div style={{ flex: 1 }} />
 
         <button className="pi-btn pi-btn-ghost" onClick={loadEvents} disabled={loadingEvents}>
-          {loadingEvents ? "Carregando…" : "Recarregar"}
+          {loadingEvents ? t(lang, "common.loading") : t(lang, "odds.reload")}
         </button>
-      </div>
-
-      {/* filtros */}
-      <div className="pi-filters" style={{ display: "flex", gap: 12, margin: "12px 0", flexWrap: "wrap" }}>
-        <select className="pi-select" value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
-          <option value={1}>Hoje</option>
-          <option value={3}>3 dias</option>
-          <option value={7}>7 dias</option>
-          <option value={30}>30 dias</option>
-          <option value={60}>60 dias</option>
-        </select>
-
-        <select className="pi-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>
-          <option value="ALL">Todos</option>
-          <option value="EXACT">EXACT</option>
-          <option value="NOT_FOUND">NOT_FOUND</option>
-        </select>
-
-        <select className="pi-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}>
-          <option value="DATE">Ordenar por data</option>
-          <option value="CONFIDENCE">Ordenar por confiança</option>
-        </select>
       </div>
 
       <div className="pi-grid">
@@ -282,7 +301,7 @@ export default function ProductIndex() {
         <section className="pi-card">
           {eventsError ? <div className="pi-error">{eventsError}</div> : null}
 
-          <div className="pi-list" aria-label="Lista de jogos">
+          <div className="pi-list" aria-label={t(lang, "odds.listAria")}>
             {visibleEvents.map((e) => {
               const active = String(e.event_id) === String(selectedId);
               const b = statusBadge(e.match_status);
@@ -312,7 +331,8 @@ export default function ProductIndex() {
                         <>
                           <span className="pi-subsep">•</span>
                           <span className="pi-odds-mini">
-                            H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A {fmtOdds(e.odds_best.A)}
+                            H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A{" "}
+                            {fmtOdds(e.odds_best.A)}
                           </span>
                         </>
                       ) : null}
@@ -321,19 +341,13 @@ export default function ProductIndex() {
                 </button>
               );
             })}
-
-            {!loadingEvents && visibleEvents.length === 0 ? (
-              <div className="pi-muted" style={{ padding: 12 }}>
-                Nenhum jogo encontrado para esses filtros.
-              </div>
-            ) : null}
           </div>
         </section>
 
         {/* RIGHT: DETALHE + ANÁLISE */}
         <aside className="pi-card">
           {!selected ? (
-            <div className="pi-muted">Selecione um jogo para ver detalhes.</div>
+            <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
           ) : (
             <div className="pi-detail">
               <div className="pi-detail-head">
@@ -341,14 +355,16 @@ export default function ProductIndex() {
                   <div className="pi-detail-title">
                     {selected.home_name} <span className="pi-vs">vs</span> {selected.away_name}
                   </div>
+
                   <div className="pi-detail-sub">
                     <span className="pi-kick">{fmtKickoff(selected.commence_time_utc, lang)}</span>
+
                     {selected.odds_best ? (
                       <>
                         <span className="pi-subsep">•</span>
                         <span className="pi-odds-mini">
-                          Best: H {fmtOdds(selected.odds_best.H)} / D {fmtOdds(selected.odds_best.D)} / A{" "}
-                          {fmtOdds(selected.odds_best.A)}
+                          {t(lang, "odds.bestLabel")}: H {fmtOdds(selected.odds_best.H)} / D{" "}
+                          {fmtOdds(selected.odds_best.D)} / A {fmtOdds(selected.odds_best.A)}
                         </span>
                       </>
                     ) : null}
@@ -357,46 +373,11 @@ export default function ProductIndex() {
 
                 <button
                   className="pi-btn"
-                  onClick={() => {
-                    if (!canReveal && !alreadyRevealed) {
-                      setUpgradeReason("NO_CREDITS");
-                      setUpgradeOpen(true);
-                      return;
-                    }
-                    onRevealAndOpen();
-                  }}
+                  onClick={onRevealAndOpen}
                   disabled={!selectedId || quoteLoading}
-                  title={
-                    !canReveal && !alreadyRevealed
-                      ? lang === "en"
-                        ? "No credits"
-                        : lang === "es"
-                        ? "Sin créditos"
-                        : "Sem créditos"
-                      : ""
-                  }
+                  title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
                 >
-                  {quoteLoading
-                    ? lang === "en"
-                      ? "Calculating…"
-                      : "Calculando…"
-                    : alreadyRevealed
-                    ? lang === "en"
-                      ? "View analysis"
-                      : lang === "es"
-                      ? "Ver análisis"
-                      : "Ver análise"
-                    : !canReveal
-                    ? lang === "en"
-                      ? "Get more credits"
-                      : lang === "es"
-                      ? "Obtener más créditos"
-                      : "Obter mais créditos"
-                    : lang === "en"
-                    ? "Reveal analysis (1 credit)"
-                    : lang === "es"
-                    ? "Revelar análisis (1 crédito)"
-                    : "Revelar análise (1 crédito)"}
+                  {revealBtnLabel}
                 </button>
               </div>
 
@@ -404,12 +385,12 @@ export default function ProductIndex() {
 
               {!quote ? (
                 <div className="pi-muted">
-                  Artifact: <b>{DEFAULTS.artifactFilename}</b>
+                  {t(lang, "odds.artifact")}: <b>{DEFAULTS.artifactFilename}</b>
                 </div>
               ) : (
                 <div className="pi-panels">
                   <div className="pi-panel">
-                    <div className="pi-panel-label">Probabilidades</div>
+                    <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
                     {quote.probs ? (
                       <div className="pi-panel-value">
                         H {fmtPct(quote.probs.H)} <br />
@@ -417,12 +398,12 @@ export default function ProductIndex() {
                         A {fmtPct(quote.probs.A)}
                       </div>
                     ) : (
-                      <div className="pi-muted">Sem probs (modelo indisponível).</div>
+                      <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
                     )}
                   </div>
 
                   <div className="pi-panel">
-                    <div className="pi-panel-label">Odds (best)</div>
+                    <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
                     {quote.odds?.best ? (
                       <div className="pi-panel-value">
                         H {fmtOdds(quote.odds.best.H)} <br />
@@ -430,26 +411,22 @@ export default function ProductIndex() {
                         A {fmtOdds(quote.odds.best.A)}
                       </div>
                     ) : (
-                      <div className="pi-muted">Sem odds no momento.</div>
+                      <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
                     )}
                   </div>
 
                   {/* Confiança (por plano) */}
                   {vis.context.show_confidence_level ? (
                     <div className="pi-panel">
-                      <div className="pi-panel-label">
-                        {lang === "en" ? "Confidence" : lang === "es" ? "Confianza" : "Confiança"}
-                      </div>
-
+                      <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
                       <div className="pi-panel-value">{fmtPct(quote?.matchup?.confidence ?? 0)}</div>
-
                       <div className="pi-muted">
-                        status: <b>{quote?.matchup?.status}</b>
+                        {t(lang, "matchup.status")}: <b>{quote?.matchup?.status}</b>
                       </div>
                     </div>
                   ) : (
                     <LockedPanel
-                      title={lang === "en" ? "Confidence" : lang === "es" ? "Confianza" : "Confiança"}
+                      title={t(lang, "matchup.confidence")}
                       lang={lang}
                       onUnlock={() => {
                         setUpgradeReason("FEATURE_LOCKED");
@@ -462,8 +439,7 @@ export default function ProductIndex() {
                   {vis.value.show_edge_percent ? (
                     quote?.value?.edge ? (
                       <div className="pi-panel">
-                        <div className="pi-panel-label">Edge (vs market)</div>
-
+                        <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
                         <div className="pi-panel-value">
                           H {fmtPct(quote.value.edge.H)} <br />
                           D {fmtPct(quote.value.edge.D)} <br />
@@ -471,30 +447,18 @@ export default function ProductIndex() {
                         </div>
 
                         {vis.value.show_value_detected ? (
-                          <div className="pi-muted">
-                            {lang === "en"
-                              ? "Value detection enabled"
-                              : lang === "es"
-                              ? "Detección de valor habilitada"
-                              : "Value detection habilitado"}
-                          </div>
+                          <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
                         ) : null}
                       </div>
                     ) : (
                       <div className="pi-panel">
-                        <div className="pi-panel-label">Edge (vs market)</div>
-                        <div className="pi-muted">
-                          {lang === "en"
-                            ? "No edge data available."
-                            : lang === "es"
-                            ? "Sin datos de edge."
-                            : "Sem dados de edge para este jogo."}
-                        </div>
+                        <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                        <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
                       </div>
                     )
                   ) : (
                     <LockedPanel
-                      title={lang === "en" ? "Edge vs market" : lang === "es" ? "Edge vs mercado" : "Edge vs mercado"}
+                      title={t(lang, "matchup.edge")}
                       lang={lang}
                       onUnlock={() => {
                         setUpgradeReason("FEATURE_LOCKED");

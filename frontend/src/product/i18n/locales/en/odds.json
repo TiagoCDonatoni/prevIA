@@ -1,0 +1,32 @@
+{
+  "partner": "Partner",
+  "bestOdd": "Best odd",
+  "seeAllBooks": "See all books",
+
+  "pageTitle": "Matches (Odds)",
+  "reload": "Reload",
+  "listAria": "Match list",
+  "selectHint": "Select a match to see details.",
+  "bestLabel": "Best",
+  "artifact": "Artifact",
+
+  "filterWindow": "Window",
+  "filterStatus": "Status",
+  "sortBy": "Sort",
+
+  "windowToday": "Today",
+  "window3d": "3 days",
+  "window7d": "7 days",
+  "window30d": "30 days",
+
+  "statusAll": "All",
+  "statusExact": "EXACT",
+  "statusNotFound": "NOT_FOUND",
+
+  "sortDate": "Sort by date",
+  "sortConfidence": "Sort by confidence",
+
+  "meta": "sport_key: {sportKey} • window: {hoursAhead}h • showing: {showing} ({loaded} loaded)",
+
+  "noOdds": "No odds available right now."
+}
