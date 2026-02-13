@@ -159,6 +159,14 @@ function nextResetIso(now = new Date()): string {
   return next.toISOString();
 }
 
+function detectBrowserLang(): Lang {
+  const raw = (navigator.languages?.[0] ?? navigator.language ?? "en").toLowerCase();
+
+  if (raw.startsWith("pt")) return "pt";
+  if (raw.startsWith("es")) return "es";
+  return "en";
+}
+
 export function loadProductState(): PersistedState {
   const raw = localStorage.getItem(LS_KEY);
   const today = dateKeySaoPaulo();
@@ -166,7 +174,7 @@ export function loadProductState(): PersistedState {
   if (!raw) {
     return {
       plan: "FREE_ANON",
-      lang: "pt",
+      lang: detectBrowserLang(),
       auth: { is_logged_in: false, email: null },
       credits: { date_key: today, used_today: 0, revealed_today: {} },
     };
@@ -175,6 +183,8 @@ export function loadProductState(): PersistedState {
   try {
     const parsed = JSON.parse(raw) as PersistedState;
     if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
+    if (!parsed.lang) parsed.lang = detectBrowserLang();
+
     if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
       parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
     }
@@ -182,7 +192,7 @@ export function loadProductState(): PersistedState {
   } catch {
     return {
       plan: "FREE_ANON",
-      lang: "pt",
+      lang: detectBrowserLang(),
       auth: { is_logged_in: false, email: null },
       credits: { date_key: today, used_today: 0, revealed_today: {} },
     };
