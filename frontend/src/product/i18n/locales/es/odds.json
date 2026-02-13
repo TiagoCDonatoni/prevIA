@@ -28,5 +28,9 @@
 
   "meta": "sport_key: {sportKey} • ventana: {hoursAhead}h • mostrando: {showing} ({loaded} cargados)",
 
-  "noOdds": "No hay cuotas disponibles ahora."
+  "noOdds": "No hay cuotas disponibles ahora.",
+  "metaCount": "Mostrando: {showing} ({loaded} cargados)",
+  "revealHint": "Haz clic en “Revelar” para ver las probabilidades.",
+  "filterLeague": "Filtrar por liga"
+
 }

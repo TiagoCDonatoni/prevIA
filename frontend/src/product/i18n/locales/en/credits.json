@@ -12,5 +12,13 @@
   "modalAnonPrimary": "Create free account",
 
   "featureLockedBody": "Available on a higher plan.",
-  "featureLockedCta": "Unlock now"
+  "featureLockedCta": "Unlock now",
+
+  "counter": "Credits: {remaining}/{limit}",
+  "revealCost": "Cost: {cost} credit",
+  "reveal": "Reveal",
+
+  "viewAnalysis": "View analysis",
+  "oneCredit": "1 credit",
+  "moreCredits": "More credits"
 }

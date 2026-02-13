@@ -12,5 +12,14 @@
   "modalAnonPrimary": "Crear cuenta gratis",
 
   "featureLockedBody": "Disponible en un plan superior.",
-  "featureLockedCta": "Desbloquear ahora"
+  "featureLockedCta": "Desbloquear ahora",
+
+  "counter": "Créditos: {remaining}/{limit}",
+  "revealCost": "Costo: {cost} crédito",
+  "reveal": "Revelar",
+
+  "viewAnalysis": "Ver análisis",
+  "oneCredit": "1 crédito",
+  "moreCredits": "Más créditos"
+
 }

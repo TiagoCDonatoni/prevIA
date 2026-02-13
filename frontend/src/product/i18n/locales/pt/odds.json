@@ -28,5 +28,8 @@
 
   "meta": "sport_key: {sportKey} • janela: {hoursAhead}h • exibindo: {showing} ({loaded} carregados)",
 
-  "noOdds": "Sem odds no momento."
+  "noOdds": "Sem odds no momento.",
+  "metaCount": "Exibindo: {showing} ({loaded} carregados)",
+  "revealHint": "Clique em “Revelar” para ver as probabilidades.",
+  "filterLeague": "Filtrar por liga"
 }

@@ -63,9 +63,47 @@ export function ProductLayout() {
             {t(lang, "common.devReset")}
           </button>
 
-          <div className="product-credits">
-            {t(lang, "credits.counter", { remaining, limit })}
+          <div className="pl-credits-wrap">
+            <div className="pl-credits">
+              {t(lang, "credits.counter", { remaining, limit })}
+            </div>
+
+            {(() => {
+              const plan = store.state.plan;
+              const isLoggedIn = !!store.state.auth?.is_logged_in;
+
+              // Pro: não mostra CTA
+              if (plan === "PRO") return null;
+
+              // Free anon: criar conta grátis
+              if (!isLoggedIn) {
+                return (
+                  <button
+                    className="pl-credits-cta"
+                    onClick={() => {
+                      // você já deve ter algum state/modal de auth no layout
+                      setAuthOpen(true);
+                    }}
+                  >
+                    {t(lang, "auth.createFreeAccount")}
+                  </button>
+                );
+              }
+
+              // Free+ / Basic / Light: upgrade
+              return (
+                <button
+                  className="pl-credits-cta"
+                  onClick={() => {
+                    setUpgradeOpen(true);
+                  }}
+                >
+                  {t(lang, "credits.moreCredits")}
+                </button>
+              );
+            })()}
           </div>
+
         </div>
       </header>
 
