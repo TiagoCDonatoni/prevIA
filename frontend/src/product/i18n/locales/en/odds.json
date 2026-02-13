@@ -30,7 +30,7 @@
 
   "noOdds": "No odds available right now.",
   "metaCount": "Showing: {showing} ({loaded} loaded)",
-  "revealHint": "Click “Reveal” to see probabilities.",
+  "revealHint": "Click “View analysis” to see probabilities.",
   "filterLeague": "Filter by league"
 
 }

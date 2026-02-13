@@ -30,7 +30,7 @@
 
   "noOdds": "No hay cuotas disponibles ahora.",
   "metaCount": "Mostrando: {showing} ({loaded} cargados)",
-  "revealHint": "Haz clic en “Revelar” para ver las probabilidades.",
+  "revealHint": "Haz clic en “Ver análisis” para ver las probabilidades.",
   "filterLeague": "Filtrar por liga"
 
 }
