@@ -4,5 +4,8 @@
   "loading": "Carregando…",
   "notNow": "Agora não",
   "devReset": "Reset",
-  "devResetTitle": "Resetar tudo e recarregar (DEV)"
+  "devResetTitle": "Resetar tudo e recarregar (DEV)",
+
+  "updatedAgo": "Atualizado {ago}"
+
 }
