@@ -497,9 +497,9 @@ export default function ProductIndex() {
                         </>
                       ) : null}
 
-                    {(() => {
-                        const { shown, extra } = pickBooksForAnalysis(
-                          quote?.odds?.books ?? null,
+                      {(() => {
+                        const { shown, extra } = pickBooksForDisplay(
+                          e.odds_books ?? null,
                           vis.odds.books_count,
                           vis.odds.show_affiliate_link
                         );
@@ -507,7 +507,7 @@ export default function ProductIndex() {
                         if (!shown.length || !vis.odds.show_partner_label) return null;
 
                         return (
-                          <div className="pi-books-grid-3">
+                          <div className="pi-books-row">
                             {shown.map((b) =>
                               b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
                                 <a
@@ -568,8 +568,6 @@ export default function ProductIndex() {
 
                     {(() => {
                       const { shown, extra } = pickBooksForAnalysis(
-                        // ✅ Agora aparece na tela inicial:
-                        // usa odds_books do evento selecionado; quando a quote existir, ela “sobrescreve”
                         quote?.odds?.books ?? selected?.odds_books ?? null,
                         vis.odds.books_count,
                         vis.odds.show_affiliate_link
