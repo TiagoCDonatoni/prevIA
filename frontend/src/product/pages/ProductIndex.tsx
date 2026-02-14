@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 
-import type { ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
+import type { ProductOddsBook, ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
 import { productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
 import { useProductStore } from "../state/productStore";
@@ -59,6 +59,51 @@ function fmtOdds(x: number | null | undefined) {
   const v = Number(x);
   if (!Number.isFinite(v)) return "—";
   return v.toFixed(2);
+}
+
+function pickBooksForDisplay(
+  books: ProductOddsBook[] | null | undefined,
+  planMax: number,
+  showAffiliateLink: boolean
+): { shown: ProductOddsBook[]; extra: number } {
+  const list = Array.isArray(books) ? books : [];
+  if (!list.length) return { shown: [], extra: 0 };
+
+  const UI_MAX = 6;
+  const planLimit = Math.max(1, planMax || 1);
+
+  // Afiliadas primeiro; depois ordena por nome/chave para ficar estável
+  const sorted = [...list].sort((a, b) => {
+    const aa = a.is_affiliate ? 1 : 0;
+    const bb = b.is_affiliate ? 1 : 0;
+    if (aa !== bb) return bb - aa;
+    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
+  });
+
+  // Respeita o que o plano permite (não “conta” books fora do entitlement)
+  const allowed = sorted.slice(0, planLimit);
+
+  // Cap visual fixo
+  const shown = allowed.slice(0, Math.min(planLimit, UI_MAX));
+  const extra = Math.max(0, allowed.length - shown.length);
+
+  // Garantia: se existe afiliada e ela foi cortada do shown, força ela no topo
+  if (showAffiliateLink) {
+    const firstAffiliate = allowed.find((b) => !!b.is_affiliate);
+    if (firstAffiliate && !shown.some((b) => b.key === firstAffiliate.key) && shown.length) {
+      const withoutLast = shown.slice(0, shown.length - 1);
+      return { shown: [firstAffiliate, ...withoutLast], extra };
+    }
+  }
+
+  return { shown, extra };
+}
+
+function fmtMoreBooks(extra: number, lang: Lang) {
+  if (extra <= 0) return "";
+  if (lang === "en") return `+${extra} books`;
+  // pt + es
+  return `+${extra} casas`;
 }
 
 function fmtAgo(ts: number, lang: Lang, now: number) {
@@ -208,8 +253,8 @@ export default function ProductIndex() {
     setQuote(null);
     setQuoteError("");
 
-    const eventIdNum = Number(eventId);
-    if (!Number.isFinite(eventIdNum) || eventIdNum <= 0) {
+    const eventIdStr = String(eventId ?? "").trim();
+    if (!eventIdStr) {
       setQuoteLoading(false);
       setQuoteError("Invalid event_id");
       return;
@@ -217,7 +262,7 @@ export default function ProductIndex() {
 
     try {
       const res = await productQuoteOdds({
-        event_id: eventIdNum,
+        event_id: eventIdStr, // <-- string
         assume_league_id: Number(league.assumeLeagueId),
         assume_season: Number(league.assumeSeason),
         artifact_filename: league.artifactFilename,
@@ -413,6 +458,43 @@ export default function ProductIndex() {
                           </span>
                         </>
                       ) : null}
+
+                      {(() => {
+                        const { shown, extra } = pickBooksForDisplay(
+                          e.odds_books ?? null,
+                          vis.odds.books_count,
+                          vis.odds.show_affiliate_link
+                        );
+
+                        if (!shown.length || !vis.odds.show_partner_label) return null;
+
+                        return (
+                          <div className="pi-books-row">
+                            {shown.map((b) =>
+                              b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
+                                <a
+                                  key={b.key}
+                                  className="pi-book-chip"
+                                  href={b.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {(b.name && String(b.name).trim()) ? b.name : b.key}
+                                </a>
+                              ) : (
+                                <span key={b.key} className="pi-book-chip">
+                                  {(b.name && String(b.name).trim()) ? b.name : b.key}
+                                </span>
+                              )
+                            )}
+
+                            {extra > 0 ? (
+                              <span className="pi-book-chip">{fmtMoreBooks(extra, lang)}</span>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
+
                     </div>
                   </div>
                 </button>
@@ -445,6 +527,43 @@ export default function ProductIndex() {
                         </span>
                       </>
                     ) : null}
+
+                    {(() => {
+                      const { shown, extra } = pickBooksForDisplay(
+                        quote?.odds?.books ?? null,
+                        vis.odds.books_count,
+                        vis.odds.show_affiliate_link
+                      );
+
+                      if (!shown.length || !vis.odds.show_partner_label) return null;
+
+                      return (
+                        <div className="pi-books-row">
+                          {shown.map((b) =>
+                            b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
+                              <a
+                                key={b.key}
+                                className="pi-book-chip"
+                                href={b.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {(b.name && String(b.name).trim()) ? b.name : b.key}
+                              </a>
+                            ) : (
+                              <span key={b.key} className="pi-book-chip">
+                                {(b.name && String(b.name).trim()) ? b.name : b.key}
+                              </span>
+                            )
+                          )}
+
+                          {extra > 0 ? (
+                            <span className="pi-book-chip">{fmtMoreBooks(extra, lang)}</span>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+
                   </div>
                 </div>
 
