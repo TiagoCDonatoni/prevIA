@@ -557,42 +557,18 @@ export default function ProductIndex() {
                         </>
                       ) : null}
 
-                      {(() => {
-                        const es = e.edge_summary ?? null;
-                        const tier = edgeTier(es?.best_edge ?? null);
+                        {(() => {
+                          const es = e.edge_summary ?? null;
 
-                        // Se não tiver edge_summary, não polui o card
-                        if (!es || !es.best_outcome || es.best_edge == null) return null;
+                          // Lista = descoberta: só sinaliza oportunidade, sem números/side/odds
+                          const edge = es?.best_edge;
+                          const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02;
 
-                        return (
-                          <div className={`pi-edge-strip ${tier}`}>
-                            <div className="pi-edge-main">
-                              <span className="pi-edge-badge">
-                                {tier === "hot" || tier === "ok" ? "🔥" : tier === "neutral" ? "🟡" : "🔴"}
-                              </span>
+                          if (!hasOpportunity) return null;
 
-                              <span className="pi-edge-outcome">
-                                {fmtOutcome(es.best_outcome, e.home_name, e.away_name, lang)}
-                              </span>
-
-                              <span className="pi-edge-value">{fmtEdge(es.best_edge)}</span>
-                            </div>
-
-                            <div className="pi-edge-sub">
-                              <span className="pi-edge-meta">
-                                {es.market_books_count ? `${es.market_books_count} ${lang === "en" ? "books" : "casas"}` : ""}
-                              </span>
-
-                              {vis.odds.show_partner_label && es.best_odd != null ? (
-                                <span className="pi-edge-exec">
-                                  {fmtOdds(es.best_odd)} {es.best_book_name ? `(${es.best_book_name})` : ""}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
+                          return <div className="pi-opportunity">🔥 Oportunidade detectada</div>;
+                        })()}
+                        
                     </div>
                   </div>
                 </button>
