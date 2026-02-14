@@ -767,3 +767,28 @@
 .pi-edge-strip.ok { border: 1px solid rgba(255, 255, 0, 0.20); }
 .pi-edge-strip.neutral { border: 1px solid rgba(255, 255, 255, 0.10); }
 .pi-edge-strip.bad { border: 1px solid rgba(255, 0, 0, 0.18); }
+
+.pi-opportunity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  margin-left: auto; /* empurra para a direita */
+  padding: 3px 10px;
+
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.1;
+
+  background: rgba(255, 165, 0, 0.08);
+  border: 1px solid rgba(255, 165, 0, 0.18);
+  color: #ff9f1a;
+  white-space: nowrap;
+}
+
+.pi-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -566,9 +566,9 @@ export default function ProductIndex() {
 
                           if (!hasOpportunity) return null;
 
-                          return <div className="pi-opportunity">🔥 Oportunidade detectada</div>;
+                          return <div className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</div>;
                         })()}
-                        
+
                     </div>
                   </div>
                 </button>
@@ -603,39 +603,11 @@ export default function ProductIndex() {
                     ) : null}
 
                     {(() => {
-                      const { shown, extra } = pickBooksForAnalysis(
-                        quote?.odds?.books ?? selected?.odds_books ?? null,
-                        vis.odds.books_count,
-                        vis.odds.show_affiliate_link
-                      );
+                      const edge = e.edge_summary?.best_edge;
+                      const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02; // 2%
+                      if (!hasOpportunity) return null;
 
-                      if (!shown.length || !vis.odds.show_partner_label) return null;
-
-                      return (
-                        <div className="pi-books-grid-3">
-                          {shown.map((b) =>
-                            b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
-                              <a
-                                key={b.key}
-                                className="pi-book-chip"
-                                href={b.url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {(b.name && String(b.name).trim()) ? b.name : b.key}
-                              </a>
-                            ) : (
-                              <span key={b.key} className="pi-book-chip">
-                                {(b.name && String(b.name).trim()) ? b.name : b.key}
-                              </span>
-                            )
-                          )}
-
-                          {extra > 0 ? (
-                            <span className="pi-book-chip">{fmtMoreBooks(extra, lang)}</span>
-                          ) : null}
-                        </div>
-                      );
+                      return <span className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</span>;
                     })()}
 
                   </div>
