@@ -296,9 +296,9 @@ export default function ProductIndex() {
         hours_ahead: DEFAULTS.hoursAhead,
         limit: DEFAULTS.limit,
 
-        // 🔥 necessário para edge_summary
-        assume_league_id: league.leagueId,
-        assume_season: league.season,
+        // necessário para edge_summary no backend
+        assume_league_id: league.assumeLeagueId,
+        assume_season: league.assumeSeason,
         artifact_filename: league.artifactFilename,
       });
 

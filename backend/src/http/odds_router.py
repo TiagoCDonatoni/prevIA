@@ -369,7 +369,7 @@ def _pick_model_season(conn, *, league_id: int, requested_season: int) -> Dict[s
 # ---------------------------
 
 
-@router.get("/events", response_model=OddsEventsResponse)
+@router.get("/events", response_model=OddsEventsResponse, response_model_exclude_none=False)
 def list_odds_events(
     sport_key: str = Query(...),
     hours_ahead: int = Query(168, ge=1, le=24 * 60),
