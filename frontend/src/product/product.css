@@ -124,8 +124,17 @@
 
 .pi-grid {
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  grid-template-columns: 1.25fr 0.75fr !important; /* esquerda maior, sempre */
   gap: 14px;
+}
+
+/* trava o posicionamento, mesmo se a ordem do JSX ou outro CSS interferir */
+.pi-grid > .pi-card-list {
+  grid-column: 1 !important;
+}
+
+.pi-grid > .pi-card-analysis {
+  grid-column: 2 !important;
 }
 
 /* Layout: lista com scroll + painel de análise fixo */
@@ -168,6 +177,10 @@
 @media (max-width: 980px) {
   .pi-grid {
     grid-template-columns: 1fr;
+  }
+  .pi-grid > .pi-card-list,
+  .pi-grid > .pi-card-analysis {
+    grid-column: 1;
   }
 }
 
@@ -575,7 +588,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 8px 12px;   /* um pouco maior */
   border-radius: 999px;
   border: 1px solid #e2e8f0;
   background: #fff;
@@ -646,3 +659,111 @@
   font-weight: 700;
   opacity: 0.75;
 }
+
+/* Wrapper do idioma não deve parecer um pill dentro de pill */
+.product-pill-lang {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+}
+
+.lang-flag-img {
+  width: 16px;
+  height: 12px;
+  object-fit: cover;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.05);
+}
+
+.pi-books-row {
+  display: flex;
+  flex-wrap: nowrap !important;   /* <-- força 1 linha */
+  gap: 8px;
+  align-items: center;
+  overflow-x: auto;
+}
+
+.pi-book-chip {
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;          /* ↓ reduz vertical */
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1;             /* ← importante */
+  height: 22px;               /* fixa altura */
+  text-decoration: none;
+}
+
+.pi-book-chip:hover {
+  background: #f8fafc;
+}
+
+.pi-books-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.pi-books-grid-3 .pi-book-chip {
+  width: 100%;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pi-books-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.pi-edge-strip {
+  margin-top: 10px;
+  padding: 10px 10px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pi-edge-strip .pi-edge-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pi-edge-strip .pi-edge-badge {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.pi-edge-strip .pi-edge-outcome {
+  font-weight: 600;
+}
+
+.pi-edge-strip .pi-edge-value {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.pi-edge-strip .pi-edge-sub {
+  display: flex;
+  justify-content: space-between;
+  opacity: 0.85;
+  font-size: 12px;
+}
+
+/* tiers */
+.pi-edge-strip.hot { border: 1px solid rgba(0, 255, 0, 0.25); }
+.pi-edge-strip.ok { border: 1px solid rgba(255, 255, 0, 0.20); }
+.pi-edge-strip.neutral { border: 1px solid rgba(255, 255, 255, 0.10); }
+.pi-edge-strip.bad { border: 1px solid rgba(255, 0, 0, 0.18); }
