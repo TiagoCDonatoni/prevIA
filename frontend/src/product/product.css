@@ -792,3 +792,10 @@
   align-items: center;
   gap: 8px;
 }
+
+.pi-row-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}

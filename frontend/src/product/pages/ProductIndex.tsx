@@ -566,7 +566,7 @@ export default function ProductIndex() {
 
                           if (!hasOpportunity) return null;
 
-                          return <div className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</div>;
+                          return <span className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</span>;
                         })()}
 
                     </div>
@@ -603,7 +603,7 @@ export default function ProductIndex() {
                     ) : null}
 
                     {(() => {
-                      const edge = e.edge_summary?.best_edge;
+                      const edge = selected.edge_summary?.best_edge;
                       const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02; // 2%
                       if (!hasOpportunity) return null;
 
