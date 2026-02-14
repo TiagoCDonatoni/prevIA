@@ -72,11 +72,24 @@ function pickBooksForDisplay(
   const UI_MAX = 6;
   const planLimit = Math.max(1, planMax || 1);
 
-  // Afiliadas primeiro; depois ordena por nome/chave para ficar estável
+  const bestOdd = (b: ProductOddsBook) => {
+    const o = b.odds_1x2 || {};
+    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
+    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
+    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
+    return Math.max(H, D, A);
+  };
+
+  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
   const sorted = [...list].sort((a, b) => {
     const aa = a.is_affiliate ? 1 : 0;
     const bb = b.is_affiliate ? 1 : 0;
     if (aa !== bb) return bb - aa;
+
+    const oa = bestOdd(a);
+    const ob = bestOdd(b);
+    if (oa !== ob) return ob - oa;
+
     return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
   });
 
@@ -110,11 +123,24 @@ function pickBooksForAnalysis(
   const UI_MAX = 5; // análise: 5 casas + 1 chip "+x"
   const planLimit = Math.max(1, planMax || 1);
 
-  // Afiliadas primeiro; depois ordena por nome/chave para ficar estável
+  const bestOdd = (b: ProductOddsBook) => {
+    const o = b.odds_1x2 || {};
+    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
+    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
+    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
+    return Math.max(H, D, A);
+  };
+
+  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
   const sorted = [...list].sort((a, b) => {
     const aa = a.is_affiliate ? 1 : 0;
     const bb = b.is_affiliate ? 1 : 0;
     if (aa !== bb) return bb - aa;
+
+    const oa = bestOdd(a);
+    const ob = bestOdd(b);
+    if (oa !== ob) return ob - oa;
+
     return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
   });
 
