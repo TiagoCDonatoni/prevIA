@@ -295,6 +295,11 @@ export default function ProductIndex() {
         sport_key: league.sportKey,
         hours_ahead: DEFAULTS.hoursAhead,
         limit: DEFAULTS.limit,
+
+        // 🔥 necessário para edge_summary
+        assume_league_id: league.leagueId,
+        assume_season: league.season,
+        artifact_filename: league.artifactFilename,
       });
 
       const list = res?.events ?? [];
@@ -553,50 +558,38 @@ export default function ProductIndex() {
                       ) : null}
 
                       {(() => {
-                        const { shown, extra } = pickBooksForDisplay(
-                          e.odds_books ?? null,
-                          vis.odds.books_count,
-                          vis.odds.show_affiliate_link
-                        );
+                        const es = e.edge_summary ?? null;
+                        const tier = edgeTier(es?.best_edge ?? null);
 
-                        if (!shown.length || !vis.odds.show_partner_label) return null;
+                        // Se não tiver edge_summary, não polui o card
+                        if (!es || !es.best_outcome || es.best_edge == null) return null;
 
                         return (
-                          {(() => {
-                            const es = e.edge_summary ?? null;
-                            const tier = edgeTier(es?.best_edge ?? null);
+                          <div className={`pi-edge-strip ${tier}`}>
+                            <div className="pi-edge-main">
+                              <span className="pi-edge-badge">
+                                {tier === "hot" || tier === "ok" ? "🔥" : tier === "neutral" ? "🟡" : "🔴"}
+                              </span>
 
-                            // Se não tiver edge_summary (ex.: sem params), não polui o card
-                            if (!es || !es.best_outcome || es.best_edge == null) return null;
+                              <span className="pi-edge-outcome">
+                                {fmtOutcome(es.best_outcome, e.home_name, e.away_name, lang)}
+                              </span>
 
-                            return (
-                              <div className={`pi-edge-strip ${tier}`}>
-                                <div className="pi-edge-main">
-                                  <span className="pi-edge-badge">
-                                    {tier === "hot" || tier === "ok" ? "🔥" : tier === "neutral" ? "🟡" : "🔴"}
-                                  </span>
-                                  <span className="pi-edge-outcome">
-                                    {fmtOutcome(es.best_outcome, e.home_name, e.away_name, lang)}
-                                  </span>
-                                  <span className="pi-edge-value">{fmtEdge(es.best_edge)}</span>
-                                </div>
+                              <span className="pi-edge-value">{fmtEdge(es.best_edge)}</span>
+                            </div>
 
-                                <div className="pi-edge-sub">
-                                  <span className="pi-edge-meta">
-                                    {es.market_books_count ? `${es.market_books_count} ${lang === "en" ? "books" : "casas"}` : ""}
-                                  </span>
+                            <div className="pi-edge-sub">
+                              <span className="pi-edge-meta">
+                                {es.market_books_count ? `${es.market_books_count} ${lang === "en" ? "books" : "casas"}` : ""}
+                              </span>
 
-                                  {/* Execução: só em planos que podem ver partner label (pago) */}
-                                  {vis.odds.show_partner_label && es.best_odd != null ? (
-                                    <span className="pi-edge-exec">
-                                      {fmtOdds(es.best_odd)} {es.best_book_name ? `(${es.best_book_name})` : ""}
-                                    </span>
-                                  ) : null}
-                                </div>
-                              </div>
-                            );
-                          })()}
-
+                              {vis.odds.show_partner_label && es.best_odd != null ? (
+                                <span className="pi-edge-exec">
+                                  {fmtOdds(es.best_odd)} {es.best_book_name ? `(${es.best_book_name})` : ""}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
                         );
                       })()}
 
