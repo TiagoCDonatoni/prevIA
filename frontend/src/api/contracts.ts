@@ -226,16 +226,40 @@ export type OddsIntelResponse = {
 
 export type ProductOdds1x2 = { H: number; D: number; A: number };
 
+export type ProductEdgeSummary = {
+  best_outcome: "H" | "D" | "A" | null;
+  best_edge: number | null;
+  best_odd: number | null;
+  best_book_key: string | null;
+  best_book_name: string | null;
+  market_books_count: number;
+  market_min_odd: number | null;
+  market_max_odd: number | null;
+};
+
 export type ProductOddsEvent = {
   event_id: string;
   sport_key: string;
-  commence_time_utc: string; // vem como ISO (pode vir com -03:00 hoje)
+  commence_time_utc: string | null;
   home_name: string;
   away_name: string;
   latest_captured_at_utc: string | null;
-  odds_best: ProductOdds1x2 | null;
+
   match_status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | null;
   match_score: number | null;
+
+  odds_best: ProductOdds1x2 | null;
+  odds_books?: ProductOddsBook[] | null;
+
+  edge_summary?: ProductEdgeSummary | null;
+};
+
+export type ProductOddsBook = {
+  key: string;
+  name: string;
+  is_affiliate?: boolean;
+  url?: string | null;
+  odds_1x2?: ProductOdds1x2 | null;
 };
 
 export type ProductOddsEventsResponse = {
@@ -265,6 +289,7 @@ export type ProductOddsQuoteResponse = {
     home_team_id: number | null;
     away_team_id: number | null;
     reason?: string | null;
+    books?: ProductOddsBook[] | null;
 
     model_season_requested?: number;
     model_season_used?: number | null;
@@ -277,6 +302,7 @@ export type ProductOddsQuoteResponse = {
     source: "db";
     latest_captured_at_utc: string | null;
     best: ProductOdds1x2 | null;
+    books?: ProductOddsBook[] | null;
   };
   value?: {
     market?: string;
