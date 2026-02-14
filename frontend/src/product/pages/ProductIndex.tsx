@@ -99,6 +99,44 @@ function pickBooksForDisplay(
   return { shown, extra };
 }
 
+function pickBooksForAnalysis(
+  books: ProductOddsBook[] | null | undefined,
+  planMax: number,
+  showAffiliateLink: boolean
+): { shown: ProductOddsBook[]; extra: number } {
+  const list = Array.isArray(books) ? books : [];
+  if (!list.length) return { shown: [], extra: 0 };
+
+  const UI_MAX = 5; // análise: 5 casas + 1 chip "+x"
+  const planLimit = Math.max(1, planMax || 1);
+
+  // Afiliadas primeiro; depois ordena por nome/chave para ficar estável
+  const sorted = [...list].sort((a, b) => {
+    const aa = a.is_affiliate ? 1 : 0;
+    const bb = b.is_affiliate ? 1 : 0;
+    if (aa !== bb) return bb - aa;
+    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
+  });
+
+  // respeita entitlement do plano
+  const allowed = sorted.slice(0, planLimit);
+
+  // cap visual (5)
+  const shown = allowed.slice(0, Math.min(planLimit, UI_MAX));
+  const extra = Math.max(0, allowed.length - shown.length);
+
+  // garante afiliada no shown, se existir
+  if (showAffiliateLink) {
+    const firstAffiliate = allowed.find((b) => !!b.is_affiliate);
+    if (firstAffiliate && !shown.some((b) => b.key === firstAffiliate.key) && shown.length) {
+      const withoutLast = shown.slice(0, shown.length - 1);
+      return { shown: [firstAffiliate, ...withoutLast], extra };
+    }
+  }
+
+  return { shown, extra };
+}
+
 function fmtMoreBooks(extra: number, lang: Lang) {
   if (extra <= 0) return "";
   if (lang === "en") return `+${extra} books`;
@@ -459,9 +497,9 @@ export default function ProductIndex() {
                         </>
                       ) : null}
 
-                      {(() => {
-                        const { shown, extra } = pickBooksForDisplay(
-                          e.odds_books ?? null,
+                    {(() => {
+                        const { shown, extra } = pickBooksForAnalysis(
+                          quote?.odds?.books ?? null,
                           vis.odds.books_count,
                           vis.odds.show_affiliate_link
                         );
@@ -469,7 +507,7 @@ export default function ProductIndex() {
                         if (!shown.length || !vis.odds.show_partner_label) return null;
 
                         return (
-                          <div className="pi-books-row">
+                          <div className="pi-books-grid-3">
                             {shown.map((b) =>
                               b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
                                 <a
@@ -529,8 +567,10 @@ export default function ProductIndex() {
                     ) : null}
 
                     {(() => {
-                      const { shown, extra } = pickBooksForDisplay(
-                        quote?.odds?.books ?? null,
+                      const { shown, extra } = pickBooksForAnalysis(
+                        // ✅ Agora aparece na tela inicial:
+                        // usa odds_books do evento selecionado; quando a quote existir, ela “sobrescreve”
+                        quote?.odds?.books ?? selected?.odds_books ?? null,
                         vis.odds.books_count,
                         vis.odds.show_affiliate_link
                       );
@@ -538,7 +578,7 @@ export default function ProductIndex() {
                       if (!shown.length || !vis.odds.show_partner_label) return null;
 
                       return (
-                        <div className="pi-books-row">
+                        <div className="pi-books-grid-3">
                           {shown.map((b) =>
                             b.is_affiliate && b.url && vis.odds.show_affiliate_link ? (
                               <a
