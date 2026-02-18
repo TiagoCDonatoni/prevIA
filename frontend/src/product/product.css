@@ -799,3 +799,210 @@
   gap: 8px;
   flex-wrap: nowrap;
 }
+
+/* PlanChangeModal */
+.pcm-grid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 560px){
+  .pcm-grid{ grid-template-columns: 1fr 1fr; }
+}
+
+.pcm-card{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  background: #fff;
+}
+
+.pcm-card.is-rec{
+  outline: 2px solid rgba(15,23,42,0.18);
+}
+
+.pcm-top{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pcm-name{
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.pcm-badge{
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pcm-meta{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pcm-plus{
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.pcm-actions{
+  margin-top: 12px;
+  display:flex;
+  justify-content:flex-end;
+}
+
+/* ===== Plans (columns) ===== */
+.plan-cols{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap:16px;
+}
+
+@media (max-width: 920px){
+  .plan-cols{ grid-template-columns: 1fr; }
+}
+
+.plan-col{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+  display:flex;
+  flex-direction:column;
+  gap: 10px;
+  min-height: 320px;
+}
+
+.plan-col.is-rec{
+  border-color: rgba(0,0,0,0.25);
+  transform: translateY(-2px);
+}
+
+.plan-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap: 12px;
+}
+
+.plan-title{
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.plan-badge{
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.03);
+  white-space: nowrap;
+}
+
+.plan-desc{
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+  min-height: 36px;
+}
+
+.plan-features{
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.plan-feature{
+  font-size: 13px;
+  color: #111;
+}
+
+.plan-price{
+  margin-top: auto;
+  padding-top: 10px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap: 2px;
+}
+
+.plan-price-value{
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.plan-price-placeholder{
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.plan-price-sub{
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-actions{
+  display:flex;
+  justify-content:center;
+  padding-top: 8px;
+}
+
+.um-btn-secondary.is-primary{
+  border-color: rgba(0,0,0,0.30);
+}
+
+/* ===== Plan selection states ===== */
+.plan-col{
+  cursor: pointer;
+  user-select: none;
+}
+
+.plan-col:focus{
+  outline: none;
+}
+
+.plan-col.is-selected{
+  border-color: rgba(0,0,0,0.35);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.10);
+}
+
+/* Badge recomendado com destaque */
+.plan-badge{
+  border: none;
+  background: rgba(16, 185, 129, 0.12); /* verde leve */
+  color: rgb(6, 95, 70);
+  font-weight: 700;
+}
+
+/* Botão primário (se não existir no projeto) */
+.um-btn-primary{
+  border: 1px solid rgba(0,0,0,0.18);
+  background: rgba(0,0,0,0.92);
+  color: #fff;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.um-btn-primary:disabled{
+  opacity: 0.5;
+  cursor: not-allowed;
+}
