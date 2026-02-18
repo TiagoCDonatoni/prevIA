@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 
 import { t, type Lang } from "../i18n";
 import {
@@ -45,12 +45,24 @@ export function PlanChangeModal(props: {
     [lang]
   );
 
-  if (!props.open) return null;
-
+  // ✅ calcule isso ANTES do early return (não é hook, pode)
   const higherPlans = getHigherPlans(currentPlan);
-
   const currentLimit = dailyLimitForPlan(currentPlan);
   const recommendedPlan = getRecommendedPlanId(currentPlan);
+
+  // ✅ hooks SEMPRE antes de qualquer return condicional
+  const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(null);
+
+  useEffect(() => {
+    // quando abrir ou mudar o contexto, reseta seleção
+    if (!props.open) return;
+    const nextSelected = (recommendedPlan ?? higherPlans[0] ?? null) as PlanId | null;
+    setSelectedPlan(nextSelected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.open, currentPlan, props.reason]);
+
+  // ✅ agora pode retornar
+  if (!props.open) return null;
 
   // Mantém delta/nextLimit para o copy atual (NO_CREDITS/FEATURE_LOCKED)
   const nextPlanForCopy = getNextPlan(currentPlan);
@@ -81,19 +93,6 @@ export function PlanChangeModal(props: {
         });
 
   const showPlans = higherPlans.length > 0;
-
-  // seleção: default = recomendado; fallback = primeiro plano superior
-  const defaultSelected = (recommendedPlan ?? higherPlans[0] ?? null) as PlanId | null;
-
-  const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(defaultSelected);
-
-  useEffect(() => {
-    // sempre que abrir o modal ou mudar contexto, reseta seleção pro recomendado
-    if (!props.open) return;
-    const nextSelected = (recommendedPlan ?? higherPlans[0] ?? null) as PlanId | null;
-    setSelectedPlan(nextSelected);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.open, currentPlan, props.reason]);
 
   return (
     <div className="um-overlay" role="dialog" aria-modal="true">
