@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 
 import { t, type Lang } from "../i18n";
 import {
@@ -82,9 +82,22 @@ export function PlanChangeModal(props: {
 
   const showPlans = higherPlans.length > 0;
 
+  // seleção: default = recomendado; fallback = primeiro plano superior
+  const defaultSelected = (recommendedPlan ?? higherPlans[0] ?? null) as PlanId | null;
+
+  const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(defaultSelected);
+
+  useEffect(() => {
+    // sempre que abrir o modal ou mudar contexto, reseta seleção pro recomendado
+    if (!props.open) return;
+    const nextSelected = (recommendedPlan ?? higherPlans[0] ?? null) as PlanId | null;
+    setSelectedPlan(nextSelected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.open, currentPlan, props.reason]);
+
   return (
     <div className="um-overlay" role="dialog" aria-modal="true">
-      <div className="um-modal" style={{ maxWidth: 560 }}>
+      <div className="um-modal" style={{ maxWidth: 920 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <h2 style={{ margin: 0 }}>{title}</h2>
           <p style={{ margin: 0, color: "var(--muted)" }}>{subtitle}</p>
@@ -122,10 +135,17 @@ export function PlanChangeModal(props: {
                     : "plans.pro.desc";
 
                 return (
-                  <div
-                    key={pid}
-                    className={`plan-col ${isRecommended ? "is-rec" : ""}`}
-                  >
+                    <div
+                      key={pid}
+                      className={`plan-col ${isRecommended ? "is-rec" : ""} ${selectedPlan === pid ? "is-selected" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedPlan(pid)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") setSelectedPlan(pid);
+                      }}
+                    >
+
                     <div className="plan-head">
                       <div className="plan-title">{tr(nameKey)}</div>
                       {isRecommended ? (
@@ -172,20 +192,6 @@ export function PlanChangeModal(props: {
                         {tr("plans.price.perMonth")}
                       </div>
                     </div>
-
-                    <div className="plan-actions">
-                      <button
-                        className={`um-btn-secondary ${
-                          isRecommended ? "is-primary" : ""
-                        }`}
-                        onClick={() => {
-                          store.setPlan(pid);
-                          props.onClose();
-                        }}
-                      >
-                        {tr("plans.cta.upgrade")}
-                      </button>
-                    </div>
                   </div>
                 );
               })}
@@ -203,11 +209,24 @@ export function PlanChangeModal(props: {
           )}
         </div>
 
-        <div className="um-actions" style={{ marginTop: 16 }}>
+        <div className="um-actions" style={{ marginTop: 16, display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button className="um-btn-secondary" onClick={props.onClose}>
             {tr("common.notNow")}
           </button>
+
+          <button
+            className="um-btn-primary"
+            disabled={!selectedPlan}
+            onClick={() => {
+              if (!selectedPlan) return;
+              store.setPlan(selectedPlan);
+              props.onClose();
+            }}
+          >
+            {tr("plans.cta.upgrade")}
+          </button>
         </div>
+
       </div>
     </div>
   );
