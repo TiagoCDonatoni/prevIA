@@ -23,6 +23,7 @@ def _persist_odds_h2h_batch(conn, sport_key: str, raw_events: List[Dict[str, Any
     Copiado do admin_odds_router.py (persistência em odds.odds_events + odds.odds_snapshots_1x2).
     Mantém a mesma lógica/SQL para não mudar comportamento.
     """
+    market_inserted = 0
     c_events_upsert = 0
     c_snapshots_inserted = 0
     c_snapshots_skipped = 0
@@ -187,13 +188,16 @@ def _persist_odds_h2h_batch(conn, sport_key: str, raw_events: List[Dict[str, Any
                     )
                     if cur.rowcount == 1:
                         c_snapshots_inserted += 1
+                        market_inserted += 1
                     else:
                         c_snapshots_skipped += 1
+                        market_inserted += 1
 
     return {
         "events_upserted": c_events_upsert,
         "snapshots_inserted": c_snapshots_inserted,
         "snapshots_skipped": c_snapshots_skipped,
+        "market_snapshots_attempted": market_inserted,
     }
 
 
