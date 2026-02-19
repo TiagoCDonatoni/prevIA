@@ -44,6 +44,16 @@ def _persist_odds_h2h_batch(conn, sport_key: str, raw_events: List[Dict[str, Any
       ON CONFLICT DO NOTHING
     """
 
+    sql_insert_market_snapshot = """
+      INSERT INTO odds.odds_snapshots_market (
+        event_id, bookmaker, market_key, selection_key, point, price, captured_at_utc
+      )
+      VALUES (
+        %(event_id)s, %(bookmaker)s, %(market_key)s, %(selection_key)s, %(point)s, %(price)s, %(captured_at_utc)s
+      )
+      ON CONFLICT DO NOTHING
+    """
+
     with conn.cursor() as cur:
         for ev in raw_events:
             event_id = ev.get("id")
@@ -72,10 +82,80 @@ def _persist_odds_h2h_batch(conn, sport_key: str, raw_events: List[Dict[str, Any
                 bk_title = bk.get("title") or bk.get("key")
                 markets = bk.get("markets") or []
                 for mkt in markets:
-                    if (mkt.get("key") or "") != "h2h":
+                    mkey = (mkt.get("key") or "").strip().lower()
+                    if mkey not in ("h2h", "totals", "btts"):
                         continue
 
                     outcomes = mkt.get("outcomes") or []
+
+                    # 1) Persistência genérica (odds_snapshots_market)
+                    # - h2h: H/D/A (point = None)
+                    # - totals: over/under (point obrigatório)
+                    # - btts: yes/no (point = None)
+                    for o in outcomes:
+                        nm = o.get("name")
+                        pr = o.get("price")
+                        pt = o.get("point")
+
+                        if pr is None or nm is None:
+                            continue
+
+                        selection_key = None
+                        point = None
+
+                        if mkey == "h2h":
+                            # name vem como home_team / away_team / Draw
+                            if nm == home:
+                                selection_key = "H"
+                            elif nm == away:
+                                selection_key = "A"
+                            elif isinstance(nm, str) and nm.strip().lower() == "draw":
+                                selection_key = "D"
+                            point = None
+
+                        elif mkey == "totals":
+                            # name vem como Over/Under e point = 2.5 etc.
+                            if isinstance(nm, str):
+                                low = nm.strip().lower()
+                                if low == "over":
+                                    selection_key = "over"
+                                elif low == "under":
+                                    selection_key = "under"
+                            # point é obrigatório para totals (se não vier, não gravamos)
+                            point = pt if pt is not None else None
+                            if point is None:
+                                continue
+
+                        elif mkey == "btts":
+                            # name vem como Yes/No
+                            if isinstance(nm, str):
+                                low = nm.strip().lower()
+                                if low == "yes":
+                                    selection_key = "yes"
+                                elif low == "no":
+                                    selection_key = "no"
+                            point = None
+
+                        if not selection_key:
+                            continue
+
+                        cur.execute(
+                            sql_insert_market_snapshot,
+                            {
+                                "event_id": str(event_id),
+                                "bookmaker": str(bk_title) if bk_title else None,
+                                "market_key": mkey,
+                                "selection_key": selection_key,
+                                "point": point,
+                                "price": pr,
+                                "captured_at_utc": captured_at_utc,
+                            },
+                        )
+
+                    # 2) Persistência legada (odds_snapshots_1x2) - mantém comportamento atual
+                    if mkey != "h2h":
+                        continue
+
                     odds_home = None
                     odds_draw = None
                     odds_away = None
