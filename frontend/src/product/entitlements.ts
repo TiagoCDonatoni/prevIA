@@ -39,6 +39,21 @@ export type Entitlements = {
   };
 };
 
+
+export const PLAN_ORDER: PlanId[] = ["FREE_ANON", "FREE", "BASIC", "LIGHT", "PRO"];
+
+export function getNextPlan(plan: PlanId): PlanId | null {
+  const idx = PLAN_ORDER.indexOf(plan);
+  if (idx === -1 || idx === PLAN_ORDER.length - 1) return null;
+  return PLAN_ORDER[idx + 1];
+}
+
+export function getHigherPlans(plan: PlanId): PlanId[] {
+  const idx = PLAN_ORDER.indexOf(plan);
+  if (idx === -1) return PLAN_ORDER.slice(1);
+  return PLAN_ORDER.slice(idx + 1);
+}
+
 export const PLAN_LABELS: Array<{ id: PlanId; label: string }> = [
   { id: "FREE_ANON", label: "Free (anon)" },
   { id: "FREE", label: "Free+" },
@@ -159,14 +174,6 @@ function nextResetIso(now = new Date()): string {
   return next.toISOString();
 }
 
-function detectBrowserLang(): Lang {
-  const raw = (navigator.languages?.[0] ?? navigator.language ?? "en").toLowerCase();
-
-  if (raw.startsWith("pt")) return "pt";
-  if (raw.startsWith("es")) return "es";
-  return "en";
-}
-
 function normalizeLang(raw: string | null | undefined): Lang {
   const v = String(raw ?? "").toLowerCase();
 
@@ -199,12 +206,16 @@ export function loadProductState(): PersistedState {
 
   try {
     const parsed = JSON.parse(raw) as PersistedState;
+
     if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
-    if (!parsed.lang) parsed.lang = detectBrowserLang();
+
+    // garante: só pt/en/es; resto vira en
+    parsed.lang = normalizeLang(parsed.lang);
 
     if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
       parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
     }
+
     return parsed;
   } catch {
     return {

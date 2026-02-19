@@ -49,6 +49,8 @@ class OddsEventRow(BaseModel):
     odds_best: Optional[Dict[str, Optional[float]]] = None  # H/D/A
     odds_books: Optional[List[OddsBook]] = None
     edge_summary: Optional[EdgeSummary] = None
+    resolved_home_team_id: Optional[int] = None
+    resolved_away_team_id: Optional[int] = None
 
 class OddsBook(BaseModel):
     key: str
@@ -56,20 +58,6 @@ class OddsBook(BaseModel):
     is_affiliate: bool = False
     url: Optional[str] = None
     odds_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
-
-
-class OddsEventRow(BaseModel):
-    event_id: str
-    sport_key: str
-    commence_time_utc: Optional[str] = None
-    home_name: str
-    away_name: str
-    latest_captured_at_utc: Optional[str] = None
-    match_status: Optional[str] = None
-    match_score: Optional[float] = None
-
-    odds_books: Optional[List[OddsBook]] = None
-    odds_best: Optional[Dict[str, Optional[float]]] = None  # <-- ADD
 
 class OddsEventsResponse(BaseModel):
     ok: bool = True

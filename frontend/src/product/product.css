@@ -1006,3 +1006,67 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.pi-narrative{
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px 12px;
+  background: #f8fafc;
+  margin-bottom: 10px;
+}
+
+.pi-narrative-head{
+  font-weight: 900;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.pi-narrative-summary{
+  margin-top: 6px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.35;
+}
+
+.pi-narrative-bullets{
+  margin: 8px 0 0 16px;
+  padding: 0;
+  color: #334155;
+  font-size: 12px;
+}
+
+.pi-narrative-bullets li{
+  margin: 4px 0;
+}
+
+.pi-narrative-warn{
+  margin-top: 10px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.pi-narrative-disclaimer{
+  margin-top: 8px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.pi-narrative-price{
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.pi-narrative-pricepro{
+  margin-top: 6px;
+  font-size: 11px;
+  color: #64748b;
+}

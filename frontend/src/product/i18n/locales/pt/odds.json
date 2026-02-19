@@ -31,5 +31,7 @@
   "noOdds": "Sem odds no momento.",
   "metaCount": "Exibindo: {showing} ({loaded} carregados)",
   "revealHint": "Clique em “Ver análise” para ver as probabilidades.",
-  "filterLeague": "Filtrar por liga"
+  "filterLeague": "Filtrar por liga",
+  "opportunityDetected": "🔥 Oportunidade detectada"
+
 }

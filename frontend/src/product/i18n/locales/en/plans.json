@@ -1,9 +1,21 @@
 {
-  "freeAnon": { "name": "Free", "badge": "No login" },
-  "free": { "name": "Free+", "badge": "With login" },
-  "basic": { "name": "Basic", "badge": "More credits" },
-  "light": { "name": "Light", "badge": "More context" },
-  "pro": { "name": "Pro", "badge": "Advanced" },
+  "freeAnon": { "name": "Free", "badge": "No login", "desc": "Quick trial without an account" },
+  "free": { "name": "Free+", "badge": "With login", "desc": "Start and try the product" },
+  "basic": { "name": "Basic", "badge": "More credits", "desc": "Light use and consistency" },
+  "light": { "name": "Light", "badge": "More context", "desc": "Follow multiple games with room to spare" },
+  "pro": { "name": "Pro", "badge": "Advanced", "desc": "High volume and maximum consistency" },
+
+  "badge": { "recommended": "Recommended" },
+  "units": { "creditsPerDay": "credits/day" },
+  "copy": {
+    "moreCredits": "+{plus}/day vs current",
+    "lessInterruptions": "Fewer interruptions due to limits"
+  },
+  "price": {
+    "placeholder": "Pricing soon",
+    "perMonth": "per month"
+  },
+
   "cta": {
     "createAccount": "Create account",
     "seePlans": "See plans",

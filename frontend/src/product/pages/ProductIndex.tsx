@@ -4,7 +4,11 @@ import type { ProductOddsBook, ProductOddsEvent, ProductOddsQuoteResponse } from
 import { productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
 import { useProductStore } from "../state/productStore";
-import UpgradeModal from "../components/UpgradeModal";
+import { PlanChangeModal } from "../components/PlanChangeModal";
+
+import { generateNarrative } from "../narrative/generateNarrative";
+import type { NarrativeDepth } from "../narrative/types";
+import type { PlanId } from "../entitlements";
 
 // MVP: defaults do produto (TUDO fácil de mover para config depois)
 const DEFAULTS = {
@@ -259,10 +263,19 @@ function LockedPanel({
   );
 }
 
+function narrativeDepthForPlan(plan: PlanId): NarrativeDepth {
+  if (plan === "PRO") return 4;
+  if (plan === "LIGHT") return 3;
+  if (plan === "BASIC") return 2;
+  return 1; // FREE / FREE_ANON
+}
+
 export default function ProductIndex() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
   const vis = store.entitlements.visibility;
+
+  const plan = store.entitlements.plan as PlanId;
 
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>("NO_CREDITS");
@@ -636,93 +649,173 @@ export default function ProductIndex() {
               {!quote ? (
                 <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
               ) : (
+                <>
+                  {/* ===== Narrativa (destaque) ===== */}
+                  {(() => {
+                    const depth = narrativeDepthForPlan(plan);
 
-                <div className="pi-panels">
-                  <div className="pi-panel">
-                    <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
-                    {quote.probs ? (
-                      <div className="pi-panel-value">
-                        H {fmtPct(quote.probs.H)} <br />
-                        D {fmtPct(quote.probs.D)} <br />
-                        A {fmtPct(quote.probs.A)}
-                      </div>
-                    ) : (
-                      <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
-                    )}
-                  </div>
+                    const oddsBest =
+                      quote?.odds?.best
+                        ? {
+                            H: quote.odds.best.H ?? null,
+                            D: quote.odds.best.D ?? null,
+                            A: quote.odds.best.A ?? null,
+                          }
+                        : selected?.odds_best
+                        ? {
+                            H: selected.odds_best.H ?? null,
+                            D: selected.odds_best.D ?? null,
+                            A: selected.odds_best.A ?? null,
+                          }
+                        : null;
 
-                  <div className="pi-panel">
-                    <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
-                    {quote.odds?.best ? (
-                      <div className="pi-panel-value">
-                        H {fmtOdds(quote.odds.best.H)} <br />
-                        D {fmtOdds(quote.odds.best.D)} <br />
-                        A {fmtOdds(quote.odds.best.A)}
-                      </div>
-                    ) : (
-                      <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
-                    )}
-                  </div>
+                    const narrative = generateNarrative({
+                      meta: { version: "narrative.v1", lang, depth },
+                      match: {
+                        homeTeam: selected.home_name,
+                        awayTeam: selected.away_name,
+                      },
+                      model: {
+                        probs: quote.probs ?? null,
+                        status: quote?.matchup?.status ?? null,
+                      },
+                      market: {
+                        odds_1x2_best: oddsBest,
+                      },
+                    });
 
-                  {/* Confiança (por plano) */}
-                  {vis.context.show_confidence_level ? (
-                    <div className="pi-panel">
-                      <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
-                      <div className="pi-panel-value">{fmtPct(quote?.matchup?.confidence ?? 0)}</div>
-                      <div className="pi-muted">
-                        {t(lang, "matchup.status")}: <b>{quote?.matchup?.status}</b>
-                      </div>
-                    </div>
-                  ) : (
-                    <LockedPanel
-                      title={t(lang, "matchup.confidence")}
-                      lang={lang}
-                      onUnlock={() => {
-                        setUpgradeReason("FEATURE_LOCKED");
-                        setUpgradeOpen(true);
-                      }}
-                    />
-                  )}
+                    const headline = narrative.blocks.find((b) => b.type === "headline");
+                    const summary = narrative.blocks.find((b) => b.type === "summary");
+                    const price = narrative.blocks.find((b) => b.type === "price");
+                    const pricePro = narrative.blocks.find((b) => b.type === "pricePro");
+                    const bullets = narrative.blocks.filter((b) => b.type === "bullet");
+                    const warning = narrative.blocks.find((b) => b.type === "warning");
+                    const disclaimer = narrative.blocks.find((b) => b.type === "disclaimer");
 
-                  {/* Edge (por plano) */}
-                  {vis.value.show_edge_percent ? (
-                    quote?.value?.edge ? (
-                      <div className="pi-panel">
-                        <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                        <div className="pi-panel-value">
-                          H {fmtPct(quote.value.edge.H)} <br />
-                          D {fmtPct(quote.value.edge.D)} <br />
-                          A {fmtPct(quote.value.edge.A)}
-                        </div>
+                    return (
+                      <div className="pi-narrative">
+                        {headline ? <div className="pi-narrative-head">{headline.text}</div> : null}
+                        {summary ? <div className="pi-narrative-summary">{summary.text}</div> : null}
+                        {price ? <div className="pi-narrative-price">{price.text}</div> : null}
+                        {pricePro ? <div className="pi-narrative-pricepro">{pricePro.text}</div> : null}
+                        
+                        {bullets.length ? (
+                          <ul className="pi-narrative-bullets">
+                            {bullets.map((b, i) => (
+                              <li key={i}>{b.text}</li>
+                            ))}
+                          </ul>
+                        ) : null}
 
-                        {vis.value.show_value_detected ? (
-                          <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
+                        {warning ? <div className="pi-narrative-warn">{warning.text}</div> : null}
+                        {disclaimer ? (
+                          <div className="pi-narrative-disclaimer">{disclaimer.text}</div>
                         ) : null}
                       </div>
-                    ) : (
+                    );
+                  })()}
+
+                  {/* ===== Painéis técnicos (mantidos) ===== */}
+                  <div className="pi-panels">
+                    {/* Probabilidades */}
+                    <div className="pi-panel">
+                      <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
+                      {quote.probs ? (
+                        <div className="pi-panel-value">
+                          H {fmtPct(quote.probs.H)} <br />
+                          D {fmtPct(quote.probs.D)} <br />
+                          A {fmtPct(quote.probs.A)}
+                        </div>
+                      ) : (
+                        <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
+                      )}
+                    </div>
+
+                    {/* Melhor odd */}
+                    <div className="pi-panel">
+                      <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
+                      {quote.odds?.best ? (
+                        <div className="pi-panel-value">
+                          H {fmtOdds(quote.odds.best.H)} <br />
+                          D {fmtOdds(quote.odds.best.D)} <br />
+                          A {fmtOdds(quote.odds.best.A)}
+                        </div>
+                      ) : quote.odds_best ? (
+                        <div className="pi-panel-value">
+                          H {fmtOdds(quote.odds_best.H)} <br />
+                          D {fmtOdds(quote.odds_best.D)} <br />
+                          A {fmtOdds(quote.odds_best.A)}
+                        </div>
+                      ) : (
+                        <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
+                      )}
+                    </div>
+
+                    {/* Confiança (por plano) */}
+                    {vis.context.show_confidence_level ? (
                       <div className="pi-panel">
-                        <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                        <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                        <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
+                        <div className="pi-panel-value">{fmtPct(quote?.matchup?.confidence ?? 0)}</div>
+                        <div className="pi-muted">
+                          {t(lang, "matchup.status")}: <b>{quote?.matchup?.status}</b>
+                        </div>
                       </div>
-                    )
-                  ) : (
-                    <LockedPanel
-                      title={t(lang, "matchup.edge")}
-                      lang={lang}
-                      onUnlock={() => {
-                        setUpgradeReason("FEATURE_LOCKED");
-                        setUpgradeOpen(true);
-                      }}
-                    />
-                  )}
-                </div>
+                    ) : (
+                      <LockedPanel
+                        title={t(lang, "matchup.confidence")}
+                        lang={lang}
+                        onUnlock={() => {
+                          setUpgradeReason("FEATURE_LOCKED");
+                          setUpgradeOpen(true);
+                        }}
+                      />
+                    )}
+
+                    {/* Edge (por plano) */}
+                    {vis.value.show_edge_percent ? (
+                      quote?.value?.edge ? (
+                        <div className="pi-panel">
+                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                          <div className="pi-panel-value">
+                            H {fmtPct(quote.value.edge.H)} <br />
+                            D {fmtPct(quote.value.edge.D)} <br />
+                            A {fmtPct(quote.value.edge.A)}
+                          </div>
+
+                          {vis.value.show_value_detected ? (
+                            <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="pi-panel">
+                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                          <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                        </div>
+                      )
+                    ) : (
+                      <LockedPanel
+                        title={t(lang, "matchup.edge")}
+                        lang={lang}
+                        onUnlock={() => {
+                          setUpgradeReason("FEATURE_LOCKED");
+                          setUpgradeOpen(true);
+                        }}
+                      />
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
         </aside>
       </div>
 
-      <UpgradeModal open={upgradeOpen} reason={upgradeReason} onClose={() => setUpgradeOpen(false)} />
+      <PlanChangeModal
+        open={upgradeOpen}
+        reason={upgradeReason}
+        onClose={() => setUpgradeOpen(false)}
+      />
     </div>
   );
 }
+

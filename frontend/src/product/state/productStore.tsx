@@ -31,6 +31,8 @@ export type ProductStore = {
   // Dev-only helper
   resetForTesting: () => void;
   resetNonce: number;
+  i18nNonce: number;
+
 };
 
 const ProductStoreCtx = createContext<ProductStore | null>(null);
@@ -38,6 +40,21 @@ const ProductStoreCtx = createContext<ProductStore | null>(null);
 export function ProductStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<ProductPersistedState>(() => loadProductState());
   const [resetNonce, setResetNonce] = useState(0);
+  const [i18nNonce, setI18nNonce] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+
+    warmI18n(state.lang as Lang)
+      .then(() => {
+        if (alive) setI18nNonce((n) => n + 1); // força re-render após carregar o dict
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+    };
+  }, [state.lang]);
 
   // Persist helper that always writes localStorage
   const persist = useCallback((next: ProductPersistedState) => {
@@ -157,8 +174,22 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       tryReveal,
       resetForTesting,
       resetNonce,
+      // 🔹 apenas para re-render quando i18n carrega
+      i18nNonce,
     }),
-    [state, entitlements, setPlan, setLang, setAuth, canReveal, isRevealed, tryReveal, resetForTesting, resetNonce]
+    [
+      state,
+      entitlements,
+      setPlan,
+      setLang,
+      setAuth,
+      canReveal,
+      isRevealed,
+      tryReveal,
+      resetForTesting,
+      resetNonce,
+      i18nNonce,
+    ]
   );
 
   return <ProductStoreCtx.Provider value={value}>{children}</ProductStoreCtx.Provider>;

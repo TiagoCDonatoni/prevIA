@@ -1,14 +1,20 @@
-import React from "react";
+import React, { useState } from "react";
 import { Outlet } from "react-router-dom";
 
 import { LANGS, t, type Lang } from "../i18n";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
+import { ProductAuthModal } from "../auth/ProductAuthModal";
+import { PlanChangeModal } from "../components/PlanChangeModal";
+
+import brFlag from "../assets/br.svg";
+import gbFlag from "../assets/gb.svg";
+import esFlag from "../assets/es.svg";
 
 function langLabel(l: Lang) {
-  if (l === "pt") return { flag: "🇧🇷", code: "PT", name: "Português" };
-  if (l === "en") return { flag: "🇬🇧", code: "EN", name: "English" };
-  return { flag: "🇪🇸", code: "ES", name: "Español" };
+  if (l === "pt") return { src: brFlag, code: "PT", name: "Português" };
+  if (l === "en") return { src: gbFlag, code: "EN", name: "English" };
+  return { src: esFlag, code: "ES", name: "Español" };
 }
 
 function LangDropdown({
@@ -31,7 +37,12 @@ function LangDropdown({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="lang-flag" aria-hidden="true">{cur.flag}</span>
+        <img
+            src={cur.src}
+            alt=""
+            className="lang-flag-img"
+            aria-hidden="true"
+          />
         <span className="lang-code">{cur.code}</span>
         <span className="lang-caret" aria-hidden="true">▾</span>
       </button>
@@ -53,7 +64,12 @@ function LangDropdown({
                   setOpen(false);
                 }}
               >
-                <span className="lang-flag" aria-hidden="true">{it.flag}</span>
+                <img
+                  src={it.src}
+                  alt=""
+                  className="lang-flag-img"
+                  aria-hidden="true"
+                />
                 <span className="lang-code">{it.code}</span>
                 <span className="lang-name">{it.name}</span>
               </button>
@@ -71,6 +87,10 @@ export function ProductLayout() {
   const plan = store.state.plan;
   const DEV = import.meta.env.DEV;
 
+  const [authOpen, setAuthOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">("MANUAL");
+
   const remaining = store.entitlements.credits.remaining_today;
   const limit = store.entitlements.credits.daily_limit;
 
@@ -80,44 +100,6 @@ export function ProductLayout() {
         <div className="product-brand">{t(lang, "common.appName")}</div>
 
         <div className="product-header-right">
-          <div className="product-pill">
-            <span className="product-pill-label">{t(lang, "nav.language")}</span>
-
-            <div className="lang-toggle" role="tablist" aria-label={t(lang, "nav.language")}>
-              <button
-                type="button"
-                className={`lang-btn ${lang === "pt" ? "is-active" : ""}`}
-                onClick={() => store.setLang("pt")}
-                aria-pressed={lang === "pt"}
-                title="Português (Brasil)"
-              >
-                <span className="lang-flag" aria-hidden="true">🇧🇷</span>
-                <span className="lang-code">PT</span>
-              </button>
-
-              <button
-                type="button"
-                className={`lang-btn ${lang === "en" ? "is-active" : ""}`}
-                onClick={() => store.setLang("en")}
-                aria-pressed={lang === "en"}
-                title="English (UK)"
-              >
-                <span className="lang-flag" aria-hidden="true">🇬🇧</span>
-                <span className="lang-code">EN</span>
-              </button>
-
-              <button
-                type="button"
-                className={`lang-btn ${lang === "es" ? "is-active" : ""}`}
-                onClick={() => store.setLang("es")}
-                aria-pressed={lang === "es"}
-                title="Español (España)"
-              >
-                <span className="lang-flag" aria-hidden="true">🇪🇸</span>
-                <span className="lang-code">ES</span>
-              </button>
-            </div>
-          </div>
 
           {DEV ? (
             <div className="product-pill">
@@ -151,6 +133,10 @@ export function ProductLayout() {
             </button>
           ) : null}
 
+          <div className="product-pill product-pill-lang">
+            <LangDropdown value={lang} onChange={(v) => store.setLang(v)} />
+          </div>
+
           <div className="pl-credits-wrap">
             <div className="pl-credits">
               {t(lang, "credits.counter", { remaining, limit })}
@@ -181,7 +167,8 @@ export function ProductLayout() {
                 <button
                   className="pl-credits-cta"
                   onClick={() => {
-                    setUpgradeOpen(true);
+                    setPlanReason("MANUAL");
+                      setPlanOpen(true);
                   }}
                 >
                   {t(lang, "credits.moreCredits")}
@@ -203,6 +190,28 @@ export function ProductLayout() {
           © {new Date().getFullYear()} {t(lang, "common.appName")}
         </span>
       </footer>
+
+      <ProductAuthModal
+        open={authOpen}
+        lang={lang}
+        initialMode="signup"
+        onClose={() => setAuthOpen(false)}
+        onAuthSuccess={(payload) => {
+          // MVP: após "criar conta", troca o plano de FREE_ANON para FREE (Free+)
+          store.setAuth({ is_logged_in: true, email: payload.email });
+          if (store.state.plan === "FREE_ANON") {
+            store.setPlan("FREE");
+          }
+          setAuthOpen(false);
+        }}
+      />
+
+      <PlanChangeModal
+        open={planOpen}
+        reason={planReason}
+        onClose={() => setPlanOpen(false)}
+      />
+
     </div>
   );
 }
