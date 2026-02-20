@@ -16,6 +16,15 @@ from src.odds.matchup_resolver import resolve_odds_event
 from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
 from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
 
+from src.ops.job_runs import (
+    JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+    CALC_VERSION_SNAPSHOT_V1,
+    start_job_run,
+    finish_job_run,
+    get_last_success_finished_at,
+)
+from src.product.model_registry import get_active_model_version, get_calc_version
+
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
 # MVP: default artifact (ajuste se você quiser centralizar isso em settings)
@@ -355,9 +364,6 @@ def admin_odds_upcoming(
             }
         )
     return out
-
-from pydantic import BaseModel
-
 
 class AdminOddsRefreshResponse(BaseModel):
     ok: bool = True
@@ -752,12 +758,27 @@ def admin_odds_refresh(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"persist_failed: {e}")
 
-    # 4) Gatilho MVP: rebuild snapshots de modelo após refresh
+    # 4) Gatilho MVP: rebuild snapshots do produto após refresh (incremental por event_ids) + observabilidade
     try:
-        from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
+        import time as _time
+
+        mv = get_active_model_version()
+        cv = get_calc_version()
+
+        t0 = _time.time()
 
         with pg_conn() as conn2:
             conn2.autocommit = False
+
+            # job_run start
+            run_id = start_job_run(
+                conn2,
+                job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                scope_key=sport_key,
+                model_version=mv,
+                calc_version=cv,
+            )
+            conn2.commit()
 
             with conn2.cursor() as cur:
                 cur.execute("SET LOCAL statement_timeout = '60s'")
@@ -766,17 +787,57 @@ def admin_odds_refresh(
             snap_counters = rebuild_matchup_snapshots_v1(
                 conn2,
                 sport_key=sport_key,
-                model_version="model_v0",
-                event_ids=event_ids,  # <-- incremental
+                model_version=mv,
+                event_ids=event_ids,  # incremental real
             )
 
             conn2.commit()
 
-        counters["matchup_snapshots_rebuilt"] = int(snap_counters.get("snapshots_upserted", 0))
-        counters["matchup_snapshots_candidates"] = int(snap_counters.get("candidates", 0))
+            counters_payload = dict(snap_counters or {})
+            counters_payload["mode"] = "event_ids"
+            counters_payload["event_ids_count"] = int(len(event_ids or []))
+            counters_payload["model_version"] = mv
+            counters_payload["calc_version"] = cv
+
+            finish_job_run(
+                conn2,
+                run_id=run_id,
+                ok=True,
+                duration_ms=int(round((_time.time() - t0) * 1000)),
+                counters=counters_payload,
+                error_text=None,
+            )
+            conn2.commit()
+
+        counters["matchup_snapshots_rebuilt"] = int((snap_counters or {}).get("snapshots_upserted", 0))
+        counters["matchup_snapshots_candidates"] = int((snap_counters or {}).get("candidates", 0))
 
     except Exception as e:
-        # não quebrar refresh por causa do rebuild
+        # não quebrar refresh por causa do rebuild, mas registrar falha (best-effort)
+        try:
+            import time as _time
+
+            with pg_conn() as connE:
+                connE.autocommit = False
+                run_id = start_job_run(
+                    connE,
+                    job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                    scope_key=sport_key,
+                    model_version=get_active_model_version(),
+                    calc_version=get_calc_version(),
+                )
+                finish_job_run(
+                    connE,
+                    run_id=run_id,
+                    ok=False,
+                    duration_ms=0,
+                    counters=None,
+                    error_text=f"{type(e).__name__}: {e}",
+                )
+                connE.commit()
+        except Exception:
+            pass
+
         counters["matchup_snapshots_rebuilt"] = 0
         counters["matchup_snapshots_error"] = str(e)
 
@@ -797,44 +858,6 @@ class AdminOddsResolveBatchResponse(BaseModel):
     tol_hours: int
     counters: Dict[str, int]
     sample_issues: List[Dict[str, Any]] = []
-
-@router.post("/refresh_and_resolve")
-def admin_odds_refresh_and_resolve(
-    sport_key: str = Query(..., min_length=2),
-    regions: str = Query(default="eu"),
-    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
-    limit: int = Query(default=500, ge=1, le=2000),
-    assume_league_id: int = Query(..., ge=1),
-    assume_season: int = Query(..., ge=1900),
-    tol_hours: int = Query(default=6, ge=1, le=48),
-):
-    """
-    Admin-only (cron-ready): provider refresh + persist + resolve/batch num único passo.
-    """
-    out = run_odds_refresh_and_resolve(
-        sport_key=sport_key,
-        regions=regions,
-        hours_ahead=int(hours_ahead),
-        limit=int(limit),
-        assume_league_id=int(assume_league_id),
-        assume_season=int(assume_season),
-        tol_hours=int(tol_hours),
-    )
-
-    if not out.get("ok"):
-        # manter erro claro no Admin
-        raise HTTPException(status_code=500, detail=out)
-
-    return out
-
-class AdminOddsRefreshAndResolveResponse(BaseModel):
-    ok: bool = True
-    sport_key: str
-    regions: str
-    captured_at_utc: str
-    refresh: Dict[str, Any]
-    resolve: Dict[str, Any]
-
 
 @router.post("/refresh_and_resolve", response_model=AdminOddsRefreshAndResolveResponse)
 def admin_odds_refresh_and_resolve(
@@ -1127,8 +1150,8 @@ def admin_odds_upcoming_orchestrate(
                         artifact_filename=artifact_filename,
                         league_id=int(league_id),
                         season=int(season),
-                        home_team_id=int(home_team_id),
-                        away_team_id=int(away_team_id),
+                        home_team_id=int(home_id),
+                        away_team_id=int(away_id),
                     )
                 except FileNotFoundError as e:
                     raise HTTPException(status_code=404, detail=str(e))
@@ -2065,57 +2088,35 @@ def admin_odds_audit_snapshot(
     Não busca provider externo. Apenas DB + modelo local.
     """
 
-    # MVP: não deixamos janela gigante derrubar o servidor
-    if hours_ahead > 720:
-        hours_ahead = 720
+    # janela: passado recente (auditoria)
+    if hours_back > 720:
+        hours_back = 720
 
     now_utc = datetime.now(timezone.utc)
-    end_utc = now_utc + timedelta(hours=hours_ahead)
+    start_utc = now_utc - timedelta(hours=int(hours_back))
+    end_utc = now_utc
 
-    conf_clause = "TRUE"
-    if min_confidence == "EXACT":
-        conf_clause = "e.match_confidence = 'EXACT'"
-    elif min_confidence == "ILIKE":
-        conf_clause = "e.match_confidence IN ('ILIKE','EXACT')"
-
-    sql = f"""
-      WITH latest AS (
-        SELECT DISTINCT ON (s.event_id)
-          s.event_id,
-          s.bookmaker,
-          s.market,
-          s.odds_home,
-          s.odds_draw,
-          s.odds_away,
-          s.captured_at_utc
-        FROM odds.odds_snapshots_1x2 s
-        ORDER BY s.event_id, s.captured_at_utc DESC
-      )
+    sql = """
       SELECT
         e.event_id,
-        e.commence_time_utc,
-        e.resolved_home_team_id,
-        e.resolved_away_team_id,
-        e.match_confidence,
-        l.bookmaker,
-        l.market,
-        l.odds_home,
-        l.odds_draw,
-        l.odds_away,
-        l.captured_at_utc
+        e.sport_key,
+        e.kickoff_utc,
+        e.home_name,
+        e.away_name,
+        e.fixture_id,
+        e.confidence,
+        e.updated_at_utc
       FROM odds.odds_events e
-      JOIN latest l ON l.event_id = e.event_id
-      WHERE e.sport_key = (%(sport_key)s)::text
-        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
-        AND ({conf_clause})
-      ORDER BY e.commence_time_utc ASC NULLS LAST
+      WHERE e.sport_key = %(sport_key)s
+        AND e.kickoff_utc >= %(start)s
+        AND e.kickoff_utc <= %(end)s
+      ORDER BY e.kickoff_utc DESC
       LIMIT %(limit)s
     """
 
-    rows = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": limit})
+            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": int(limit)})
             rows = cur.fetchall()
 
     inserted = 0
@@ -2470,43 +2471,134 @@ import time
 @router.post("/matchup_snapshots/rebuild")
 def admin_rebuild_matchup_snapshots(
     sport_key: str = Query(..., min_length=2),
+
+    # modo incremental por padrão
+    mode: str = Query(default="incremental"),  # incremental | window
+
+    # incremental inputs
+    event_ids_csv: str = Query(default=""),    # opcional: "id1,id2,id3"
+
+    # window fallback
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
     limit: int = Query(default=200, ge=1, le=2000),
-    model_version: str = Query(default="model_v0"),
+
+    # versão de modelo (default vem do registry/env)
+    model_version: str = Query(default=""),
 ):
+    import time
+
+    # resolve model/calc versions
+    mv = (model_version.strip() if model_version.strip() else get_active_model_version())
+    cv = get_calc_version()
+
     t0 = time.time()
-    print(f"[SNAPSHOT] start sport_key={sport_key} hours_ahead={hours_ahead} limit={limit}", flush=True)
+    print(f"[SNAPSHOT] start sport_key={sport_key} mode={mode} limit={limit} mv={mv} cv={cv}", flush=True)
 
     try:
         with pg_conn() as conn:
             conn.autocommit = False
 
-            # timeouts defensivos (evita “travamento infinito”)
             with conn.cursor() as cur:
-                cur.execute("SET LOCAL statement_timeout = '30s'")
+                cur.execute("SET LOCAL statement_timeout = '60s'")
                 cur.execute("SET LOCAL lock_timeout = '3s'")
 
-            t1 = time.time()
-            print(f"[SNAPSHOT] db connected in {t1 - t0:.3f}s", flush=True)
+            # job_run start
+            run_id = start_job_run(
+                conn,
+                job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                scope_key=sport_key,
+                model_version=mv,
+                calc_version=cv,
+            )
+            conn.commit()  # garante persistência do run_id
 
+            # Decide event_ids
+            event_ids = []
+            if event_ids_csv.strip():
+                event_ids = [x.strip() for x in event_ids_csv.split(",") if x.strip()]
+
+            if (not event_ids) and mode == "incremental":
+                last_ok = get_last_success_finished_at(
+                    conn, job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1, scope_key=sport_key
+                )
+
+                # fallback: se nunca rodou com sucesso, usa janela curta (24h) para iniciar watermark
+                if last_ok is None:
+                    since = datetime.now(timezone.utc) - timedelta(hours=24)
+                else:
+                    since = last_ok
+
+                # eventos atualizados no odds_events desde o último rebuild ok
+                sql = """
+                  SELECT e.event_id
+                  FROM odds.odds_events e
+                  WHERE e.sport_key = %(sport_key)s
+                    AND e.updated_at_utc >= %(since)s
+                  ORDER BY e.updated_at_utc ASC
+                  LIMIT %(limit)s
+                """
+                with conn.cursor() as cur:
+                    cur.execute(sql, {"sport_key": sport_key, "since": since, "limit": int(limit)})
+                    event_ids = [r[0] for r in cur.fetchall()]
+
+            # Rebuild
+            t1 = time.time()
             counters = rebuild_matchup_snapshots_v1(
                 conn,
                 sport_key=sport_key,
                 hours_ahead=int(hours_ahead),
                 limit=int(limit),
-                model_version=model_version,
+                model_version=mv,
+                event_ids=(event_ids if event_ids else None),
             )
-
             t2 = time.time()
-            print(f"[SNAPSHOT] rebuild done in {t2 - t1:.3f}s counters={counters}", flush=True)
+
+            # Enriquecer counters com meta mínima
+            counters = dict(counters or {})
+            counters["mode"] = "event_ids" if event_ids else "window"
+            counters["event_ids_count"] = int(len(event_ids)) if event_ids else 0
+            counters["model_version"] = mv
+            counters["calc_version"] = cv
+            counters["elapsed_rebuild_sec"] = round(t2 - t1, 3)
 
             conn.commit()
-            t3 = time.time()
-            print(f"[SNAPSHOT] commit done in {t3 - t2:.3f}s total={t3 - t0:.3f}s", flush=True)
 
-            return {"ok": True, "sport_key": sport_key, "counters": counters, "elapsed_sec": round(t3 - t0, 3)}
+            # finish job_run ok
+            finish_job_run(
+                conn,
+                run_id=run_id,
+                ok=True,
+                duration_ms=int(round((time.time() - t0) * 1000)),
+                counters=counters,
+                error_text=None,
+            )
+            conn.commit()
+
+            print(f"[SNAPSHOT] done counters={counters}", flush=True)
+            return {"ok": True, "sport_key": sport_key, "counters": counters}
 
     except Exception as e:
-        tE = time.time()
-        print(f"[SNAPSHOT] ERROR after {tE - t0:.3f}s: {type(e).__name__}: {e}", flush=True)
+        # tentamos persistir falha se possível (best-effort)
+        try:
+            with pg_conn() as connE:
+                connE.autocommit = False
+                run_id = start_job_run(
+                    connE,
+                    job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                    scope_key=sport_key,
+                    model_version=(model_version.strip() if model_version.strip() else get_active_model_version()),
+                    calc_version=get_calc_version(),
+                )
+                finish_job_run(
+                    connE,
+                    run_id=run_id,
+                    ok=False,
+                    duration_ms=int(round((time.time() - t0) * 1000)),
+                    counters=None,
+                    error_text=f"{type(e).__name__}: {e}",
+                )
+                connE.commit()
+        except Exception:
+            pass
+
         raise HTTPException(status_code=500, detail=f"snapshot_rebuild_failed: {type(e).__name__}: {e}")
