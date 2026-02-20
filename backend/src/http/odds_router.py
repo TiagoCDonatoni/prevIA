@@ -744,3 +744,117 @@ def get_matchup_snapshot(
         "generated_at_utc": r[10].isoformat().replace("+00:00", "Z") if r[10] else None,
         "updated_at_utc": r[11].isoformat().replace("+00:00", "Z") if r[11] else None,
     }
+
+@router.get("/matchups")
+def list_matchups_cards(
+    sport_key: str = Query(..., min_length=2),
+    hours_ahead: int = Query(default=72, ge=1, le=24 * 30),
+    limit: int = Query(default=50, ge=1, le=500),
+    model_version: str = Query(default="model_v0"),
+):
+    """
+    Lista próximos jogos (odds_events) e junta o snapshot mais recente por fixture_id.
+    Retorna também um summary "flat" para uso direto no card do frontend.
+    """
+    sql = """
+      WITH upcoming AS (
+        SELECT
+          e.event_id,
+          e.sport_key,
+          e.commence_time_utc AS kickoff_utc,
+          e.home_name,
+          e.away_name,
+          e.resolved_fixture_id AS fixture_id
+        FROM odds.odds_events e
+        WHERE e.sport_key = %(sport_key)s
+          AND e.commence_time_utc IS NOT NULL
+          AND e.commence_time_utc >= now()
+          AND e.commence_time_utc <= now() + (%(hours_ahead)s || ' hours')::interval
+        ORDER BY e.commence_time_utc ASC
+        LIMIT %(limit)s
+      ),
+      latest_snap AS (
+        SELECT DISTINCT ON (s.fixture_id)
+          s.fixture_id,
+          s.event_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.model_version = %(model_version)s
+          AND s.fixture_id IS NOT NULL
+        ORDER BY s.fixture_id, s.updated_at_utc DESC
+      )
+      SELECT
+        u.event_id,
+        u.fixture_id,
+        u.kickoff_utc,
+        u.home_name,
+        u.away_name,
+        ls.updated_at_utc AS snapshot_updated_at,
+        ls.payload
+      FROM upcoming u
+      LEFT JOIN latest_snap ls
+        ON ls.fixture_id = u.fixture_id
+      ORDER BY u.kickoff_utc ASC;
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "sport_key": sport_key,
+                    "hours_ahead": int(hours_ahead),
+                    "limit": int(limit),
+                    "model_version": model_version,
+                },
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for r in rows:
+        payload = r[6]
+        summary = None
+
+        # payload pode ser None se ainda não gerou snapshot
+        if isinstance(payload, dict):
+            mk = payload.get("markets") or {}
+            totals = mk.get("totals") or {}
+            totals_p = totals.get("p_model") or {}
+            totals_odds = totals.get("best_odds") or {}
+            btts = mk.get("btts") or {}
+            btts_p = btts.get("p_model") or {}
+            inputs = payload.get("inputs") or {}
+
+            summary = {
+                "totals": {
+                    "line": totals.get("main_line"),
+                    "p_over": totals_p.get("over"),
+                    "p_under": totals_p.get("under"),
+                    "best_over": totals_odds.get("over"),
+                    "best_under": totals_odds.get("under"),
+                },
+                "btts": {
+                    "p_yes": btts_p.get("yes"),
+                    "p_no": btts_p.get("no"),
+                },
+                "inputs": {
+                    "lambda_home": inputs.get("lambda_home"),
+                    "lambda_away": inputs.get("lambda_away"),
+                    "lambda_total": inputs.get("lambda_total"),
+                },
+            }
+
+        items.append(
+            {
+                "event_id": r[0],
+                "fixture_id": r[1],
+                "kickoff_utc": r[2].isoformat().replace("+00:00", "Z") if r[2] else None,
+                "home_name": r[3],
+                "away_name": r[4],
+                "snapshot_updated_at": r[5].isoformat().replace("+00:00", "Z") if r[5] else None,
+                "snapshot_summary": summary,
+            }
+        )
+
+    return {"ok": True, "sport_key": sport_key, "items": items}
