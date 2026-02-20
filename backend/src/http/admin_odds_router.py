@@ -14,6 +14,7 @@ from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 from src.odds.matchup_resolver import resolve_odds_event
 from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
+from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
 
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
@@ -2436,3 +2437,55 @@ def admin_odds_upcoming_intel_live(
 
     out.sort(key=_best_ev_key, reverse=True)
 
+@router.post("/matchup_snapshots/rebuild")
+def admin_rebuild_matchup_snapshots(
+    sport_key: str = Query(..., min_length=2),
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    limit: int = Query(default=200, ge=1, le=2000),
+    model_version: str = Query(default="model_v0"),
+):
+import time
+
+@router.post("/matchup_snapshots/rebuild")
+def admin_rebuild_matchup_snapshots(
+    sport_key: str = Query(..., min_length=2),
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    limit: int = Query(default=200, ge=1, le=2000),
+    model_version: str = Query(default="model_v0"),
+):
+    t0 = time.time()
+    print(f"[SNAPSHOT] start sport_key={sport_key} hours_ahead={hours_ahead} limit={limit}", flush=True)
+
+    try:
+        with pg_conn() as conn:
+            conn.autocommit = False
+
+            # timeouts defensivos (evita “travamento infinito”)
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '30s'")
+                cur.execute("SET LOCAL lock_timeout = '3s'")
+
+            t1 = time.time()
+            print(f"[SNAPSHOT] db connected in {t1 - t0:.3f}s", flush=True)
+
+            counters = rebuild_matchup_snapshots_v1(
+                conn,
+                sport_key=sport_key,
+                hours_ahead=int(hours_ahead),
+                limit=int(limit),
+                model_version=model_version,
+            )
+
+            t2 = time.time()
+            print(f"[SNAPSHOT] rebuild done in {t2 - t1:.3f}s counters={counters}", flush=True)
+
+            conn.commit()
+            t3 = time.time()
+            print(f"[SNAPSHOT] commit done in {t3 - t2:.3f}s total={t3 - t0:.3f}s", flush=True)
+
+            return {"ok": True, "sport_key": sport_key, "counters": counters, "elapsed_sec": round(t3 - t0, 3)}
+
+    except Exception as e:
+        tE = time.time()
+        print(f"[SNAPSHOT] ERROR after {tE - t0:.3f}s: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"snapshot_rebuild_failed: {type(e).__name__}: {e}")

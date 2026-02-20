@@ -686,3 +686,49 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             odds=odds_block,
             value=value_block,
         )
+
+@router.get("/matchup/snapshot")
+def get_matchup_snapshot(
+    fixture_id: int | None = Query(default=None),
+    event_id: str | None = Query(default=None),
+    model_version: str = Query(default="model_v0"),
+):
+    if fixture_id is None and event_id is None:
+        raise HTTPException(status_code=400, detail="provide fixture_id or event_id")
+
+    sql = """
+      SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc, home_name, away_name,
+             source_captured_at_utc, model_version, payload, generated_at_utc, updated_at_utc
+      FROM product.matchup_snapshot_v1
+      WHERE model_version = %(model_version)s
+        AND (
+          (%(fixture_id)s IS NOT NULL AND fixture_id = %(fixture_id)s)
+          OR
+          (%(fixture_id)s IS NULL AND %(event_id)s IS NOT NULL AND event_id = %(event_id)s)
+        )
+      ORDER BY updated_at_utc DESC
+      LIMIT 1
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"fixture_id": fixture_id, "event_id": event_id, "model_version": model_version})
+            r = cur.fetchone()
+
+    if not r:
+        raise HTTPException(status_code=404, detail="snapshot_not_found")
+
+    return {
+        "snapshot_id": r[0],
+        "fixture_id": r[1],
+        "event_id": r[2],
+        "sport_key": r[3],
+        "kickoff_utc": r[4].isoformat().replace("+00:00", "Z") if r[4] else None,
+        "home_name": r[5],
+        "away_name": r[6],
+        "source_captured_at_utc": r[7].isoformat().replace("+00:00", "Z") if r[7] else None,
+        "model_version": r[8],
+        "payload": r[9],
+        "generated_at_utc": r[10].isoformat().replace("+00:00", "Z") if r[10] else None,
+        "updated_at_utc": r[11].isoformat().replace("+00:00", "Z") if r[11] else None,
+    }
