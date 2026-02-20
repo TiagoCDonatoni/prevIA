@@ -849,6 +849,23 @@ def admin_odds_refresh(
         counters=counters,
     )
 
+class AdminOddsRefreshBlock(BaseModel):
+    counters: Dict[str, int]
+
+
+class AdminOddsResolveBlock(BaseModel):
+    counters: Dict[str, int]
+    sample_issues: List[Dict[str, Any]] = []
+
+
+class AdminOddsRefreshAndResolveResponse(BaseModel):
+    ok: bool = True
+    sport_key: str
+    regions: str
+    captured_at_utc: str
+    refresh: AdminOddsRefreshBlock
+    resolve: AdminOddsResolveBlock
+
 class AdminOddsResolveBatchResponse(BaseModel):
     ok: bool = True
     sport_key: str
