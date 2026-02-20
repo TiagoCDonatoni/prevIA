@@ -551,7 +551,11 @@ def _persist_odds_markets_batch(
                             selection_key = "over"
                         elif low == "under":
                             selection_key = "under"
-                    point = pt if pt is not None else None
+                    try:
+                        point = float(pt) if pt is not None else None
+                    except Exception:
+                        point = None
+
                     if point is None:
                         continue
 
@@ -584,27 +588,166 @@ def _persist_odds_markets_batch(
 
     return attempted
 
+def _persist_btts_for_events(
+    *,
+    conn,
+    sport_key: str,
+    regions: str,
+    event_ids: list[str],
+    captured_at_utc,
+) -> dict:
+    """
+    Busca BTTS via endpoint single-event e persiste em odds_snapshots_market.
+    Retorna counters para debug/observabilidade.
+    """
+    attempted_events = 0
+    ok_events = 0
+    fail_events = 0
+    market_attempted = 0
+
+    first_error: str | None = None
+    first_error_type: str | None = None
+
+    for event_id in event_ids:
+        attempted_events += 1
+        try:
+            ev = _client().get_event_odds(
+                sport_key=sport_key,
+                event_id=str(event_id),
+                regions=regions,
+                markets="btts",
+            )
+
+            # resposta costuma vir como um "event" com bookmakers/markets
+            home = ev.get("home_team") or ev.get("home_name")
+            away = ev.get("away_team") or ev.get("away_name")
+            bookmakers = ev.get("bookmakers") or []
+
+            if not home or not away:
+                # sem nomes, não persistimos
+                fail_events += 1
+                continue
+
+            for bk in bookmakers:
+                bk_title = bk.get("title") or bk.get("key") or None
+                markets = bk.get("markets") or []
+                market_attempted += _persist_odds_markets_batch(
+                    conn=conn,
+                    event_id=str(ev.get("id") or event_id),
+                    bookmaker_title=(str(bk_title) if bk_title else None),
+                    captured_at_utc=captured_at_utc,
+                    markets=markets,
+                    home_name=str(home),
+                    away_name=str(away),
+                )
+
+            ok_events += 1
+
+        except Exception as e:
+            # não derrubar refresh inteiro por BTTS, mas guardar 1 erro para debug
+            fail_events += 1
+            if first_error is None:
+                first_error = str(e)
+                first_error_type = type(e).__name__
+
+
+    return {
+        "btts_events_attempted": attempted_events,
+        "btts_events_ok": ok_events,
+        "btts_events_fail": fail_events,
+        "btts_market_snapshots_attempted": int(market_attempted),
+        "btts_first_error_type": first_error_type,
+        "btts_first_error": first_error,
+    }
+
 @router.post("/refresh", response_model=AdminOddsRefreshResponse)
 def admin_odds_refresh(
     sport_key: str = Query(..., min_length=2),
     regions: str = Query(default="eu"),
+    include_btts: bool = Query(default=False),
 ) -> AdminOddsRefreshResponse:
     """
     Admin-only: chama provider e persiste no DB (odds_events + odds_snapshots_1x2).
     Isso abastece o Produto (/odds/*) no modo DB-only.
     """
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+        raw = _client().get_odds_h2h(
+            sport_key=sport_key,
+            regions=regions,
+            markets="h2h,totals",
+        )
     except TheOddsApiError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     captured_at = datetime.now(timezone.utc)
 
+    # ids para BTTS single-event (additional market)
+    event_ids: list[str] = []
+    for ev in raw:
+        eid = ev.get("id") or ev.get("event_id")
+        if eid:
+            event_ids.append(str(eid))
+
     try:
         with pg_conn() as conn:
             conn.autocommit = False
-            counters = _persist_odds_h2h_batch(conn, sport_key=sport_key, raw_events=raw, captured_at_utc=captured_at)
+
+            # 1) Persistência legada (1x2) - não mexe em nada do que já funcionava
+            counters = _persist_odds_h2h_batch(
+                conn,
+                sport_key=sport_key,
+                raw_events=raw,
+                captured_at_utc=captured_at,
+            )
+
+            # 2) Persistência genérica (markets: h2h/totals/btts) - novo
+            market_attempted = 0
+            for ev in raw:
+                event_id = ev.get("id") or ev.get("event_id")
+                home = ev.get("home_team") or ev.get("home_name")
+                away = ev.get("away_team") or ev.get("away_name")
+                if not event_id or not home or not away:
+                    continue
+
+                bookmakers = ev.get("bookmakers") or []
+                for bk in bookmakers:
+                    bk_title = bk.get("title") or bk.get("key") or None
+                    markets = bk.get("markets") or []
+                    market_attempted += _persist_odds_markets_batch(
+                        conn=conn,
+                        event_id=str(event_id),
+                        bookmaker_title=(str(bk_title) if bk_title else None),
+                        captured_at_utc=captured_at,
+                        markets=markets,
+                        home_name=str(home),
+                        away_name=str(away),
+                    )
+
+            # acrescenta sem quebrar compatibilidade
+            counters["market_snapshots_attempted"] = int(market_attempted)
+
+            # 3) BTTS (additional market): requer endpoint single-event
+            if include_btts and event_ids:
+                btts_c = _persist_btts_for_events(
+                    conn=conn,
+                    sport_key=sport_key,
+                    regions=regions,
+                    event_ids=event_ids,
+                    captured_at_utc=captured_at,
+                )
+                counters.update(btts_c)
+            else:
+                counters.update(
+                    {
+                        "btts_events_attempted": 0,
+                        "btts_events_ok": 0,
+                        "btts_events_fail": 0,
+                        "btts_market_snapshots_attempted": 0,
+                    }
+                )
+
             conn.commit()
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"persist_failed: {e}")
 
