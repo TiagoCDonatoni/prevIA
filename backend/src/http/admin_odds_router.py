@@ -752,6 +752,34 @@ def admin_odds_refresh(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"persist_failed: {e}")
 
+    # 4) Gatilho MVP: rebuild snapshots de modelo após refresh
+    try:
+        from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
+
+        with pg_conn() as conn2:
+            conn2.autocommit = False
+
+            with conn2.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '60s'")
+                cur.execute("SET LOCAL lock_timeout = '3s'")
+
+            snap_counters = rebuild_matchup_snapshots_v1(
+                conn2,
+                sport_key=sport_key,
+                model_version="model_v0",
+                event_ids=event_ids,  # <-- incremental
+            )
+
+            conn2.commit()
+
+        counters["matchup_snapshots_rebuilt"] = int(snap_counters.get("snapshots_upserted", 0))
+        counters["matchup_snapshots_candidates"] = int(snap_counters.get("candidates", 0))
+
+    except Exception as e:
+        # não quebrar refresh por causa do rebuild
+        counters["matchup_snapshots_rebuilt"] = 0
+        counters["matchup_snapshots_error"] = str(e)
+
     return AdminOddsRefreshResponse(
         ok=True,
         sport_key=sport_key,

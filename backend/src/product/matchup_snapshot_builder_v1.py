@@ -50,6 +50,36 @@ def _select_candidates(conn, *, sport_key: str, hours_ahead: int, limit: int) ->
         )
     return out
 
+def _select_candidates_by_event_ids(conn, *, sport_key: str, event_ids: List[str]) -> List[Dict[str, Any]]:
+    sql = """
+      SELECT
+        e.event_id,
+        e.sport_key,
+        e.commence_time_utc AS kickoff_utc,
+        e.home_name,
+        e.away_name,
+        e.resolved_fixture_id AS fixture_id
+      FROM odds.odds_events e
+      WHERE e.sport_key = %(sport_key)s
+        AND e.event_id = ANY(%(event_ids)s)
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"sport_key": sport_key, "event_ids": list(event_ids)})
+        rows = cur.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                "event_id": r[0],
+                "sport_key": r[1],
+                "kickoff_utc": r[2],
+                "home_name": r[3],
+                "away_name": r[4],
+                "fixture_id": r[5],
+            }
+        )
+    return out
 
 def _load_fixture_context(conn, *, fixture_id: int) -> Optional[Dict[str, Any]]:
     sql = """
@@ -225,13 +255,17 @@ def rebuild_matchup_snapshots_v1(
     hours_ahead: int = 720,
     limit: int = 200,
     model_version: str = "model_v0",
+    event_ids: Optional[List[str]] = None, 
 ) -> Dict[str, int]:
     """
     Rebuild em lote: candidates -> totals main line -> lambdas -> payload -> upsert snapshot.
     """
     c = {"candidates": 0, "snapshots_upserted": 0, "skipped_no_fixture": 0, "skipped_no_stats": 0}
 
-    candidates = _select_candidates(conn, sport_key=sport_key, hours_ahead=hours_ahead, limit=limit)
+    if event_ids:
+        candidates = _select_candidates_by_event_ids(conn, sport_key=sport_key, event_ids=event_ids)
+    else:
+        candidates = _select_candidates(conn, sport_key=sport_key, hours_ahead=hours_ahead, limit=limit)
     c["candidates"] = len(candidates)
 
     print(f"[SNAPSHOT] candidates={len(candidates)}", flush=True)
