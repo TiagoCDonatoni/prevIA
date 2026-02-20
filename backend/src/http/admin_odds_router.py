@@ -890,10 +890,12 @@ def admin_odds_refresh_and_resolve(
 ) -> AdminOddsRefreshAndResolveResponse:
     """
     Admin-only: fluxo oficial de atualização de odds:
-      1) /refresh  (provider -> persist)
-      2) /resolve/batch (db-only -> match status)
+      1) refresh (provider -> persist)
+      2) resolve/batch (db-only -> match status)
+      3) rebuild snapshots (incremental por event_ids selecionados)
     Ideal para botão no Admin e para virar cron/job depois.
     """
+
     # 1) REFRESH (provider -> persist)
     try:
         raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
@@ -905,7 +907,6 @@ def admin_odds_refresh_and_resolve(
     try:
         with pg_conn() as conn:
             conn.autocommit = False
-
             refresh_counters = _persist_odds_h2h_batch(
                 conn,
                 sport_key=sport_key,
@@ -931,7 +932,7 @@ def admin_odds_refresh_and_resolve(
       LIMIT %(limit)s
     """
 
-    resolve_counters = {
+    resolve_counters: Dict[str, int] = {
         "events_scanned": 0,
         "exact": 0,
         "probable": 0,
@@ -942,20 +943,22 @@ def admin_odds_refresh_and_resolve(
     }
     sample_issues: List[Dict[str, Any]] = []
 
+    event_ids: List[str] = []
+
     try:
         with pg_conn() as conn:
             conn.autocommit = False
 
             with conn.cursor() as cur:
                 cur.execute(sql, {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)})
-                event_ids = [r[0] for r in cur.fetchall()]
+                event_ids = [str(r[0]) for r in cur.fetchall()]
 
             for event_id in event_ids:
                 resolve_counters["events_scanned"] += 1
                 try:
                     res = resolve_odds_event(
                         conn,
-                        event_id=str(event_id),
+                        event_id=event_id,
                         assume_league_id=int(assume_league_id),
                         assume_season=int(assume_season),
                         tol_hours=int(tol_hours),
@@ -966,28 +969,107 @@ def admin_odds_refresh_and_resolve(
 
                     if res.status == "EXACT":
                         resolve_counters["exact"] += 1
+
                     elif res.status == "PROBABLE":
                         resolve_counters["probable"] += 1
                         if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
+                            sample_issues.append({
+                                "event_id": event_id,
+                                "status": res.status,
+                                "confidence": res.confidence,
+                                "reason": res.reason,
+                                "fixture_id": getattr(res, "fixture_id", None),
+                                "kickoff_delta_hours": getattr(res, "kickoff_delta_hours", None),
+                            })
+
                     elif res.status == "AMBIGUOUS":
                         resolve_counters["ambiguous"] += 1
                         if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason, "candidates": res.candidates[:3]})
+                            sample_issues.append({
+                                "event_id": event_id,
+                                "status": res.status,
+                                "confidence": res.confidence,
+                                "reason": res.reason,
+                                "candidates": res.candidates[:3] if hasattr(res, "candidates") else None,
+                            })
+
                     else:
                         resolve_counters["not_found"] += 1
                         if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
+                            sample_issues.append({
+                                "event_id": event_id,
+                                "status": res.status,
+                                "confidence": res.confidence,
+                                "reason": res.reason,
+                                "kickoff_delta_hours": getattr(res, "kickoff_delta_hours", None),
+                            })
 
                 except Exception as e:
                     resolve_counters["errors"] += 1
                     if len(sample_issues) < 8:
-                        sample_issues.append({"event_id": str(event_id), "status": "ERROR", "error": str(e)})
+                        sample_issues.append({"event_id": event_id, "status": "ERROR", "error": str(e)})
 
             conn.commit()
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"resolve_failed: {e}")
+
+    # 3) Rebuild snapshots (incremental por event_ids desta janela)
+    # Observação: isto é incremental em cima da lista event_ids selecionada (upcoming window).
+    # Para O(n refresh) puro, o ideal é _persist_odds_h2h_batch retornar explicitamente os event_ids upsertados.
+    try:
+        import time as _time
+        from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
+
+        mv = get_active_model_version()
+        cv = get_calc_version()
+
+        t0 = _time.time()
+
+        with pg_conn() as conn2:
+            conn2.autocommit = False
+
+            run_id = start_job_run(
+                conn2,
+                job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                scope_key=sport_key,
+                model_version=mv,
+                calc_version=cv,
+            )
+            conn2.commit()
+
+            snap_counters = rebuild_matchup_snapshots_v1(
+                conn2,
+                sport_key=sport_key,
+                model_version=mv,
+                event_ids=event_ids,
+            )
+            conn2.commit()
+
+            counters_payload = dict(snap_counters or {})
+            counters_payload["mode"] = "event_ids"
+            counters_payload["event_ids_count"] = int(len(event_ids or []))
+            counters_payload["model_version"] = mv
+            counters_payload["calc_version"] = cv
+
+            finish_job_run(
+                conn2,
+                run_id=run_id,
+                ok=True,
+                duration_ms=int(round((_time.time() - t0) * 1000)),
+                counters=counters_payload,
+                error_text=None,
+            )
+            conn2.commit()
+
+            # expor contadores úteis no resolve (sem misturar tipos)
+            resolve_counters["matchup_snapshots_rebuilt"] = int((snap_counters or {}).get("snapshots_upserted", 0))
+            resolve_counters["matchup_snapshots_candidates"] = int((snap_counters or {}).get("candidates", 0))
+
+    except Exception as e:
+        # não quebrar o endpoint por causa do rebuild, mas registrar como issue
+        if len(sample_issues) < 8:
+            sample_issues.append({"status": "SNAPSHOT_REBUILD_ERROR", "error": str(e)})
 
     return AdminOddsRefreshAndResolveResponse(
         ok=True,
