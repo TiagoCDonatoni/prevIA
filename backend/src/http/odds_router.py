@@ -773,29 +773,40 @@ def list_matchups_cards(
         ORDER BY e.commence_time_utc ASC
         LIMIT %(limit)s
       ),
-      latest_snap AS (
-        SELECT DISTINCT ON (s.fixture_id)
-          s.fixture_id,
-          s.event_id,
-          s.updated_at_utc,
-          s.payload
-        FROM product.matchup_snapshot_v1 s
-        WHERE s.model_version = %(model_version)s
-          AND s.fixture_id IS NOT NULL
-        ORDER BY s.fixture_id, s.updated_at_utc DESC
-      )
-      SELECT
-        u.event_id,
-        u.fixture_id,
-        u.kickoff_utc,
-        u.home_name,
-        u.away_name,
-        ls.updated_at_utc AS snapshot_updated_at,
-        ls.payload
-      FROM upcoming u
-      LEFT JOIN latest_snap ls
-        ON ls.fixture_id = u.fixture_id
-      ORDER BY u.kickoff_utc ASC;
+    latest_snap_fx AS (
+      SELECT DISTINCT ON (s.fixture_id)
+        s.fixture_id,
+        s.updated_at_utc,
+        s.payload
+      FROM product.matchup_snapshot_v1 s
+      WHERE s.model_version = %(model_version)s
+        AND s.fixture_id IS NOT NULL
+      ORDER BY s.fixture_id, s.updated_at_utc DESC
+    ),
+    latest_snap_ev AS (
+      SELECT DISTINCT ON (s.event_id)
+        s.event_id,
+        s.updated_at_utc,
+        s.payload
+      FROM product.matchup_snapshot_v1 s
+      WHERE s.model_version = %(model_version)s
+        AND s.event_id IS NOT NULL
+      ORDER BY s.event_id, s.updated_at_utc DESC
+    )
+    SELECT
+      u.event_id,
+      u.fixture_id,
+      u.kickoff_utc,
+      u.home_name,
+      u.away_name,
+      COALESCE(lsfx.updated_at_utc, lsev.updated_at_utc) AS snapshot_updated_at,
+      COALESCE(lsfx.payload, lsev.payload) AS payload
+    FROM upcoming u
+    LEFT JOIN latest_snap_fx lsfx
+      ON lsfx.fixture_id = u.fixture_id
+    LEFT JOIN latest_snap_ev lsev
+      ON lsev.event_id = u.event_id
+    ORDER BY u.kickoff_utc ASC;
     """
 
     with pg_conn() as conn:
