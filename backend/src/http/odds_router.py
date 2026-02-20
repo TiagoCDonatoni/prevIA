@@ -696,23 +696,35 @@ def get_matchup_snapshot(
     if fixture_id is None and event_id is None:
         raise HTTPException(status_code=400, detail="provide fixture_id or event_id")
 
-    sql = """
-      SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc, home_name, away_name,
-             source_captured_at_utc, model_version, payload, generated_at_utc, updated_at_utc
-      FROM product.matchup_snapshot_v1
-      WHERE model_version = %(model_version)s
-        AND (
-          (%(fixture_id)s IS NOT NULL AND fixture_id = %(fixture_id)s)
-          OR
-          (%(fixture_id)s IS NULL AND %(event_id)s IS NOT NULL AND event_id = %(event_id)s)
-        )
-      ORDER BY updated_at_utc DESC
-      LIMIT 1
-    """
+    if fixture_id is not None:
+        sql = """
+          SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc,
+                 home_name, away_name, source_captured_at_utc, model_version, payload,
+                 generated_at_utc, updated_at_utc
+          FROM product.matchup_snapshot_v1
+          WHERE model_version = %(model_version)s
+            AND fixture_id = %(fixture_id)s
+          ORDER BY updated_at_utc DESC
+          LIMIT 1
+        """
+        params = {"fixture_id": int(fixture_id), "model_version": model_version}
+
+    else:
+        sql = """
+          SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc,
+                 home_name, away_name, source_captured_at_utc, model_version, payload,
+                 generated_at_utc, updated_at_utc
+          FROM product.matchup_snapshot_v1
+          WHERE model_version = %(model_version)s
+            AND event_id = %(event_id)s
+          ORDER BY updated_at_utc DESC
+          LIMIT 1
+        """
+        params = {"event_id": str(event_id), "model_version": model_version}
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, {"fixture_id": fixture_id, "event_id": event_id, "model_version": model_version})
+            cur.execute(sql, params)
             r = cur.fetchone()
 
     if not r:

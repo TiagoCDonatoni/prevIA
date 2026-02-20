@@ -2437,13 +2437,6 @@ def admin_odds_upcoming_intel_live(
 
     out.sort(key=_best_ev_key, reverse=True)
 
-@router.post("/matchup_snapshots/rebuild")
-def admin_rebuild_matchup_snapshots(
-    sport_key: str = Query(..., min_length=2),
-    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
-    limit: int = Query(default=200, ge=1, le=2000),
-    model_version: str = Query(default="model_v0"),
-):
 import time
 
 @router.post("/matchup_snapshots/rebuild")

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-
-from src.product.matchup_model_v0 import estimate_lambdas_from_team_season_stats, build_model_payload_v0
+from src.product.matchup_model_v0 import (
+    estimate_lambdas_from_team_season_stats,
+    estimate_lambdas_from_recent_fixtures,
+    build_model_payload_v0,
+)
 
 
 def _select_candidates(conn, *, sport_key: str, hours_ahead: int, limit: int) -> List[Dict[str, Any]]:
@@ -197,7 +200,7 @@ def upsert_matchup_snapshot_v1(
     """
 
     params = {
-        "fixture_id": int(fixture_id) if fixture_id is not Nonenot None else None,
+        "fixture_id": int(fixture_id) if fixture_id is not None else None,
         "event_id": str(event_id),
         "sport_key": str(sport_key),
         "kickoff_utc": kickoff_utc,
@@ -231,11 +234,24 @@ def rebuild_matchup_snapshots_v1(
     candidates = _select_candidates(conn, sport_key=sport_key, hours_ahead=hours_ahead, limit=limit)
     c["candidates"] = len(candidates)
 
-    for ev in candidates:
+    print(f"[SNAPSHOT] candidates={len(candidates)}", flush=True)
+
+    for idx, ev in enumerate(candidates, start=1):
         event_id = ev["event_id"]
         fixture_id = ev.get("fixture_id")
 
+        print(
+            f"[SNAPSHOT] {idx}/{len(candidates)} "
+            f"event_id={event_id} fixture_id={fixture_id}",
+            flush=True
+        )
+
         totals = _select_totals_main_line_and_best(conn, event_id=event_id)
+        print(
+            f"[SNAPSHOT] totals main_line={totals.get('main_line')} "
+            f"source_ts={totals.get('source_captured_at_utc')}",
+            flush=True,
+        )
 
         if fixture_id is None:
             # MVP: se não resolveu fixture ainda, você pode:
@@ -270,6 +286,7 @@ def rebuild_matchup_snapshots_v1(
             continue
 
         fx = _load_fixture_context(conn, fixture_id=int(fixture_id))
+        print(f"[SNAPSHOT] fixture ctx ok={bool(fx)}", flush=True)
         if not fx:
             c["skipped_no_fixture"] += 1
             continue
@@ -281,6 +298,18 @@ def rebuild_matchup_snapshots_v1(
             home_team_id=fx["home_team_id"],
             away_team_id=fx["away_team_id"],
         )
+
+        if lambdas is None:
+            # fallback por últimos N jogos (garante snapshot mesmo sem stats agregadas)
+            lambdas = estimate_lambdas_from_recent_fixtures(
+                conn,
+                league_id=fx["league_id"],
+                season=fx["season"],
+                home_team_id=fx["home_team_id"],
+                away_team_id=fx["away_team_id"],
+                n_games=10,
+            )
+
         if lambdas is None:
             c["skipped_no_stats"] += 1
             continue

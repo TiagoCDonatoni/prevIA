@@ -143,3 +143,66 @@ def build_model_payload_v0(
         out["markets"]["totals"]["p_model"]["under"] = round(1.0 - p_over, 6)
 
     return out
+
+def estimate_lambdas_from_recent_fixtures(
+    conn,
+    *,
+    league_id: int,
+    season: int,
+    home_team_id: int,
+    away_team_id: int,
+    n_games: int = 10,
+    clamp_min: float = 0.15,
+    clamp_max: float = 4.50,
+) -> Optional[Lambdas]:
+    """
+    Fallback MVP: usa últimos N jogos (na mesma liga+season) para estimar λ_home e λ_away.
+    Retorna None se não houver histórico suficiente.
+    """
+
+    sql_last = """
+      WITH last_home AS (
+        SELECT
+          f.kickoff_utc,
+          CASE WHEN f.home_team_id=%(team_id)s THEN f.goals_home ELSE f.goals_away END AS goals_for,
+          CASE WHEN f.home_team_id=%(team_id)s THEN f.goals_away ELSE f.goals_home END AS goals_against,
+          CASE WHEN f.home_team_id=%(team_id)s THEN 1 ELSE 0 END AS was_home
+        FROM core.fixtures f
+        WHERE f.league_id=%(league_id)s
+          AND f.season=%(season)s
+          AND (f.home_team_id=%(team_id)s OR f.away_team_id=%(team_id)s)
+          AND f.goals_home IS NOT NULL AND f.goals_away IS NOT NULL
+        ORDER BY f.kickoff_utc DESC
+        LIMIT %(n)s
+      )
+      SELECT
+        AVG(goals_for)::float AS gf_avg,
+        AVG(goals_against)::float AS ga_avg,
+        COUNT(*)::int AS cnt
+      FROM last_home;
+    """
+
+    def _team_avgs(team_id: int):
+        with conn.cursor() as cur:
+            cur.execute(
+                sql_last,
+                {"league_id": league_id, "season": season, "team_id": team_id, "n": int(n_games)},
+            )
+            r = cur.fetchone()
+        if not r or not r[2] or r[2] < max(4, n_games // 2):
+            return None
+        return {"gf": float(r[0]), "ga": float(r[1]), "cnt": int(r[2])}
+
+    h = _team_avgs(home_team_id)
+    a = _team_avgs(away_team_id)
+    if not h or not a:
+        return None
+
+    # λ simples: ataque do time + “fraqueza” defensiva do adversário (média)
+    lam_home = 0.5 * h["gf"] + 0.5 * a["ga"]
+    lam_away = 0.5 * a["gf"] + 0.5 * h["ga"]
+
+    lam_home = min(max(lam_home, clamp_min), clamp_max)
+    lam_away = min(max(lam_away, clamp_min), clamp_max)
+
+    return Lambdas(lam_home=lam_home, lam_away=lam_away)
