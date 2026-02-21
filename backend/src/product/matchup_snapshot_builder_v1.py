@@ -260,7 +260,13 @@ def rebuild_matchup_snapshots_v1(
     """
     Rebuild em lote: candidates -> totals main line -> lambdas -> payload -> upsert snapshot.
     """
-    c = {"candidates": 0, "snapshots_upserted": 0, "skipped_no_fixture": 0, "skipped_no_stats": 0}
+    c = {
+        "candidates": 0,
+        "snapshots_upserted": 0,
+        "snapshots_event_fallback": 0,  # gerou snapshot sem fixture (event_id)
+        "skipped_no_fixture": 0,        # só quando nem deu pra gerar fallback
+        "skipped_no_stats": 0,
+    }
 
     if event_ids:
         candidates = _select_candidates_by_event_ids(conn, sport_key=sport_key, event_ids=event_ids)
@@ -291,7 +297,6 @@ def rebuild_matchup_snapshots_v1(
             # MVP: se não resolveu fixture ainda, você pode:
             # - gerar snapshot por event_id mesmo (funciona)
             # - OU pular. Aqui: gerar por event_id mesmo, sem lambdas (skipped_no_fixture)
-            c["skipped_no_fixture"] += 1
             payload = {
                 "model_version": model_version,
                 "markets": {
@@ -316,7 +321,7 @@ def rebuild_matchup_snapshots_v1(
                 payload=payload,
                 model_version=model_version,
             )
-            c["snapshots_upserted"] += 1
+            c["snapshots_event_fallback"] += 1
             continue
 
         fx = _load_fixture_context(conn, fixture_id=int(fixture_id))
