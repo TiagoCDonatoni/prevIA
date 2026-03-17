@@ -1077,8 +1077,9 @@ def admin_matchup_by_fixture(
 
 @admin_router.post("/fixtures/refresh")
 def admin_refresh_fixtures(
-    league_id: int = Query(default=39, ge=1),          # EPL = 39
-    season: int = Query(default=2025, ge=1900, le=2100),  # 2025 costuma representar 2025–26 em muitas bases
+    league_id: int = Query(default=39, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    days_ahead: int = Query(default=60, ge=7, le=365),
     max_calls: int = Query(default=10, ge=1, le=200),
 ) -> Dict[str, Any]:
     """
@@ -1097,9 +1098,40 @@ def admin_refresh_fixtures(
 
     calls_left = int(max_calls)
 
+    # janela futura (UTC) para puxar fixtures (sempre definida)
+    now_utc = datetime.now(timezone.utc)
+    to_utc = now_utc + timedelta(days=int(days_ahead))
+    from_ymd = now_utc.date().isoformat()
+    to_ymd = to_utc.date().isoformat()
+
+    # ✅ season opcional: inferir "current" via API-Football quando season=None
+    if season is None:
+        status, payload = client.get("/leagues", {"id": int(league_id)})
+        if 200 <= int(status) < 300 and isinstance(payload, dict):
+            resp = payload.get("response") or []
+            found = None
+            if resp and isinstance(resp, list) and isinstance(resp[0], dict):
+                seasons = (resp[0].get("seasons") or [])
+                for srow in seasons:
+                    if isinstance(srow, dict) and srow.get("current") is True:
+                        found = srow.get("year")
+                        break
+            if found is not None:
+                season = int(found)
+
+    # fallback final: se ainda None, usa ano atual (último recurso)
+    if season is None:
+        season = int(now_utc.year)
+
+    # ✅ report precisa existir ANTES do ingest()
     report = {
         "ok": True,
-        "plan": {"league_id": league_id, "season": season, "max_calls": max_calls},
+        "plan": {
+            "league_id": int(league_id),
+            "season": int(season),
+            "days_ahead": int(days_ahead),
+            "max_calls": int(max_calls),
+        },
         "raw": {"leagues": 0, "teams": 0, "fixtures": 0, "dedup": 0},
         "core": {},
         "calls": {"ok": 0, "fail": 0},
@@ -1139,21 +1171,31 @@ def admin_refresh_fixtures(
 
         return ok
 
-    # 1) leagues por season (dimensão)
-    ingest("leagues", "/leagues", {"season": season})
+    # 1) leagues (dimensão)
+    ingest("leagues", "/leagues", {"id": int(league_id)})
 
-    # 2) teams e fixtures por (league, season)
-    ingest("teams", "/teams", {"league": league_id, "season": season})
-    ingest("fixtures", "/fixtures", {"league": league_id, "season": season})
+    # 2) teams
+    ingest("teams", "/teams", {"league": int(league_id), "season": int(season)})
+
+    # 3) fixtures FUTUROS por janela
+    ingest(
+        "fixtures",
+        "/fixtures",
+        {
+            "league": int(league_id),
+            "season": int(season),
+            "from": from_ymd,
+            "to": to_ymd,
+        },
+    )
 
     # aplica CORE a partir do RAW recém inserido
-    report["core"]["leagues"] = run_core_etl(provider="apifootball", endpoint="leagues", limit=5000, league_ids=[league_id])
+    report["core"]["leagues"] = run_core_etl(provider="apifootball", endpoint="leagues", limit=5000, league_ids=[int(league_id)])
     report["core"]["teams"] = run_core_etl(provider="apifootball", endpoint="teams", limit=5000)
     report["core"]["fixtures"] = run_core_etl(provider="apifootball", endpoint="fixtures", limit=20000)
 
     report["plan"]["calls_left"] = calls_left
     return report
-
 
 @admin_router.get("/teams/by-league-season")
 def admin_teams_by_league_season(

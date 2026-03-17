@@ -48,7 +48,10 @@ class OddsEventRow(BaseModel):
     match_score: Optional[float] = None
     odds_best: Optional[Dict[str, Optional[float]]] = None  # H/D/A
     odds_books: Optional[List[OddsBook]] = None
+    probs_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
+    has_model: Optional[bool] = None
     edge_summary: Optional[EdgeSummary] = None
+    snapshot_summary: Optional[Dict[str, Any]] = None
     resolved_home_team_id: Optional[int] = None
     resolved_away_team_id: Optional[int] = None
 
@@ -88,7 +91,7 @@ class QuoteRequest(BaseModel):
     event_id: str
     assume_league_id: int
     assume_season: int
-    artifact_filename: str
+    artifact_filename: str | None = None
     tol_hours: int = 6
 
 
@@ -104,6 +107,19 @@ class QuoteResponse(BaseModel):
 # ---------------------------
 # Helpers
 # ---------------------------
+
+def _coerce_payload(payload: Any) -> Dict[str, Any]:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except Exception:
+            return {}
+    return {}
+
 _AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
 
 def _book_key(raw: Optional[str]) -> str:
@@ -385,6 +401,24 @@ def list_odds_events(
         FROM odds.odds_snapshots_1x2 s
         JOIN last_ts lt ON lt.event_id = s.event_id AND lt.max_ts = s.captured_at_utc
         GROUP BY s.event_id
+      ),
+      latest_snap_fx AS (
+        SELECT DISTINCT ON (s.fixture_id)
+          s.fixture_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.fixture_id IS NOT NULL
+        ORDER BY s.fixture_id, s.updated_at_utc DESC
+      ),
+      latest_snap_ev AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.event_id IS NOT NULL
+        ORDER BY s.event_id, s.updated_at_utc DESC
       )
       SELECT
         e.event_id,
@@ -394,16 +428,21 @@ def list_odds_events(
         e.away_name,
         e.resolved_home_team_id,
         e.resolved_away_team_id,
+        e.resolved_fixture_id,
         e.match_status,
         e.match_score,
         lt.max_ts,
         b.odds_home,
         b.odds_draw,
-        b.odds_away
-
+        b.odds_away,
+        COALESCE(lsfx.payload, lsev.payload) AS snapshot_payload
       FROM odds.odds_events e
       LEFT JOIN last_ts lt ON lt.event_id = e.event_id
       LEFT JOIN best b ON b.event_id = e.event_id
+      LEFT JOIN latest_snap_fx lsfx
+        ON lsfx.fixture_id = e.resolved_fixture_id
+      LEFT JOIN latest_snap_ev lsev
+        ON lsev.event_id = e.event_id
       WHERE e.sport_key = %(sport_key)s
         AND e.commence_time_utc IS NOT NULL
         AND e.commence_time_utc >= %(now)s
@@ -432,15 +471,47 @@ def list_odds_events(
             away_name,
             resolved_home_team_id,
             resolved_away_team_id,
+            resolved_fixture_id,
             match_status,
             match_score,
             max_ts,
             odds_home,
             odds_draw,
             odds_away,
+            snapshot_payload,
         ) in rows:
 
             edge_summary = None
+            snapshot_summary = None
+
+            snapshot_payload_obj = _coerce_payload(snapshot_payload)
+            if snapshot_payload_obj:
+                mk = snapshot_payload_obj.get("markets") or {}
+                totals = mk.get("totals") or {}
+                totals_p = totals.get("p_model") or {}
+                totals_odds = totals.get("best_odds") or {}
+                btts = mk.get("btts") or {}
+                btts_p = btts.get("p_model") or {}
+                inputs = snapshot_payload_obj.get("inputs") or {}
+
+                snapshot_summary = {
+                    "totals": {
+                        "line": totals.get("main_line"),
+                        "p_over": totals_p.get("over"),
+                        "p_under": totals_p.get("under"),
+                        "best_over": totals_odds.get("over"),
+                        "best_under": totals_odds.get("under"),
+                    },
+                    "btts": {
+                        "p_yes": btts_p.get("yes"),
+                        "p_no": btts_p.get("no"),
+                    },
+                    "inputs": {
+                        "lambda_home": inputs.get("lambda_home"),
+                        "lambda_away": inputs.get("lambda_away"),
+                        "lambda_total": inputs.get("lambda_total"),
+                    },
+                }
 
             # Edge summary só se o caller informar liga/temporada/artifact e o evento já tiver ids resolvidos
             if (
@@ -459,8 +530,15 @@ def list_odds_events(
                     )
 
                     if pick.get("season_mode") != "none":
+                        af = (artifact_filename or "").strip()
+                        if not af:
+                            af = _fetch_artifact_filename_for_league(conn, league_id=int(assume_league_id))
+
+                        if not af:
+                            raise ValueError("no_model_artifact_for_league")
+
                         pred = predict_1x2_from_artifact(
-                            artifact_filename=str(artifact_filename),
+                            artifact_filename=str(af),
                             league_id=int(assume_league_id),
                             season=int(pick["season_used"]),
                             home_team_id=int(resolved_home_team_id),
@@ -544,6 +622,9 @@ def list_odds_events(
                     match_score=float(match_score) if match_score is not None else None,
                     latest_captured_at_utc=max_ts.isoformat().replace("+00:00", "Z") if max_ts else None,
                     edge_summary=edge_summary,
+                    snapshot_summary=snapshot_summary,
+                    resolved_home_team_id=int(resolved_home_team_id) if resolved_home_team_id is not None else None,
+                    resolved_away_team_id=int(resolved_away_team_id) if resolved_away_team_id is not None else None,
                     odds_best={
                         "H": float(odds_home) if odds_home is not None else None,
                         "D": float(odds_draw) if odds_draw is not None else None,
@@ -648,20 +729,33 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             if pick["season_mode"] == "none":
                 matchup["model_status"] = "NO_STATS_ANY_SEASON"
             else:
-                try:
-                    pred = predict_1x2_from_artifact(
-                        artifact_filename=req.artifact_filename,
+                # resolve artifact automaticamente se o client não enviar
+                artifact_filename = (req.artifact_filename or "").strip()
+                if not artifact_filename:
+                    artifact_filename = _fetch_artifact_filename_for_league(
+                        conn,
                         league_id=int(req.assume_league_id),
-                        season=int(pick["season_used"]),
-                        home_team_id=int(res.resolved_home_team_id),
-                        away_team_id=int(res.resolved_away_team_id),
                     )
-                    probs = pred.get("probs") or pred.get("probs_1x2") or None
-                    if probs:
-                        probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
-                except ValueError as e:
-                    matchup["model_status"] = "NO_STATS_FOR_MATCH"
-                    matchup["model_error"] = str(e)
+
+                matchup["artifact_filename_used"] = artifact_filename
+
+                if not artifact_filename:
+                    matchup["model_status"] = "NO_MODEL_ARTIFACT"
+                else:
+                    try:
+                        pred = predict_1x2_from_artifact(
+                            artifact_filename=str(artifact_filename),
+                            league_id=int(req.assume_league_id),
+                            season=int(pick["season_used"]),
+                            home_team_id=int(res.resolved_home_team_id),
+                            away_team_id=int(res.resolved_away_team_id),
+                        )
+                        probs = pred.get("probs") or pred.get("probs_1x2") or None
+                        if probs:
+                            probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+                    except ValueError as e:
+                        matchup["model_status"] = "NO_STATS_FOR_MATCH"
+                        matchup["model_error"] = str(e)
 
         # 4) value/edge (opcional)
         if probs_block and ev.get("odds_best"):

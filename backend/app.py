@@ -19,6 +19,7 @@ from src.http.admin_matchup_router import router as admin_matchup_router
 # Novos endpoints (Sprint 1)
 from src.http.admin_catalog_router import router as admin_catalog_router
 from src.http.product_leagues_router import router as product_leagues_router
+from src.http.product_index_router import router as product_index_router
 
 # Ops (jobs via botões agora, cron-ready depois)
 from src.http.admin_ops_router import router as admin_ops_router
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     # Sprint 1: catálogo + leagues + ops
     api.include_router(admin_catalog_router)
     api.include_router(product_leagues_router)
+    api.include_router(product_index_router)
     api.include_router(admin_ops_router)
 
     @api.get("/", response_class=HTMLResponse)

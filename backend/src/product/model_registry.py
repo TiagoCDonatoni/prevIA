@@ -10,5 +10,5 @@ def get_active_model_version() -> str:
     return os.getenv("PREVIA_MODEL_VERSION", DEFAULT_MODEL_VERSION)
 
 def get_calc_version() -> str:
-    # Versão do “cálculo/estrutura do payload” (independente do modelo)
-    return os.getenv("PREVIA_SNAPSHOT_CALC_VERSION", DEFAULT_CALC_VERSION)
+    # calc_version = versão do algoritmo de cálculo/derivação (Score Engine)
+    return "calc_v1"
