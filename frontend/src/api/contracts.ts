@@ -220,6 +220,147 @@ export type OddsIntelResponse = {
   items: OddsIntelItem[];
 };
 
+export type AdminOddsTotalsItem = {
+  event_id: string;
+  sport_key: string;
+  kickoff_utc: string | null;
+  home_name: string;
+  away_name: string;
+  match_confidence: "EXACT" | "ILIKE" | "FUZZY" | "NONE" | null;
+  fixture_id: number | null;
+
+  market: {
+    line: number | null;
+    best_over: number | null;
+    best_under: number | null;
+    market_probs: {
+      over: number | null;
+      under: number | null;
+    } | null;
+    overround: number | null;
+    latest_captured_at_utc: string | null;
+    snapshot_count: number;
+  };
+
+  snapshot: {
+    model_version?: string | null;
+    calc_version?: string | null;
+    inputs?: {
+      lambda_home?: number | null;
+      lambda_away?: number | null;
+      lambda_total?: number | null;
+    } | null;
+    totals?: {
+      main_line?: number | null;
+      selected_line?: number | null;
+      p_model?: {
+        over?: number | null;
+        under?: number | null;
+        push?: number | null;
+      } | null;
+      best_odds?: {
+        over?: number | null;
+        under?: number | null;
+      } | null;
+      lines_available?: string[];
+    } | null;
+  } | null;
+
+  edge?: {
+    over?: number | null;
+    under?: number | null;
+  } | null;
+
+  ev?: {
+    over?: number | null;
+    under?: number | null;
+  } | null;
+};
+
+export type AdminOddsTotalsResponse = {
+  ok: boolean;
+  meta: {
+    sport_key: string | null;
+    hours_ahead: number;
+    limit: number;
+    counts: {
+      total: number;
+      with_market_line: number;
+      with_snapshot: number;
+      with_model_probs: number;
+    };
+  };
+  items: AdminOddsTotalsItem[];
+};
+
+export type AdminOddsBttsItem = {
+  event_id: string;
+  sport_key: string;
+  kickoff_utc: string | null;
+  home_name: string;
+  away_name: string;
+  match_confidence: "EXACT" | "ILIKE" | "FUZZY" | "NONE" | null;
+  fixture_id: number | null;
+
+  market: {
+    best_yes: number | null;
+    best_no: number | null;
+    market_probs: {
+      yes: number | null;
+      no: number | null;
+    } | null;
+    overround: number | null;
+    latest_captured_at_utc: string | null;
+    snapshot_count: number;
+  };
+
+  snapshot: {
+    model_version?: string | null;
+    calc_version?: string | null;
+    inputs?: {
+      lambda_home?: number | null;
+      lambda_away?: number | null;
+      lambda_total?: number | null;
+    } | null;
+    btts?: {
+      p_model?: {
+        yes?: number | null;
+        no?: number | null;
+      } | null;
+      best_odds?: {
+        yes?: number | null;
+        no?: number | null;
+      } | null;
+    } | null;
+  } | null;
+
+  edge?: {
+    yes?: number | null;
+    no?: number | null;
+  } | null;
+
+  ev?: {
+    yes?: number | null;
+    no?: number | null;
+  } | null;
+};
+
+export type AdminOddsBttsResponse = {
+  ok: boolean;
+  meta: {
+    sport_key: string | null;
+    hours_ahead: number;
+    limit: number;
+    counts: {
+      total: number;
+      with_market: number;
+      with_snapshot: number;
+      with_model_probs: number;
+    };
+  };
+  items: AdminOddsBttsItem[];
+};
+
 // -------------------------
 // Produto (MVP) — Odds v1
 // -------------------------
@@ -245,13 +386,35 @@ export type ProductOddsEvent = {
   away_name: string;
   latest_captured_at_utc: string | null;
 
-  match_status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | null;
+  match_status: "MODEL_FOUND" | "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | null;
   match_score: number | null;
 
   odds_best: ProductOdds1x2 | null;
   odds_books?: ProductOddsBook[] | null;
 
+  probs_1x2?: ProductOdds1x2 | null;
+  has_model?: boolean | null;
+
   edge_summary?: ProductEdgeSummary | null;
+
+  snapshot_summary?: {
+  totals?: {
+    line?: number | null;
+    p_over?: number | null;
+    p_under?: number | null;
+    best_over?: number | null;
+    best_under?: number | null;
+  } | null;
+  btts?: {
+    p_yes?: number | null;
+    p_no?: number | null;
+  } | null;
+  inputs?: {
+    lambda_home?: number | null;
+    lambda_away?: number | null;
+    lambda_total?: number | null;
+  } | null;
+} | null;
 };
 
 export type ProductOddsBook = {
@@ -267,6 +430,24 @@ export type ProductOddsEventsResponse = {
   generated_at_utc: string;
   sport_key: string;
   events: ProductOddsEvent[];
+};
+
+export type ProductLeagueItem = {
+  sport_key: string;
+  sport_title: string;
+  sport_group: string | null;
+  league_id: number;
+  season_policy: "current" | "fixed";
+  fixed_season: number | null;
+  regions: string | null;
+  hours_ahead: number | null;
+  tol_hours: number | null;
+};
+
+export type ProductLeaguesResponse = {
+  ok: boolean;
+  items: ProductLeagueItem[];
+  count: number;
 };
 
 export type ProductOddsQuoteRequest = {
@@ -311,30 +492,32 @@ export type ProductOddsQuoteResponse = {
 };
 
 // -------------------------
-// Admin — Odds Ops (refresh + resolve)
+// Admin — Odds Ops (refresh + resolve + rebuild)
 // -------------------------
 
-export type AdminOddsRefreshCounters = {
-  events_upserted: number;
-  snapshots_inserted: number;
-  snapshots_skipped: number;
+export type AdminOddsRefreshCounters = Record<string, number>;
+
+export type AdminOddsResolveCounters = Record<string, number>;
+
+export type AdminOddsResolveIssue = Record<string, any>;
+
+export type AdminOddsSnapshotsCounters = Record<string, number>;
+
+export type AdminOddsSnapshotsIssue = Record<string, any>;
+
+export type AdminOddsRefreshBlock = {
+  counters: AdminOddsRefreshCounters;
 };
 
-export type AdminOddsResolveCounters = {
-  events_scanned: number;
-  exact: number;
-  probable: number;
-  ambiguous: number;
-  not_found: number;
-  errors: number;
-  persisted: number;
+export type AdminOddsResolveBlock = {
+  counters: AdminOddsResolveCounters;
+  sample_issues: AdminOddsResolveIssue[];
 };
 
-export type AdminOddsResolveIssue = {
-  event_id: string;
-  status: "EXACT" | "PROBABLE" | "AMBIGUOUS" | "NOT_FOUND" | string;
-  confidence: number;
-  reason: string;
+export type AdminOddsSnapshotsBlock = {
+  mode?: string | null;
+  counters: AdminOddsSnapshotsCounters;
+  sample_issues: AdminOddsSnapshotsIssue[];
 };
 
 export type AdminOddsRefreshAndResolveResponse = {
@@ -342,13 +525,59 @@ export type AdminOddsRefreshAndResolveResponse = {
   sport_key: string;
   regions: string;
   captured_at_utc: string;
-  refresh: AdminOddsRefreshCounters;
-  resolve: {
-    window_hours: number;
-    assume_league_id: number;
-    assume_season: number;
-    tol_hours: number;
-    counters: AdminOddsResolveCounters;
-    sample_issues: AdminOddsResolveIssue[];
-  };
+  refresh: AdminOddsRefreshBlock;
+  resolve: AdminOddsResolveBlock;
+  snapshots: AdminOddsSnapshotsBlock;
+};
+
+export type TeamResolutionPendingItem = {
+  sport_key?: string | null;
+  raw_name?: string | null;
+  normalized_name?: string | null;
+  payload?: Record<string, any> | null;
+  created_at_utc?: string | null;
+  updated_at_utc?: string | null;
+};
+
+export type TeamResolutionPendingResponse = {
+  ok: boolean;
+  items: TeamResolutionPendingItem[];
+  count: number;
+};
+
+export type TeamSearchItem = {
+  team_id: number;
+  name: string;
+  country_name?: string | null;
+};
+
+export type TeamSearchResponse = {
+  ok: boolean;
+  items: TeamSearchItem[];
+  count: number;
+};
+
+export type TeamResolutionApproveRequest = {
+  sport_key: string;
+  raw_name: string;
+  team_id: number;
+  normalized_name?: string;
+  confidence?: number;
+};
+
+export type TeamResolutionApproveResponse = {
+  ok: boolean;
+  sport_key: string;
+  raw_name: string;
+  normalized_name: string;
+  team_id: number;
+  removed_from_queue: number;
+};
+
+export type AdminOpsJobResponse = {
+  ok: boolean;
+  job: string;
+  elapsed_sec: number;
+  counters: Record<string, any>;
+  error: string | null;
 };

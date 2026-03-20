@@ -1,6 +1,19 @@
 import type { Lang } from "./i18n";
+import {
+  PRODUCT_DEV_AUTO_LOGIN_EMAIL,
+  PRODUCT_DEV_AUTO_LOGIN_ENABLED,
+  PRODUCT_DEV_AUTO_LOGIN_PLAN,
+} from "../config";
 
 export type PlanId = "FREE_ANON" | "FREE" | "BASIC" | "LIGHT" | "PRO";
+
+export function normalizePlanId(raw: string | null | undefined): PlanId {
+  const v = String(raw ?? "").trim().toUpperCase();
+  if (v === "FREE_ANON" || v === "FREE" || v === "BASIC" || v === "LIGHT" || v === "PRO") {
+    return v;
+  }
+  return "FREE_ANON";
+}
 
 export type Entitlements = {
   plan: PlanId;
@@ -195,36 +208,53 @@ export function loadProductState(): PersistedState {
   const raw = localStorage.getItem(LS_KEY);
   const today = dateKeySaoPaulo();
 
-  if (!raw) {
-    return {
-      plan: "FREE_ANON",
-      lang: detectBrowserLang(),
-      auth: { is_logged_in: false, email: null },
-      credits: { date_key: today, used_today: 0, revealed_today: {} },
-    };
-  }
+  const fallback: PersistedState = {
+    plan: "FREE_ANON",
+    lang: detectBrowserLang(),
+    auth: { is_logged_in: false, email: null },
+    credits: { date_key: today, used_today: 0, revealed_today: {} },
+  };
 
-  try {
-    const parsed = JSON.parse(raw) as PersistedState;
+  let state: PersistedState = fallback;
 
-    if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as PersistedState;
 
-    // garante: só pt/en/es; resto vira en
-    parsed.lang = normalizeLang(parsed.lang);
+      if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
 
-    if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
-      parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
+      parsed.lang = normalizeLang(parsed.lang);
+      parsed.plan = normalizePlanId(parsed.plan);
+
+      if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
+        parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
+      }
+
+      state = parsed;
+    } catch {
+      state = fallback;
     }
-
-    return parsed;
-  } catch {
-    return {
-      plan: "FREE_ANON",
-      lang: detectBrowserLang(),
-      auth: { is_logged_in: false, email: null },
-      credits: { date_key: today, used_today: 0, revealed_today: {} },
-    };
   }
+
+  // DEV helper: injeta sessão local para acelerar a fase de desenvolvimento.
+  // Não é source of truth final; é só scaffolding até auth backend entrar.
+  if (PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
+    state = {
+      ...state,
+      plan: normalizePlanId(PRODUCT_DEV_AUTO_LOGIN_PLAN),
+      auth: {
+        is_logged_in: true,
+        email: PRODUCT_DEV_AUTO_LOGIN_EMAIL || "dev@previa.local",
+      },
+    };
+
+    // se alguém habilitar dev auto-login mas deixar FREE_ANON, sobe para FREE
+    if (state.plan === "FREE_ANON") {
+      state.plan = "FREE";
+    }
+  }
+
+  return state;
 }
 
 export function saveProductState(state: PersistedState) {

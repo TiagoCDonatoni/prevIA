@@ -1,11 +1,13 @@
 import React, { useState } from "react";
 import { Outlet } from "react-router-dom";
 
+import { IS_DEV, PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
 import { LANGS, t, type Lang } from "../i18n";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
 import { ProductAuthModal } from "../auth/ProductAuthModal";
 import { PlanChangeModal } from "../components/PlanChangeModal";
+import BrandLogo from "../components/BrandLogo";
 
 import brFlag from "../assets/br.svg";
 import gbFlag from "../assets/gb.svg";
@@ -85,19 +87,26 @@ export function ProductLayout() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
   const plan = store.state.plan;
-  const DEV = import.meta.env.DEV;
+  const DEV = IS_DEV;
 
   const [authOpen, setAuthOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">("MANUAL");
 
-  const remaining = store.entitlements.credits.remaining_today;
-  const limit = store.entitlements.credits.daily_limit;
+  const remaining = store.backendUsage.is_ready
+    ? (store.backendUsage.remaining ?? store.entitlements.credits.remaining_today)
+    : store.entitlements.credits.remaining_today;
+
+  const limit = store.backendUsage.is_ready
+    ? (store.backendUsage.daily_limit ?? store.entitlements.credits.daily_limit)
+    : store.entitlements.credits.daily_limit;
 
   return (
     <div className="product-shell">
       <header className="product-header">
-        <div className="product-brand">{t(lang, "common.appName")}</div>
+        <div className="product-brand">
+          <BrandLogo />
+        </div>
 
         <div className="product-header-right">
 
@@ -122,15 +131,19 @@ export function ProductLayout() {
             <button
               className="product-reset-btn"
               onClick={() => {
-                Object.keys(localStorage)
-                  .filter((k) => k.toLowerCase().includes("previa"))
-                  .forEach((k) => localStorage.removeItem(k));
-                window.location.reload();
+                store.resetForTesting();
               }}
               title={t(lang, "common.devResetTitle")}
             >
               {t(lang, "common.devReset")}
             </button>
+          ) : null}
+
+          {DEV && PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
+            <div className="product-pill" title="Sessão dev automática ativa">
+              <span className="product-pill-label">DEV AUTH</span>
+              <span>{store.state.auth.email ?? "dev@previa.local"}</span>
+            </div>
           ) : null}
 
           <div className="product-pill product-pill-lang">
@@ -150,6 +163,10 @@ export function ProductLayout() {
 
               // Free anon: criar conta grátis
               if (plan === "FREE_ANON") {
+                if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
+                  return null;
+                }
+
                 return (
                   <button
                     className="pl-credits-cta"
@@ -196,13 +213,9 @@ export function ProductLayout() {
         lang={lang}
         initialMode="signup"
         onClose={() => setAuthOpen(false)}
-        onAuthSuccess={(payload) => {
-          // MVP: após "criar conta", troca o plano de FREE_ANON para FREE (Free+)
-          store.setAuth({ is_logged_in: true, email: payload.email });
-          if (store.state.plan === "FREE_ANON") {
-            store.setPlan("FREE");
-          }
+        onAuthSuccess={() => {
           setAuthOpen(false);
+          window.location.reload();
         }}
       />
 

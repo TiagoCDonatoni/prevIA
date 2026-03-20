@@ -1,54 +1,24 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 
 import type { ProductOddsBook, ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
-import { productListOddsEvents, productQuoteOdds } from "../../api/client";
+import type { ProductLeagueItem } from "../../api/contracts";
+import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
+import { getLeagueDisplayName } from "../i18n/leagueCatalogHelpers";
 import { useProductStore } from "../state/productStore";
 import { PlanChangeModal } from "../components/PlanChangeModal";
+
+import { applyLeagueOverride } from "../config/leagueOverrides";
 
 import { generateNarrative } from "../narrative/generateNarrative";
 import type { NarrativeDepth } from "../narrative/types";
 import type { PlanId } from "../entitlements";
 
-// MVP: defaults do produto (TUDO fácil de mover para config depois)
-const DEFAULTS = {
-  sportKey: "soccer_epl",
-  hoursAhead: 720,
+const UI_DEFAULTS = {
+  hoursAheadFallback: 720,
   limit: 200,
-  assumeLeagueId: 39,
-  assumeSeason: 2025,
-  artifactFilename: "epl_1x2_logreg_tempcal_v1_C_2021_2023_C0.3_cal2023.json",
-  tolHours: 6,
+  tolHoursFallback: 6,
 };
-
-type LeagueId = "EPL"; // no futuro: "BUNDESLIGA" | "BRASILEIRAO_A" | ...
-
-type LeagueCfg = {
-  id: LeagueId;
-  sportKey: string;
-  // nomes finais (produto): nada de keys aqui
-  name: Record<Lang, string>;
-  // parâmetros de quote (por liga)
-  assumeLeagueId: number;
-  assumeSeason: number;
-  artifactFilename: string;
-};
-
-const LEAGUES: LeagueCfg[] = [
-  {
-    id: "EPL",
-    sportKey: "soccer_epl",
-    name: { pt: "Premier League", en: "Premier League", es: "Premier League" },
-    assumeLeagueId: 39,
-    assumeSeason: 2025,
-    artifactFilename: "epl_1x2_logreg_tempcal_v1_C_2021_2023_C0.3_cal2023.json",
-  },
-];
-
-// helper seguro
-function getLeagueCfg(id: LeagueId): LeagueCfg {
-  return LEAGUES.find((l) => l.id === id) ?? LEAGUES[0];
-}
 
 type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE";
@@ -92,6 +62,131 @@ function fmtOdds(x: number | null | undefined) {
   const v = Number(x);
   if (!Number.isFinite(v)) return "—";
   return v.toFixed(2);
+}
+
+function fmtPctNullable(x: number | null | undefined) {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return `${(x * 100).toFixed(1)}%`;
+}
+
+function poissonProbAtLeastGoals(lam: number | null | undefined, minGoals: number) {
+  if (
+    lam == null ||
+    !Number.isFinite(lam) ||
+    !Number.isInteger(minGoals) ||
+    minGoals < 1
+  ) {
+    return null;
+  }
+
+  let term = Math.exp(-lam); // P(0)
+  let cumulative = term;
+
+  for (let i = 1; i < minGoals; i += 1) {
+    term = (term * lam) / i;
+    cumulative += term;
+  }
+
+  const result = 1 - cumulative;
+  return Math.max(0, Math.min(1, result));
+}
+
+function goalProbFromLambda(lam: number | null | undefined) {
+  return poissonProbAtLeastGoals(lam, 1);
+}
+
+function bttsInsightLabel(lang: Lang, pYes: number | null | undefined) {
+  if (pYes == null || !Number.isFinite(pYes)) return "—";
+
+  if (pYes >= 0.62) {
+    if (lang === "en") return "High chance";
+    if (lang === "es") return "Alta probabilidad";
+    return "Alta chance";
+  }
+
+  if (pYes >= 0.48) {
+    if (lang === "en") return "Moderate chance";
+    if (lang === "es") return "Probabilidad moderada";
+    return "Chance moderada";
+  }
+
+  if (lang === "en") return "Low chance";
+  if (lang === "es") return "Baja probabilidad";
+  return "Baixa chance";
+}
+
+function bttsInsightHeadline(lang: Lang, pYes: number | null | undefined) {
+  if (pYes == null || !Number.isFinite(pYes)) return "";
+
+  if (pYes >= 0.62) {
+    if (lang === "en") return "This matchup has a strong chance of both teams scoring.";
+    if (lang === "es") return "Este partido tiene una buena probabilidad de gol de ambos equipos.";
+    return "Esse confronto tem boa probabilidade de gol dos dois times.";
+  }
+
+  if (pYes >= 0.48) {
+    if (lang === "en") return "There are reasonable signs of both teams scoring, but without a large margin.";
+    if (lang === "es") return "Hay señales razonables de gol de ambos equipos, pero sin gran margen.";
+    return "Há sinais razoáveis de gol para os dois times, mas sem grande folga.";
+  }
+
+  if (lang === "en") return "The current scenario does not favor both teams scoring.";
+  if (lang === "es") return "El escenario actual no favorece el gol de ambos equipos.";
+  return "O cenário atual não favorece gol dos dois times.";
+}
+
+function totalsInsightLabel(lang: Lang, pOver: number | null | undefined, pUnder: number | null | undefined) {
+  const over = typeof pOver === "number" && Number.isFinite(pOver) ? pOver : null;
+  const under = typeof pUnder === "number" && Number.isFinite(pUnder) ? pUnder : null;
+
+  if (over == null && under == null) return "—";
+
+  if (over != null && over >= 0.58) {
+    if (lang === "en") return "Strong lean to over";
+    if (lang === "es") return "Fuerte sesgo al over";
+    return "Forte viés para over";
+  }
+
+  if (under != null && under >= 0.58) {
+    if (lang === "en") return "Strong lean to under";
+    if (lang === "es") return "Fuerte sesgo al under";
+    return "Forte viés para under";
+  }
+
+  if (lang === "en") return "Balanced line";
+  if (lang === "es") return "Línea equilibrada";
+  return "Linha equilibrada";
+}
+
+function totalsInsightHeadline(
+  lang: Lang,
+  line: number | null | undefined,
+  pOver: number | null | undefined,
+  pUnder: number | null | undefined
+) {
+  const over = typeof pOver === "number" && Number.isFinite(pOver) ? pOver : null;
+  const under = typeof pUnder === "number" && Number.isFinite(pUnder) ? pUnder : null;
+  const mainLine = typeof line === "number" && Number.isFinite(line) ? line : null;
+
+  if (over == null && under == null) return "";
+
+  const lineText = mainLine != null ? mainLine.toFixed(1) : "—";
+
+  if (over != null && over >= 0.58) {
+    if (lang === "en") return `The model leans to over ${lineText} goals in this matchup.`;
+    if (lang === "es") return `El modelo se inclina por over ${lineText} goles en este partido.`;
+    return `O modelo aponta viés para over ${lineText} gols neste confronto.`;
+  }
+
+  if (under != null && under >= 0.58) {
+    if (lang === "en") return `The model leans to under ${lineText} goals in this matchup.`;
+    if (lang === "es") return `El modelo se inclina por under ${lineText} goles en este partido.`;
+    return `O modelo aponta viés para under ${lineText} gols neste confronto.`;
+  }
+
+  if (lang === "en") return `The ${lineText} goals line looks balanced for this matchup.`;
+  if (lang === "es") return `La línea de ${lineText} goles parece equilibrada para este partido.`;
+  return `A linha de ${lineText} gols parece equilibrada para este confronto.`;
 }
 
 function pickBooksForDisplay(
@@ -241,6 +336,15 @@ function fmtKickoff(iso: string, lang: string) {
   }).format(d);
 }
 
+function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
+  if (!league) return "";
+  return (
+    getLeagueDisplayName(league.sport_key, lang as "pt" | "en" | "es") ||
+    league.sport_title ||
+    league.sport_key
+  );
+}
+
 function LockedPanel({
   title,
   onUnlock,
@@ -285,8 +389,18 @@ export default function ProductIndex() {
   const [eventsError, setEventsError] = useState<string>("");
 
   // filtros
-  const [leagueId, setLeagueId] = useState<LeagueId>("EPL");
-  const league = useMemo(() => getLeagueCfg(leagueId), [leagueId]);
+  const [leaguesLoading, setLeaguesLoading] = useState(false);
+  const [leaguesError, setLeaguesError] = useState<string>("");
+  const [leagues, setLeagues] = useState<
+    Array<ProductLeagueItem & { assume_season: number; artifact_filename: string | null }>
+  >([]);
+
+  const [sportKey, setSportKey] = useState<string>("");
+  const league = useMemo(() => {
+    const list = leagues;
+    if (!list.length) return null;
+    return list.find((l) => l.sport_key === sportKey) ?? list[0];
+  }, [leagues, sportKey]);
 
   const [windowDays, setWindowDays] = useState<number>(7);
   const [sortBy, setSortBy] = useState<SortBy>("DATE");
@@ -300,19 +414,35 @@ export default function ProductIndex() {
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
 
+  const loadLeagues = useCallback(async () => {
+    setLeaguesLoading(true);
+    setLeaguesError("");
+    try {
+      const res = await productListLeagues();
+      const items = (res?.items ?? []).map((l) => applyLeagueOverride(l));
+      setLeagues(items);
+      if (!sportKey && items.length) setSportKey(items[0].sport_key);
+    } catch (e: any) {
+      setLeaguesError(e?.message ?? "Failed to load leagues");
+    } finally {
+      setLeaguesLoading(false);
+    }
+  }, [sportKey]);
+
   const loadEvents = useCallback(async () => {
+    if (!league) return;
     setLoadingEvents(true);
     setEventsError("");
     try {
       const res = await productListOddsEvents({
-        sport_key: league.sportKey,
-        hours_ahead: DEFAULTS.hoursAhead,
-        limit: DEFAULTS.limit,
+        sport_key: league.sport_key,
+        hours_ahead: league.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback,
+        limit: UI_DEFAULTS.limit,
 
         // necessário para edge_summary no backend
-        assume_league_id: league.assumeLeagueId,
-        assume_season: league.assumeSeason,
-        artifact_filename: league.artifactFilename,
+        assume_league_id: league.league_id,
+        assume_season: league.assume_season,
+        artifact_filename: league.artifact_filename ?? undefined,
       });
 
       const list = res?.events ?? [];
@@ -323,7 +453,7 @@ export default function ProductIndex() {
     } finally {
       setLoadingEvents(false);
     }
-  }, [league.sportKey]);
+  }, [league]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -360,6 +490,7 @@ export default function ProductIndex() {
   }, [lastLoadedAt]);
 
   async function runQuote(eventId: string) {
+    if (!league) return;
     setQuoteLoading(true);
     setQuote(null);
     setQuoteError("");
@@ -372,12 +503,26 @@ export default function ProductIndex() {
     }
 
     try {
+      const selectedEvent = visibleEvents.find((e) => String(e.event_id) === eventIdStr);
+
+      // Snapshot-first:
+      // se já temos modelo no /product/index, não bloquear a experiência
+      // só porque o quote legado ainda depende de artifact antigo.
+      if (!league.artifact_filename) {
+        if (selectedEvent?.match_status === "MODEL_FOUND") {
+          setQuote(null);
+          return;
+        }
+        setQuoteError(t(lang, "narrative.v1.headline.noModel"));
+        return;
+      }
+
       const res = await productQuoteOdds({
-        event_id: eventIdStr, // <-- string
-        assume_league_id: Number(league.assumeLeagueId),
-        assume_season: Number(league.assumeSeason),
-        artifact_filename: league.artifactFilename,
-        tol_hours: Number(DEFAULTS.tolHours),
+        event_id: eventIdStr,
+        assume_league_id: Number(league.league_id),
+        assume_season: Number(league.assume_season),
+        artifact_filename: league.artifact_filename,
+        tol_hours: Number(league.tol_hours ?? UI_DEFAULTS.tolHoursFallback),
       });
       setQuote(res);
     } catch (e: any) {
@@ -396,25 +541,53 @@ export default function ProductIndex() {
     if (!selectedId) return;
 
     const ev = visibleEvents.find((e) => String(e.event_id) === String(selectedId));
-    if (ev && (ev.match_status === "NOT_FOUND" || ev.match_status === "AMBIGUOUS")) {
+    const hasAnalysis =
+      ev?.match_status === "MODEL_FOUND" ||
+      ev?.match_status === "EXACT" ||
+      ev?.match_status === "PROBABLE";
+
+    if (ev && !hasAnalysis) {
       setQuoteError(t(lang, "errors.matchUnreliable"));
       return;
     }
 
-    const r = store.tryReveal(String(selectedId));
-    if (!r.ok && r.reason === "NO_CREDITS") {
-      setUpgradeReason("NO_CREDITS");
-      setUpgradeOpen(true);
-      return;
+    const fixtureKey = String(selectedId);
+
+    const r = store.backendUsage.is_ready
+      ? await store.revealViaBackend(fixtureKey)
+      : store.tryReveal(fixtureKey);
+
+    if (!r.ok) {
+      if (r.reason === "NO_CREDITS") {
+        setUpgradeReason("NO_CREDITS");
+        setUpgradeOpen(true);
+        return;
+      }
+
+      if (r.reason !== "ALREADY_REVEALED") {
+        console.error("Reveal failed:", r.reason);
+        return;
+      }
     }
 
-    await runQuote(String(selectedId));
+    await runQuote(fixtureKey);
   }
 
   useEffect(() => {
-    loadEvents();
+    loadLeagues();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!league) return;
+
+    // ajusta janela default para a liga (ex.: hours_ahead=720 -> 30 dias)
+    const days = Math.max(1, Math.round((league.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback) / 24));
+    setWindowDays(Math.min(days, 30));
+
+    loadEvents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [league?.sport_key]);
 
   // lista visível (filtro client-side)
   const visibleEvents = useMemo(() => {
@@ -440,32 +613,106 @@ export default function ProductIndex() {
     return list;
   }, [events, windowDays, sortBy]);
 
-  // garante selection válida dentro dos filtros atuais
+  // só mantém a seleção se o usuário já tinha uma seleção anterior.
+  // Não auto-seleciona no primeiro load.
   useEffect(() => {
     if (!visibleEvents.length) return;
+    if (!selectedId) return;
 
-    const stillExists =
-      selectedId && visibleEvents.some((e) => String(e.event_id) === String(selectedId));
+    const stillExists = visibleEvents.some((e) => String(e.event_id) === String(selectedId));
 
     if (!stillExists) {
       const firstGood =
-        visibleEvents.find((e) => e.match_status === "EXACT" || e.match_status === "PROBABLE") ??
-        visibleEvents[0];
+        visibleEvents.find(
+          (e) =>
+            e.match_status === "MODEL_FOUND" ||
+            e.match_status === "EXACT" ||
+            e.match_status === "PROBABLE"
+        ) ?? visibleEvents[0];
 
       setSelectedId(String(firstGood.event_id));
       clearQuoteUI();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleEvents]);
+  }, [visibleEvents, selectedId]);
 
   const selected = useMemo(
     () => visibleEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
     [visibleEvents, selectedId]
   );
 
+  const selectedProbs = useMemo(() => {
+    if (!selected?.probs_1x2) return null;
+    return {
+      H: selected.probs_1x2.H ?? null,
+      D: selected.probs_1x2.D ?? null,
+      A: selected.probs_1x2.A ?? null,
+    };
+  }, [selected]);
+
+  const effectiveProbs = quote?.probs ?? selectedProbs ?? null;
+
+  const effectiveMatchStatus = quote?.matchup?.status ?? selected?.match_status ?? null;
+  const effectiveConfidence =
+    quote?.matchup?.confidence ??
+    (selected?.match_status === "MODEL_FOUND" ? 1 : 0);
+
+  const selectedSnapshot = selected?.snapshot_summary ?? null;
+
+  const totalsLine = selectedSnapshot?.totals?.line ?? null;
+  const totalsOver = selectedSnapshot?.totals?.p_over ?? null;
+  const totalsUnder = selectedSnapshot?.totals?.p_under ?? null;
+
+  const bttsYes = selectedSnapshot?.btts?.p_yes ?? null;
+  const bttsNo = selectedSnapshot?.btts?.p_no ?? null;
+
+  const lambdaHome = selectedSnapshot?.inputs?.lambda_home ?? null;
+  const lambdaAway = selectedSnapshot?.inputs?.lambda_away ?? null;
+  const lambdaTotal = selectedSnapshot?.inputs?.lambda_total ?? null;
+
+  const homeGoalProb = goalProbFromLambda(lambdaHome);
+  const awayGoalProb = goalProbFromLambda(lambdaAway);
+
+  const homeOver15Prob = poissonProbAtLeastGoals(lambdaHome, 2);
+  const awayOver15Prob = poissonProbAtLeastGoals(lambdaAway, 2);
+
+  const hasTotalsInsight =
+    (typeof totalsLine === "number" && Number.isFinite(totalsLine)) ||
+    (typeof totalsOver === "number" && Number.isFinite(totalsOver)) ||
+    (typeof totalsUnder === "number" && Number.isFinite(totalsUnder));
+
+  const hasBttsInsight =
+    typeof bttsYes === "number" &&
+    Number.isFinite(bttsYes) &&
+    (
+      typeof homeGoalProb === "number" ||
+      typeof awayGoalProb === "number" ||
+      typeof bttsNo === "number"
+    );
+
+  const hasTeamGoalsInsight =
+    (typeof homeGoalProb === "number" && Number.isFinite(homeGoalProb)) ||
+    (typeof awayGoalProb === "number" && Number.isFinite(awayGoalProb)) ||
+    (typeof homeOver15Prob === "number" && Number.isFinite(homeOver15Prob)) ||
+    (typeof awayOver15Prob === "number" && Number.isFinite(awayOver15Prob));
+
+  const hasGoalsMarketInsight =
+    hasTotalsInsight || hasBttsInsight || hasTeamGoalsInsight;
+
+  const hasEffectiveAnalysis =
+    !!effectiveProbs ||
+    effectiveMatchStatus === "MODEL_FOUND" ||
+    !!selected?.has_model;
+
   const key = selectedId ? String(selectedId) : "";
   const alreadyRevealed = key ? store.isRevealed(key) : false;
   const canReveal = key ? store.canReveal(key) : false;
+
+  const analysisOpened =
+    alreadyRevealed ||
+    quoteLoading ||
+    !!quote ||
+    !!quoteError;
 
   return (
     <div className="pi">
@@ -473,20 +720,18 @@ export default function ProductIndex() {
         <div className="pi-filters" style={{ display: "flex", gap: 12, marginBottom: 12 }}>
           <select
             className="pi-select"
-            value={leagueId}
+            value={league?.sport_key ?? ""}
+            disabled={leaguesLoading || !leagues.length}
             onChange={(e) => {
-              setLeagueId(e.target.value as LeagueId);
+              setSportKey(String(e.target.value));
               setSelectedId("");
               clearQuoteUI();
-              // recarrega imediatamente a lista da liga escolhida
-              // (usa a liga nova na próxima renderização)
-              setTimeout(() => loadEvents(), 0);
             }}
             aria-label={t(lang, "odds.filterLeague")}
           >
-            {LEAGUES.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name[lang]}
+            {leagues.map((l) => (
+              <option key={l.sport_key} value={l.sport_key}>
+                {leagueDisplayName(l, lang)}
               </option>
             ))}
           </select>
@@ -517,6 +762,12 @@ export default function ProductIndex() {
         <div className="pi-title">{t(lang, "odds.pageTitle")}</div>
 
         <div className="pi-meta">
+          {leaguesError ? (
+            <>
+              <span style={{ color: "#c00" }}>{leaguesError}</span>
+              <span className="pi-subsep">•</span>
+            </>
+          ) : null}
           {t(lang, "odds.metaCount", { showing: visibleEvents.length, loaded: events.length })}
           {lastLoadedAt ? (
             <>
@@ -537,7 +788,16 @@ export default function ProductIndex() {
 
           <div className="pi-list" aria-label={t(lang, "odds.listAria")}>
             {visibleEvents.map((e) => {
-              const active = String(e.event_id) === String(selectedId);
+              const eventKey = String(e.event_id);
+              const active = eventKey === String(selectedId);
+              const revealed = store.isRevealed(eventKey);
+
+              const es = e.edge_summary ?? null;
+              const edge = es?.best_edge;
+              const hasOpportunity =
+                typeof edge === "number" &&
+                Number.isFinite(edge) &&
+                edge >= 0.02;
 
               return (
                 <button
@@ -556,32 +816,33 @@ export default function ProductIndex() {
                     </div>
 
                     <div className="pi-row-sub">
-                      <span className="pi-league">{league.name[lang]}</span>
+                      <span className="pi-league">
+                        {leagueDisplayName(league, lang)}
+                      </span>
+
                       <span className="pi-subsep">•</span>
-                      <span className="pi-kick">{fmtKickoff(e.commence_time_utc, lang)}</span>
+
+                      <span className="pi-kick">
+                        {fmtKickoff(e.commence_time_utc, lang)}
+                      </span>
 
                       {e.odds_best ? (
                         <>
                           <span className="pi-subsep">•</span>
                           <span className="pi-odds-mini">
-                            H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A{" "}
-                            {fmtOdds(e.odds_best.A)}
+                            H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A {fmtOdds(e.odds_best.A)}
                           </span>
                         </>
                       ) : null}
 
-                        {(() => {
-                          const es = e.edge_summary ?? null;
-
-                          // Lista = descoberta: só sinaliza oportunidade, sem números/side/odds
-                          const edge = es?.best_edge;
-                          const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02;
-
-                          if (!hasOpportunity) return null;
-
-                          return <span className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</span>;
-                        })()}
-
+                      {hasOpportunity ? (
+                        <>
+                          <span className="pi-subsep">•</span>
+                          <span className="pi-opportunity">
+                            {t(lang, "odds.opportunityDetected")}
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 </button>
@@ -646,7 +907,9 @@ export default function ProductIndex() {
 
               {quoteError ? <div className="pi-error">{quoteError}</div> : null}
 
-              {!quote ? (
+              {!analysisOpened ? (
+                <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
+              ) : !quote && !hasEffectiveAnalysis ? (
                 <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
               ) : (
                 <>
@@ -676,8 +939,8 @@ export default function ProductIndex() {
                         awayTeam: selected.away_name,
                       },
                       model: {
-                        probs: quote.probs ?? null,
-                        status: quote?.matchup?.status ?? null,
+                        probs: effectiveProbs,
+                        status: effectiveMatchStatus,
                       },
                       market: {
                         odds_1x2_best: oddsBest,
@@ -718,33 +981,244 @@ export default function ProductIndex() {
                   {/* ===== Painéis técnicos (mantidos) ===== */}
                   <div className="pi-panels">
                     {/* Probabilidades */}
-                    <div className="pi-panel">
+                    <div className="pi-panel pi-panel-probabilities">
                       <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
-                      {quote.probs ? (
+                      {effectiveProbs ? (
                         <div className="pi-panel-value">
-                          H {fmtPct(quote.probs.H)} <br />
-                          D {fmtPct(quote.probs.D)} <br />
-                          A {fmtPct(quote.probs.A)}
+                          H {fmtPct(effectiveProbs.H)} <br />
+                          D {fmtPct(effectiveProbs.D)} <br />
+                          A {fmtPct(effectiveProbs.A)}
                         </div>
                       ) : (
                         <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
                       )}
                     </div>
 
+                    {/* Mercados de Gols (unificado) */}
+                    {hasGoalsMarketInsight ? (
+                      <div className="pi-panel pi-panel-goals">
+                        <div className="pi-panel-label">
+                          {lang === "en"
+                            ? "Goals markets"
+                            : lang === "es"
+                            ? "Mercados de goles"
+                            : "Mercados de Gols"}
+                        </div>
+
+                        <div className="pi-panel-value">
+                          {hasTotalsInsight
+                            ? totalsInsightLabel(lang, totalsOver, totalsUnder)
+                            : bttsInsightLabel(lang, bttsYes)}
+                        </div>
+
+                        <div className="pi-muted" style={{ marginTop: 6 }}>
+                          {hasTotalsInsight
+                            ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
+                            : bttsInsightHeadline(lang, bttsYes)}
+                        </div>
+
+                        <div className="pi-goals-kpis">
+                          {typeof totalsOver === "number" ? (
+                            <div className="pi-goals-kpi">
+                              <span className="pi-goals-kpi-label">
+                                {lang === "en"
+                                  ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
+                                  : lang === "es"
+                                  ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
+                                  : `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`}
+                              </span>
+                              <strong>{fmtPctNullable(totalsOver)}</strong>
+                            </div>
+                          ) : null}
+
+                          {typeof bttsYes === "number" ? (
+                            <div className="pi-goals-kpi">
+                              <span className="pi-goals-kpi-label">BTTS</span>
+                              <strong>{fmtPctNullable(bttsYes)}</strong>
+                            </div>
+                          ) : null}
+
+                          {typeof homeGoalProb === "number" ? (
+                            <div className="pi-goals-kpi">
+                              <span className="pi-goals-kpi-label">
+                                {lang === "en"
+                                  ? "Home scores"
+                                  : lang === "es"
+                                  ? "Local marca"
+                                  : "Casa marca"}
+                              </span>
+                              <strong>{fmtPctNullable(homeGoalProb)}</strong>
+                            </div>
+                          ) : null}
+
+                          {typeof awayGoalProb === "number" ? (
+                            <div className="pi-goals-kpi">
+                              <span className="pi-goals-kpi-label">
+                                {lang === "en"
+                                  ? "Away scores"
+                                  : lang === "es"
+                                  ? "Visitante marca"
+                                  : "Fora marca"}
+                              </span>
+                              <strong>{fmtPctNullable(awayGoalProb)}</strong>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="pi-goals-sections">
+                          {hasTotalsInsight ? (
+                            <div className="pi-goals-section">
+                              <div className="pi-goals-section-title">
+                                {lang === "en"
+                                  ? "Match totals"
+                                  : lang === "es"
+                                  ? "Totales del partido"
+                                  : "Totais do jogo"}
+                              </div>
+
+                              <div className="pi-goals-grid">
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? "Main line"
+                                      : lang === "es"
+                                      ? "Línea principal"
+                                      : "Linha principal"}
+                                  </span>
+                                  <strong>
+                                    {typeof totalsLine === "number" && Number.isFinite(totalsLine)
+                                      ? totalsLine.toFixed(1)
+                                      : "—"}
+                                  </strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>Over</span>
+                                  <strong>{fmtPctNullable(totalsOver)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>Under</span>
+                                  <strong>{fmtPctNullable(totalsUnder)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>xG total</span>
+                                  <strong>{fmtOdds(lambdaTotal)}</strong>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {hasBttsInsight ? (
+                            <div className="pi-goals-section">
+                              <div className="pi-goals-section-title">BTTS</div>
+
+                              <div className="pi-goals-grid">
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? "BTTS Yes"
+                                      : lang === "es"
+                                      ? "Ambos marcan"
+                                      : "Ambos marcam"}
+                                  </span>
+                                  <strong>{fmtPctNullable(bttsYes)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? "BTTS No"
+                                      : lang === "es"
+                                      ? "Ambos no marcan"
+                                      : "Ambos não marcam"}
+                                  </span>
+                                  <strong>{fmtPctNullable(bttsNo)}</strong>
+                                </div>
+                              </div>
+
+                              <div className="pi-muted" style={{ marginTop: 8 }}>
+                                {bttsInsightHeadline(lang, bttsYes)}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {hasTeamGoalsInsight ? (
+                            <div className="pi-goals-section">
+                              <div className="pi-goals-section-title">
+                                {lang === "en"
+                                  ? "Goals by team"
+                                  : lang === "es"
+                                  ? "Goles por equipo"
+                                  : "Gols por equipe"}
+                              </div>
+
+                              <div className="pi-goals-grid">
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? `${selected.home_name} scores`
+                                      : lang === "es"
+                                      ? `${selected.home_name} marca`
+                                      : `${selected.home_name} marca`}
+                                  </span>
+                                  <strong>{fmtPctNullable(homeGoalProb)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? `${selected.home_name} over 1.5`
+                                      : lang === "es"
+                                      ? `${selected.home_name} over 1.5`
+                                      : `${selected.home_name} over 1.5`}
+                                  </span>
+                                  <strong>{fmtPctNullable(homeOver15Prob)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? `${selected.away_name} scores`
+                                      : lang === "es"
+                                      ? `${selected.away_name} marca`
+                                      : `${selected.away_name} marca`}
+                                  </span>
+                                  <strong>{fmtPctNullable(awayGoalProb)}</strong>
+                                </div>
+
+                                <div className="pi-goals-line">
+                                  <span>
+                                    {lang === "en"
+                                      ? `${selected.away_name} over 1.5`
+                                      : lang === "es"
+                                      ? `${selected.away_name} over 1.5`
+                                      : `${selected.away_name} over 1.5`}
+                                  </span>
+                                  <strong>{fmtPctNullable(awayOver15Prob)}</strong>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}                    
+
                     {/* Melhor odd */}
                     <div className="pi-panel">
                       <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
-                      {quote.odds?.best ? (
+                      {quote?.odds?.best ? (
                         <div className="pi-panel-value">
                           H {fmtOdds(quote.odds.best.H)} <br />
                           D {fmtOdds(quote.odds.best.D)} <br />
                           A {fmtOdds(quote.odds.best.A)}
                         </div>
-                      ) : quote.odds_best ? (
+                      ) : selected?.odds_best ? (
                         <div className="pi-panel-value">
-                          H {fmtOdds(quote.odds_best.H)} <br />
-                          D {fmtOdds(quote.odds_best.D)} <br />
-                          A {fmtOdds(quote.odds_best.A)}
+                          H {fmtOdds(selected.odds_best.H)} <br />
+                          D {fmtOdds(selected.odds_best.D)} <br />
+                          A {fmtOdds(selected.odds_best.A)}
                         </div>
                       ) : (
                         <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
@@ -755,9 +1229,9 @@ export default function ProductIndex() {
                     {vis.context.show_confidence_level ? (
                       <div className="pi-panel">
                         <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
-                        <div className="pi-panel-value">{fmtPct(quote?.matchup?.confidence ?? 0)}</div>
+                        <div className="pi-panel-value">{fmtPct(effectiveConfidence)}</div>
                         <div className="pi-muted">
-                          {t(lang, "matchup.status")}: <b>{quote?.matchup?.status}</b>
+                          {t(lang, "matchup.status")}: <b>{effectiveMatchStatus ?? "—"}</b>
                         </div>
                       </div>
                     ) : (
@@ -785,6 +1259,21 @@ export default function ProductIndex() {
                           {vis.value.show_value_detected ? (
                             <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
                           ) : null}
+                        </div>
+                      ) : selected?.edge_summary?.best_edge != null ? (
+                        <div className="pi-panel">
+                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                          <div className="pi-panel-value">
+                            {fmtEdge(selected.edge_summary.best_edge)}
+                          </div>
+                          <div className="pi-muted">
+                            {fmtOutcome(
+                              selected.edge_summary.best_outcome,
+                              selected.home_name,
+                              selected.away_name,
+                              lang
+                            )}
+                          </div>
                         </div>
                       ) : (
                         <div className="pi-panel">

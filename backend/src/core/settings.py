@@ -2,7 +2,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -10,8 +10,31 @@ BASE_DIR = Path(__file__).resolve().parents[2]  # backend/
 CONFIG_DIR = BASE_DIR / "config"
 I18N_DIR = BASE_DIR / "i18n"
 
+
 def _read_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if raw == "":
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_str(name: str, default: str = "") -> str:
+    return str(os.getenv(name, default)).strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -26,6 +49,22 @@ class Settings:
     database_url: Optional[str]
     default_lang: str
     supported_langs: List[str]
+    app_env: str
+
+    # Dev / Auth flags
+    product_auth_enabled: bool
+    admin_auth_enabled: bool
+    product_dev_auto_login_enabled: bool
+    product_dev_auto_login_email: str
+    product_dev_auto_login_plan: str
+    admin_dev_bypass_enabled: bool
+    admin_dev_actor_email: str
+
+    # Product session
+    product_session_cookie_name: str
+    product_session_ttl_days: int
+    product_session_cookie_secure: bool
+    product_session_cookie_samesite: str
 
     # Config files
     sports_config: Dict[str, Any]
@@ -33,24 +72,43 @@ class Settings:
     theodds_endpoints: Dict[str, Any]
     app_defaults: Dict[str, Any]
 
+
 def load_settings() -> Settings:
-    # Carrega .env do backend/ (se existir)
     load_dotenv(dotenv_path=BASE_DIR / ".env", override=False)
 
-    # ENV (único lugar)
-    apifootball_base_url = os.getenv("APIFOOTBALL_BASE_URL", "").strip()
-    apifootball_key = os.getenv("APIFOOTBALL_KEY", "").strip()
-    the_odds_api_base_url = os.getenv("THE_ODDS_API_BASE_URL", "").strip()
-    the_odds_api_key = os.getenv("THE_ODDS_API_KEY", "").strip()
+    apifootball_base_url = _env_str("APIFOOTBALL_BASE_URL")
+    apifootball_key = _env_str("APIFOOTBALL_KEY")
+    the_odds_api_base_url = _env_str("THE_ODDS_API_BASE_URL")
+    the_odds_api_key = _env_str("THE_ODDS_API_KEY")
 
-    # Defaults com fallback seguro (mínimo hardcode)
     app_defaults = _read_json(CONFIG_DIR / "app.defaults.json")
-    db_path = os.getenv("PREVIA_DB_PATH", app_defaults.get("db_path", "data/app.db"))
-    database_url = os.getenv("DATABASE_URL", "").strip() or None
+    db_path = _env_str("PREVIA_DB_PATH", app_defaults.get("db_path", "data/app.db"))
+    database_url = _env_str("DATABASE_URL") or None
     default_lang = app_defaults.get("default_lang", "pt-BR")
     supported_langs = app_defaults.get("supported_langs", ["pt-BR", "en", "es"])
+    app_env = _env_str("APP_ENV", "dev").lower()
 
-    # Configs externas (contrato do sistema)
+    product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
+    admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
+
+    product_dev_auto_login_enabled = _env_bool("PRODUCT_DEV_AUTO_LOGIN_ENABLED", default=False)
+    product_dev_auto_login_email = _env_str("PRODUCT_DEV_AUTO_LOGIN_EMAIL", "dev@previa.local")
+    product_dev_auto_login_plan = _env_str("PRODUCT_DEV_AUTO_LOGIN_PLAN", "PRO").upper()
+
+    admin_dev_bypass_enabled = _env_bool("ADMIN_DEV_BYPASS_ENABLED", default=True)
+    admin_dev_actor_email = _env_str("ADMIN_DEV_ACTOR_EMAIL", "dev-admin@previa.local")
+
+    default_cookie_secure = app_env in {"prod", "production"}
+    product_session_cookie_name = _env_str("PRODUCT_SESSION_COOKIE_NAME", "previa_product_session")
+    product_session_ttl_days = max(1, _env_int("PRODUCT_SESSION_TTL_DAYS", 30))
+    product_session_cookie_secure = _env_bool(
+        "PRODUCT_SESSION_COOKIE_SECURE",
+        default=default_cookie_secure,
+    )
+    product_session_cookie_samesite = _env_str("PRODUCT_SESSION_COOKIE_SAMESITE", "lax").lower()
+    if product_session_cookie_samesite not in {"lax", "strict", "none"}:
+        product_session_cookie_samesite = "lax"
+
     sports_config = _read_json(CONFIG_DIR / "sports.json")
     apifootball_endpoints = _read_json(CONFIG_DIR / "endpoints.apifootball.json")
     theodds_endpoints = _read_json(CONFIG_DIR / "endpoints.theodds.json")
@@ -64,9 +122,20 @@ def load_settings() -> Settings:
         database_url=database_url,
         default_lang=default_lang,
         supported_langs=supported_langs,
+        app_env=app_env,
+        product_auth_enabled=product_auth_enabled,
+        admin_auth_enabled=admin_auth_enabled,
+        product_dev_auto_login_enabled=product_dev_auto_login_enabled,
+        product_dev_auto_login_email=product_dev_auto_login_email,
+        product_dev_auto_login_plan=product_dev_auto_login_plan,
+        admin_dev_bypass_enabled=admin_dev_bypass_enabled,
+        admin_dev_actor_email=admin_dev_actor_email,
+        product_session_cookie_name=product_session_cookie_name,
+        product_session_ttl_days=product_session_ttl_days,
+        product_session_cookie_secure=product_session_cookie_secure,
+        product_session_cookie_samesite=product_session_cookie_samesite,
         sports_config=sports_config,
         apifootball_endpoints=apifootball_endpoints,
         theodds_endpoints=theodds_endpoints,
         app_defaults=app_defaults,
     )
-

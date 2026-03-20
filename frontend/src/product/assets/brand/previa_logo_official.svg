@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="600" viewBox="0 0 1600 600">
+  <rect width="100%" height="100%" fill="white"/>
+  <text x="800" y="250" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="160" fill="#0F172A">
+    prev<tspan fill="#0B2F8A" font-weight="900">IA</tspan>
+  </text>
+  <text x="800" y="350" text-anchor="middle"
+        font-family="Inter, Arial, Helvetica, sans-serif"
+        font-size="48"
+        fill="#64748B"
+        letter-spacing="10"
+        font-weight="700">
+        BETTING INTELLIGENCE
+  </text>
+</svg>

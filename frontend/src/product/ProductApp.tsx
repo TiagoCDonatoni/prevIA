@@ -3,20 +3,20 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { ProductLayout } from "./layout/ProductLayout";
 import "./product.css";
 import { ProductStoreProvider } from "./state/productStore";
-
+import ProductBootstrap from "./state/ProductBootstrap";
 import ProductIndex from "./pages/ProductIndex";
 
 export function ProductApp() {
   return (
     <ProductStoreProvider>
-      <Routes>
-        <Route element={<ProductLayout />}>
-          {/* INDEX NOVO "do zero" */}
-          <Route index element={<ProductIndex />} />
-        </Route>
-
-        <Route path="*" element={<Navigate to="/index" replace />} />
-      </Routes>
+      <ProductBootstrap>
+        <Routes>
+          <Route path="/" element={<ProductLayout />}>
+            <Route index element={<ProductIndex />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </ProductBootstrap>
     </ProductStoreProvider>
   );
 }
