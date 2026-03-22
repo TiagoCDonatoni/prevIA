@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from fastapi import Request
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
 from src.auth.passwords import hash_password, validate_password_policy, verify_password
 from src.auth.sessions import (
@@ -136,6 +140,258 @@ def _is_valid_email(email_normalized: str) -> bool:
         and not email_normalized.endswith("@")
     )
 
+
+def _make_password_reset_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _make_password_reset_token_hash(raw_token: str) -> str:
+    return hashlib.sha256(str(raw_token or "").encode("utf-8")).hexdigest()
+
+
+def _build_password_reset_expires_at():
+    settings = load_settings()
+    ttl_minutes = max(5, int(settings.product_password_reset_ttl_minutes))
+    return datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+
+
+def _verify_google_credential(raw_credential: str) -> Dict[str, Any]:
+    settings = load_settings()
+    credential = str(raw_credential or "").strip()
+
+    if not credential:
+        raise ValueError("missing google credential")
+
+    allowed_client_ids = [item for item in settings.product_google_client_ids if item]
+    if not allowed_client_ids:
+        raise ValueError("google auth not configured")
+
+    idinfo = google_id_token.verify_oauth2_token(
+        credential,
+        google_requests.Request(),
+        audience=None,
+    )
+
+    aud = str(idinfo.get("aud") or "").strip()
+    if aud not in allowed_client_ids:
+        raise ValueError("invalid google audience")
+
+    issuer = str(idinfo.get("iss") or "").strip()
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise ValueError("invalid google issuer")
+
+    email = str(idinfo.get("email") or "").strip()
+    email_normalized = normalize_email(email)
+    if not _is_valid_email(email_normalized):
+        raise ValueError("invalid google email")
+
+    provider_user_id = str(idinfo.get("sub") or "").strip()
+    if not provider_user_id:
+        raise ValueError("invalid google subject")
+
+    email_verified = bool(idinfo.get("email_verified"))
+    full_name = str(idinfo.get("name") or "").strip() or None
+    picture = str(idinfo.get("picture") or "").strip() or None
+
+    return {
+        "provider_user_id": provider_user_id,
+        "email": email,
+        "email_normalized": email_normalized,
+        "email_verified": email_verified,
+        "full_name": full_name,
+        "picture": picture,
+        "payload": dict(idinfo),
+    }
+
+
+def _login_or_signup_with_google(
+    *,
+    request: Request,
+    google_profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    email = google_profile["email"]
+    email_normalized = google_profile["email_normalized"]
+    provider_user_id = google_profile["provider_user_id"]
+    email_verified = bool(google_profile["email_verified"])
+    full_name = google_profile["full_name"]
+    provider_payload = google_profile["payload"]
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, identity_id
+                FROM app.user_identities
+                WHERE provider = 'google'
+                  AND provider_user_id = %(provider_user_id)s
+                LIMIT 1
+                """,
+                {"provider_user_id": provider_user_id},
+            )
+            google_identity_row = cur.fetchone()
+
+            if google_identity_row is not None:
+                user_id = int(google_identity_row[0])
+                identity_id = int(google_identity_row[1])
+
+                cur.execute(
+                    """
+                    UPDATE app.users
+                    SET email = %(email)s,
+                        email_normalized = %(email_normalized)s,
+                        full_name = COALESCE(full_name, %(full_name)s),
+                        email_verified = %(email_verified)s OR email_verified,
+                        last_login_at_utc = NOW(),
+                        updated_at_utc = NOW()
+                    WHERE user_id = %(user_id)s
+                    """,
+                    {
+                        "user_id": user_id,
+                        "email": email,
+                        "email_normalized": email_normalized,
+                        "full_name": full_name,
+                        "email_verified": email_verified,
+                    },
+                )
+
+                cur.execute(
+                    """
+                    UPDATE app.user_identities
+                    SET provider_email = %(provider_email)s,
+                        provider_payload_json = %(provider_payload_json)s::jsonb,
+                        is_primary = TRUE,
+                        last_login_at_utc = NOW(),
+                        updated_at_utc = NOW()
+                    WHERE identity_id = %(identity_id)s
+                    """,
+                    {
+                        "identity_id": identity_id,
+                        "provider_email": email,
+                        "provider_payload_json": json.dumps(provider_payload),
+                    },
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT user_id, full_name, email_verified
+                    FROM app.users
+                    WHERE email_normalized = %(email_normalized)s
+                    LIMIT 1
+                    """,
+                    {"email_normalized": email_normalized},
+                )
+                existing_user_row = cur.fetchone()
+
+                if existing_user_row is not None:
+                    user_id = int(existing_user_row[0])
+
+                    cur.execute(
+                        """
+                        UPDATE app.users
+                        SET email = %(email)s,
+                            full_name = COALESCE(full_name, %(full_name)s),
+                            email_verified = %(email_verified)s OR email_verified,
+                            last_login_at_utc = NOW(),
+                            updated_at_utc = NOW()
+                        WHERE user_id = %(user_id)s
+                        """,
+                        {
+                            "user_id": user_id,
+                            "email": email,
+                            "full_name": full_name,
+                            "email_verified": email_verified,
+                        },
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO app.users (
+                            email,
+                            email_normalized,
+                            full_name,
+                            preferred_lang,
+                            status,
+                            email_verified,
+                            last_login_at_utc
+                        )
+                        VALUES (
+                            %(email)s,
+                            %(email_normalized)s,
+                            %(full_name)s,
+                            %(preferred_lang)s,
+                            'active',
+                            %(email_verified)s,
+                            NOW()
+                        )
+                        RETURNING user_id
+                        """,
+                        {
+                            "email": email,
+                            "email_normalized": email_normalized,
+                            "full_name": full_name,
+                            "preferred_lang": load_settings().default_lang,
+                            "email_verified": email_verified,
+                        },
+                    )
+                    user_id = int(cur.fetchone()[0])
+
+                cur.execute(
+                    """
+                    INSERT INTO app.user_identities (
+                        user_id,
+                        provider,
+                        provider_user_id,
+                        provider_email,
+                        provider_payload_json,
+                        is_primary,
+                        last_login_at_utc
+                    )
+                    VALUES (
+                        %(user_id)s,
+                        'google',
+                        %(provider_user_id)s,
+                        %(provider_email)s,
+                        %(provider_payload_json)s::jsonb,
+                        TRUE,
+                        NOW()
+                    )
+                    RETURNING identity_id
+                    """,
+                    {
+                        "user_id": user_id,
+                        "provider_user_id": provider_user_id,
+                        "provider_email": email,
+                        "provider_payload_json": json.dumps(provider_payload),
+                    },
+                )
+                identity_id = int(cur.fetchone()[0])
+
+            cur.execute(
+                """
+                UPDATE app.user_identities
+                SET is_primary = CASE WHEN identity_id = %(identity_id)s THEN TRUE ELSE is_primary END,
+                    updated_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                """,
+                {
+                    "user_id": user_id,
+                    "identity_id": identity_id,
+                },
+            )
+
+            subscription = _get_or_create_active_subscription(cur, user_id=user_id)
+            _refresh_entitlements_snapshot(cur, user_id=user_id, plan_code=subscription["plan_code"])
+
+            raw_session_token = _insert_session(cur, user_id=user_id, request=request)
+            payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="google")
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "auth_payload": payload,
+        "raw_session_token": raw_session_token,
+    }
 
 def _refresh_entitlements_snapshot(cur, *, user_id: int, plan_code: str) -> Dict[str, Any]:
     entitlements = build_entitlements_for_plan(plan_code)
@@ -915,3 +1171,314 @@ def logout_with_session_token(raw_session_token: str | None) -> None:
                 {"session_token_hash": session_token_hash},
             )
         conn.commit()
+
+
+def login_with_google_credential(
+    *,
+    request: Request,
+    credential: str,
+) -> Dict[str, Any]:
+    try:
+        google_profile = _verify_google_credential(credential)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "INVALID_GOOGLE_CREDENTIAL",
+            "message": str(exc) or "invalid google credential",
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "INVALID_GOOGLE_CREDENTIAL",
+            "message": "invalid google credential",
+        }
+
+    return _login_or_signup_with_google(
+        request=request,
+        google_profile=google_profile,
+    )
+
+def forgot_password(
+    *,
+    request: Request,
+    email: str,
+) -> Dict[str, Any]:
+
+    session_token_hash = make_session_token_hash(token)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE auth.sessions
+                SET revoked_at_utc = NOW()
+                WHERE session_token_hash = %(session_token_hash)s
+                  AND revoked_at_utc IS NULL
+                """,
+                {"session_token_hash": session_token_hash},
+            )
+        conn.commit()
+
+def forgot_password(
+    *,
+    request: Request,
+    email: str,
+) -> Dict[str, Any]:
+    settings = load_settings()
+    email_normalized = normalize_email(email)
+
+    response: Dict[str, Any] = {
+        "ok": True,
+        "message": "if the account exists, reset instructions were generated",
+        "meta": {
+            "generated_at_utc": utc_now_iso(),
+        },
+    }
+
+    if not _is_valid_email(email_normalized):
+        return response
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    u.user_id,
+                    i.identity_id,
+                    u.email
+                FROM app.users u
+                JOIN app.user_identities i
+                  ON i.user_id = u.user_id
+                 AND i.provider = 'password'
+                WHERE u.email_normalized = %(email_normalized)s
+                  AND u.status NOT IN ('blocked', 'deleted')
+                ORDER BY i.is_primary DESC, i.identity_id DESC
+                LIMIT 1
+                """,
+                {"email_normalized": email_normalized},
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                conn.commit()
+                return response
+
+            user_id = int(row[0])
+            identity_id = int(row[1])
+            provider_email = str(row[2])
+            raw_reset_token = _make_password_reset_token()
+            reset_token_hash = _make_password_reset_token_hash(raw_reset_token)
+            expires_at_utc = _build_password_reset_expires_at()
+            fingerprints = build_request_fingerprints(request)
+
+            cur.execute(
+                """
+                UPDATE auth.password_reset_tokens
+                SET revoked_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                  AND used_at_utc IS NULL
+                  AND revoked_at_utc IS NULL
+                """,
+                {"user_id": user_id},
+            )
+
+            cur.execute(
+                """
+                INSERT INTO auth.password_reset_tokens (
+                    user_id,
+                    identity_id,
+                    token_hash,
+                    requested_for_email,
+                    expires_at_utc,
+                    request_ip_hash,
+                    request_user_agent_hash
+                )
+                VALUES (
+                    %(user_id)s,
+                    %(identity_id)s,
+                    %(token_hash)s,
+                    %(requested_for_email)s,
+                    %(expires_at_utc)s,
+                    %(request_ip_hash)s,
+                    %(request_user_agent_hash)s
+                )
+                """,
+                {
+                    "user_id": user_id,
+                    "identity_id": identity_id,
+                    "token_hash": reset_token_hash,
+                    "requested_for_email": provider_email,
+                    "expires_at_utc": expires_at_utc,
+                    "request_ip_hash": fingerprints["ip_hash"],
+                    "request_user_agent_hash": fingerprints["user_agent_hash"],
+                },
+            )
+
+        conn.commit()
+
+    if settings.product_password_reset_debug_token_enabled:
+        response["debug"] = {
+            "reset_token": raw_reset_token,
+            "expires_at_utc": expires_at_utc.isoformat().replace("+00:00", "Z"),
+        }
+
+    return response
+
+
+def reset_password_with_token(
+    *,
+    token: str,
+    new_password: str,
+) -> Dict[str, Any]:
+    raw_token = str(token or "").strip()
+    if not raw_token:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "INVALID_RESET_TOKEN",
+            "message": "invalid reset token",
+        }
+
+    try:
+        validate_password_policy(new_password)
+    except ValueError:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "weak password",
+        }
+
+    reset_token_hash = _make_password_reset_token_hash(raw_token)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prt.reset_token_id,
+                    prt.user_id,
+                    prt.identity_id,
+                    u.status
+                FROM auth.password_reset_tokens prt
+                JOIN app.users u
+                  ON u.user_id = prt.user_id
+                WHERE prt.token_hash = %(token_hash)s
+                  AND prt.used_at_utc IS NULL
+                  AND prt.revoked_at_utc IS NULL
+                  AND prt.expires_at_utc > NOW()
+                LIMIT 1
+                """,
+                {"token_hash": reset_token_hash},
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 400,
+                    "code": "INVALID_RESET_TOKEN",
+                    "message": "invalid reset token",
+                }
+
+            reset_token_id = int(row[0])
+            user_id = int(row[1])
+            preferred_identity_id = int(row[2]) if row[2] is not None else None
+            user_status = str(row[3])
+
+            if user_status in {"blocked", "deleted"}:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 403,
+                    "code": "ACCOUNT_BLOCKED",
+                    "message": "account blocked",
+                }
+
+            cur.execute(
+                """
+                SELECT identity_id
+                FROM app.user_identities
+                WHERE user_id = %(user_id)s
+                  AND provider = 'password'
+                ORDER BY
+                    CASE
+                        WHEN %(preferred_identity_id)s IS NOT NULL AND identity_id = %(preferred_identity_id)s THEN 0
+                        ELSE 1
+                    END,
+                    is_primary DESC,
+                    identity_id DESC
+                LIMIT 1
+                """,
+                {
+                    "user_id": user_id,
+                    "preferred_identity_id": preferred_identity_id,
+                },
+            )
+            identity_row = cur.fetchone()
+
+            if identity_row is None:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 400,
+                    "code": "INVALID_RESET_TOKEN",
+                    "message": "invalid reset token",
+                }
+
+            identity_id = int(identity_row[0])
+            next_password_hash = hash_password(new_password)
+
+            cur.execute(
+                """
+                UPDATE app.user_identities
+                SET password_hash = %(password_hash)s,
+                    updated_at_utc = NOW()
+                WHERE identity_id = %(identity_id)s
+                """,
+                {
+                    "identity_id": identity_id,
+                    "password_hash": next_password_hash,
+                },
+            )
+
+            cur.execute(
+                """
+                UPDATE app.users
+                SET updated_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                """,
+                {"user_id": user_id},
+            )
+
+            cur.execute(
+                """
+                UPDATE auth.password_reset_tokens
+                SET used_at_utc = NOW()
+                WHERE reset_token_id = %(reset_token_id)s
+                """,
+                {"reset_token_id": reset_token_id},
+            )
+
+            cur.execute(
+                """
+                UPDATE auth.sessions
+                SET revoked_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                  AND revoked_at_utc IS NULL
+                """,
+                {"user_id": user_id},
+            )
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "message": "password reset successful",
+        "meta": {
+            "generated_at_utc": utc_now_iso(),
+        },
+    }

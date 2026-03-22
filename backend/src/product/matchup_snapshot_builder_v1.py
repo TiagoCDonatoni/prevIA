@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -15,7 +17,6 @@ from src.product.score_engine_v1 import (
     derive_btts,
     derive_totals,
 )
-
 
 def _select_candidates(conn, *, sport_key: str, hours_ahead: int, limit: int) -> List[Dict[str, Any]]:
     """
@@ -455,6 +456,47 @@ def _build_inputs_dict(
         "lambda_away": float(lam_away) if lam_away is not None else None,
     }
 
+def _build_empty_snapshot_payload(
+    *,
+    model_version: str,
+    calc_version: str,
+    totals: Dict[str, Any],
+    league_id: Optional[int],
+    season: Optional[int],
+    fixture_id: Optional[int],
+    home_team_id: Optional[int],
+    away_team_id: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        "model_version": model_version,
+        "calc_version": calc_version,
+        "engine": {"type": "poisson_independent", "max_goals": 6},
+        "inputs": _build_inputs_dict(
+            league_id=league_id,
+            season=season,
+            fixture_id=fixture_id,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            lam_home=None,
+            lam_away=None,
+        ),
+        "matrix": None,
+        "markets": {
+            "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
+            "btts": {"p_model": {"yes": None, "no": None}},
+            "totals": {
+                "main_line": totals.get("main_line"),
+                "best_odds": {
+                    "over": totals.get("best_over"),
+                    "under": totals.get("best_under"),
+                },
+                "p_model": {"over": None, "under": None},
+                "lines": {
+                    "2.5": {"over": None, "under": None, "push": None},
+                },
+            },
+        },
+    }
 
 def rebuild_matchup_snapshots_v1(
     conn,
@@ -634,6 +676,31 @@ def rebuild_matchup_snapshots_v1(
 
             if lambdas is None:
                 c["skipped_no_stats"] += 1
+
+                payload = _build_empty_snapshot_payload(
+                    model_version=model_version,
+                    calc_version=calc_version,
+                    totals=totals,
+                    league_id=league_id,
+                    season=season,
+                    fixture_id=None,
+                    home_team_id=int(home_team_id),
+                    away_team_id=int(away_team_id),
+                )
+
+                upsert_matchup_snapshot_v1(
+                    conn,
+                    event_id=event_id,
+                    sport_key=ev["sport_key"],
+                    kickoff_utc=ev["kickoff_utc"],
+                    home_name=ev["home_name"],
+                    away_name=ev["away_name"],
+                    fixture_id=None,
+                    source_captured_at_utc=totals["source_captured_at_utc"],
+                    payload=payload,
+                    model_version=model_version,
+                )
+                c["snapshots_event_fallback"] += 1
                 continue
 
             mx = generate_score_matrix_v1(lambdas.lam_home, lambdas.lam_away, max_goals=6)
@@ -718,6 +785,31 @@ def rebuild_matchup_snapshots_v1(
 
         if lambdas is None:
             c["skipped_no_stats"] += 1
+
+            payload = _build_empty_snapshot_payload(
+                model_version=model_version,
+                calc_version=calc_version,
+                totals=totals,
+                league_id=fx.get("league_id"),
+                season=fx.get("season"),
+                fixture_id=fixture_id,
+                home_team_id=fx.get("home_team_id"),
+                away_team_id=fx.get("away_team_id"),
+            )
+
+            upsert_matchup_snapshot_v1(
+                conn,
+                event_id=event_id,
+                sport_key=ev["sport_key"],
+                kickoff_utc=ev["kickoff_utc"],
+                home_name=ev["home_name"],
+                away_name=ev["away_name"],
+                fixture_id=fixture_id,
+                source_captured_at_utc=totals["source_captured_at_utc"],
+                payload=payload,
+                model_version=model_version,
+            )
+            c["snapshots_event_fallback"] += 1
             continue
 
         # Score Engine v1: matriz -> mercados.

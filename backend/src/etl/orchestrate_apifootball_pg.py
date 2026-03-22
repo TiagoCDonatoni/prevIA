@@ -129,18 +129,25 @@ def orchestrate_apifootball_pg(
     report["core"]["leagues"] = run_core_etl(
         provider=provider,
         endpoint="leagues",
-        limit=5000,
+        limit=500,
         league_ids=league_ids,
+        seasons=seasons,
     )
+
     report["core"]["teams"] = run_core_etl(
         provider=provider,
         endpoint="teams",
-        limit=5000,
+        limit=500,
+        league_ids=league_ids,
+        seasons=seasons,
     )
+
     report["core"]["fixtures"] = run_core_etl(
         provider=provider,
         endpoint="fixtures",
-        limit=20000,
+        limit=1000,
+        league_ids=league_ids,
+        seasons=seasons,
     )
 
     report["plan"]["calls_left"] = calls_left

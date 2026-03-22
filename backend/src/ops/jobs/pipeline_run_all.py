@@ -7,6 +7,8 @@ from src.ops.jobs.odds_refresh import odds_refresh
 from src.ops.jobs.odds_resolve import odds_resolve_batch
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.models_ensure_1x2_v1 import ensure_models_1x2_v1
+from src.product.model_registry import get_active_model_version
+
 
 def pipeline_run_all(
     *,
@@ -29,9 +31,11 @@ def pipeline_run_all(
       from odds.odds_league_map m
       where m.enabled = true
         and m.mapping_status = 'approved'
-        and (%(only)s::text is null or m.sport_key = %(only)s::text)    
+        and (%(only)s::text is null or m.sport_key = %(only)s::text)
       order by m.sport_key asc
     """
+
+    active_model_version = get_active_model_version()
 
     items: List[Dict[str, Any]] = []
     with pg_conn() as conn:
@@ -74,8 +78,15 @@ def pipeline_run_all(
             mode="window",
             hours_ahead=hours_ahead,
             limit=500,
+            model_version=active_model_version,
         )
 
         items.append(step)
 
-    return {"ok": True, "only_sport_key": only_sport_key, "items": items, "count": len(items)}
+    return {
+        "ok": True,
+        "only_sport_key": only_sport_key,
+        "model_version": active_model_version,
+        "items": items,
+        "count": len(items),
+    }

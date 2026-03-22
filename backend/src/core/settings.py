@@ -38,20 +38,17 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    # ENV
     apifootball_base_url: str
     apifootball_key: str
     the_odds_api_base_url: str
     the_odds_api_key: str
 
-    # App
     db_path: str
     database_url: Optional[str]
     default_lang: str
     supported_langs: List[str]
     app_env: str
 
-    # Dev / Auth flags
     product_auth_enabled: bool
     admin_auth_enabled: bool
     product_dev_auto_login_enabled: bool
@@ -60,14 +57,16 @@ class Settings:
     admin_dev_bypass_enabled: bool
     admin_dev_actor_email: str
 
-    # Product session
     product_session_cookie_name: str
     product_session_ttl_days: int
     product_session_cookie_secure: bool
     product_session_cookie_samesite: str
+    product_password_reset_ttl_minutes: int
+    product_password_reset_debug_token_enabled: bool
+    product_google_client_ids: List[str]
 
-    # Config files
     sports_config: Dict[str, Any]
+
     apifootball_endpoints: Dict[str, Any]
     theodds_endpoints: Dict[str, Any]
     app_defaults: Dict[str, Any]
@@ -109,6 +108,17 @@ def load_settings() -> Settings:
     if product_session_cookie_samesite not in {"lax", "strict", "none"}:
         product_session_cookie_samesite = "lax"
 
+    product_password_reset_ttl_minutes = max(5, _env_int("PRODUCT_PASSWORD_RESET_TTL_MINUTES", 60))
+    product_password_reset_debug_token_enabled = _env_bool(
+        "PRODUCT_PASSWORD_RESET_DEBUG_TOKEN_ENABLED",
+        default=app_env in {"dev", "development"},
+    )
+    product_google_client_ids = [
+        item.strip()
+        for item in _env_str("PRODUCT_GOOGLE_CLIENT_IDS", "").split(",")
+        if item.strip()
+    ]
+
     sports_config = _read_json(CONFIG_DIR / "sports.json")
     apifootball_endpoints = _read_json(CONFIG_DIR / "endpoints.apifootball.json")
     theodds_endpoints = _read_json(CONFIG_DIR / "endpoints.theodds.json")
@@ -134,6 +144,9 @@ def load_settings() -> Settings:
         product_session_ttl_days=product_session_ttl_days,
         product_session_cookie_secure=product_session_cookie_secure,
         product_session_cookie_samesite=product_session_cookie_samesite,
+        product_password_reset_ttl_minutes=product_password_reset_ttl_minutes,
+        product_password_reset_debug_token_enabled=product_password_reset_debug_token_enabled,
+        product_google_client_ids=product_google_client_ids,
         sports_config=sports_config,
         apifootball_endpoints=apifootball_endpoints,
         theodds_endpoints=theodds_endpoints,

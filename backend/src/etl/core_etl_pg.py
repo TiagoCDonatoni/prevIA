@@ -207,21 +207,46 @@ def map_fixture(item: dict) -> Optional[dict]:
     }
 
 
-def _load_raw_bodies(*, provider: str, endpoint: str, limit: int) -> List[dict]:
-    sql = """
+def _load_raw_bodies(
+    *,
+    provider: str,
+    endpoint: str,
+    limit: int,
+    league_ids: Optional[List[int]] = None,
+    seasons: Optional[List[int]] = None,
+) -> List[dict]:
+    where = [
+        "provider = %(provider)s",
+        "endpoint = %(endpoint)s",
+        "ok = true",
+    ]
+
+    params: Dict[str, Any] = {
+        "provider": provider,
+        "endpoint": endpoint,
+        "limit": int(limit),
+    }
+
+    if seasons:
+        params["seasons"] = [str(int(x)) for x in seasons]
+        where.append("(request_params->'params'->>'season') = ANY(%(seasons)s)")
+
+    if endpoint in ("teams", "fixtures") and league_ids:
+        params["league_ids"] = [str(int(x)) for x in league_ids]
+        where.append("(request_params->'params'->>'league') = ANY(%(league_ids)s)")
+
+    sql = f"""
     select response_body
     from raw.api_responses
-    where provider = %(provider)s
-      and endpoint = %(endpoint)s
-      and ok = true
+    where {' and '.join(where)}
     order by fetched_at_utc desc
     limit %(limit)s
     """
+
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, {"provider": provider, "endpoint": endpoint, "limit": limit})
+            cur.execute(sql, params)
             return [r[0] for r in cur.fetchall()]
-
 
 def _apply_upserts(upsert_sql: str, rows: List[dict]) -> int:
     if not rows:
@@ -235,8 +260,21 @@ def _apply_upserts(upsert_sql: str, rows: List[dict]) -> int:
                     n += 1
                 return n
 
-def run_core_etl(*, provider: str, endpoint: str, limit: int, league_ids: Optional[List[int]] = None) -> Dict[str, int]:
-    bodies = _load_raw_bodies(provider=provider, endpoint=endpoint, limit=limit)
+def run_core_etl(
+    *,
+    provider: str,
+    endpoint: str,
+    limit: int,
+    league_ids: Optional[List[int]] = None,
+    seasons: Optional[List[int]] = None,
+) -> Dict[str, int]:
+    bodies = _load_raw_bodies(
+        provider=provider,
+        endpoint=endpoint,
+        limit=limit,
+        league_ids=league_ids,
+        seasons=seasons,
+    )
 
     if endpoint == "leagues":
         mapped = [map_league(it) for b in bodies for it in _iter_response_items(b)]
@@ -258,6 +296,14 @@ def run_core_etl(*, provider: str, endpoint: str, limit: int, league_ids: Option
     if endpoint == "fixtures":
         mapped = [map_fixture(it) for b in bodies for it in _iter_response_items(b)]
         mapped = [m for m in mapped if m is not None]
+
+        if league_ids:
+            allow_leagues = set(int(x) for x in league_ids)
+            mapped = [m for m in mapped if int(m["league_id"]) in allow_leagues]
+
+        if seasons:
+            allow_seasons = set(int(x) for x in seasons)
+            mapped = [m for m in mapped if int(m["season"]) in allow_seasons]
         upserts = _apply_upserts(FIXTURES_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 

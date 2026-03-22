@@ -16,6 +16,99 @@ def _utc_now():
 def _today_date_key():
     return _utc_now().date()
 
+PERSISTENT_REVEAL_PLAN_CODES = {"BASIC", "LIGHT", "PRO"}
+
+
+def _normalize_plan_code(raw: Any) -> str:
+    plan = str(raw or "FREE").strip().upper()
+    return plan if plan in {"FREE", "BASIC", "LIGHT", "PRO"} else "FREE"
+
+
+def _plan_has_persistent_reveals(plan_code: Any) -> bool:
+    return _normalize_plan_code(plan_code) in PERSISTENT_REVEAL_PLAN_CODES
+
+
+def _fetch_revealed_fixture_rows(cur, *, user_id: int, date_key, plan_code: str):
+    if _plan_has_persistent_reveals(plan_code):
+        cur.execute(
+            """
+            SELECT DISTINCT ure.fixture_key
+            FROM access.user_revealed_events ure
+            LEFT JOIN odds.odds_events oe
+              ON CAST(oe.event_id AS TEXT) = ure.fixture_key
+            WHERE ure.user_id = %(user_id)s
+              AND (
+                oe.event_id IS NULL
+                OR oe.commence_time_utc IS NULL
+                OR oe.commence_time_utc >= NOW()
+              )
+            ORDER BY ure.fixture_key ASC
+            """,
+            {"user_id": user_id},
+        )
+        return cur.fetchall()
+
+    cur.execute(
+        """
+        SELECT fixture_key
+        FROM access.user_revealed_events
+        WHERE user_id = %(user_id)s
+          AND date_key = %(date_key)s
+        ORDER BY revealed_at_utc ASC
+        """,
+        {"user_id": user_id, "date_key": date_key},
+    )
+    return cur.fetchall()
+
+
+def _is_fixture_currently_revealed(
+    cur,
+    *,
+    user_id: int,
+    date_key,
+    fixture_key: str,
+    plan_code: str,
+) -> bool:
+    if _plan_has_persistent_reveals(plan_code):
+        cur.execute(
+            """
+            SELECT 1
+            FROM access.user_revealed_events ure
+            LEFT JOIN odds.odds_events oe
+              ON CAST(oe.event_id AS TEXT) = ure.fixture_key
+            WHERE ure.user_id = %(user_id)s
+              AND ure.fixture_key = %(fixture_key)s
+              AND (
+                oe.event_id IS NULL
+                OR oe.commence_time_utc IS NULL
+                OR oe.commence_time_utc >= NOW()
+              )
+            LIMIT 1
+            """,
+            {
+                "user_id": user_id,
+                "fixture_key": fixture_key,
+            },
+        )
+        return cur.fetchone() is not None
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM access.user_revealed_events
+        WHERE user_id = %(user_id)s
+          AND date_key = %(date_key)s
+          AND fixture_key = %(fixture_key)s
+        LIMIT 1
+        """,
+        {
+            "user_id": user_id,
+            "date_key": date_key,
+            "fixture_key": fixture_key,
+        },
+    )
+    return cur.fetchone() is not None
+
 
 def _resolve_current_actor(request: Request) -> Dict[str, Any]:
     payload = get_auth_me_payload(request)
@@ -53,17 +146,12 @@ def get_usage_payload(request: Request) -> Dict[str, Any]:
             )
             row = cur.fetchone()
 
-            cur.execute(
-                """
-                SELECT fixture_key
-                FROM access.user_revealed_events
-                WHERE user_id = %(user_id)s
-                  AND date_key = %(date_key)s
-                ORDER BY revealed_at_utc ASC
-                """,
-                {"user_id": user_id, "date_key": date_key},
+            revealed_rows = _fetch_revealed_fixture_rows(
+                cur,
+                user_id=user_id,
+                date_key=date_key,
+                plan_code=plan_code,
             )
-            revealed_rows = cur.fetchall()
 
     credits_used = int(row[0]) if row else 0
     revealed_count = int(row[1]) if row else 0
@@ -106,22 +194,13 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM access.user_revealed_events
-                WHERE user_id = %(user_id)s
-                  AND date_key = %(date_key)s
-                  AND fixture_key = %(fixture_key)s
-                LIMIT 1
-                """,
-                {
-                    "user_id": user_id,
-                    "date_key": date_key,
-                    "fixture_key": fixture_key,
-                },
+            already = _is_fixture_currently_revealed(
+                cur,
+                user_id=user_id,
+                date_key=date_key,
+                fixture_key=fixture_key,
+                plan_code=actor["subscription"]["plan_code"],
             )
-            already = cur.fetchone() is not None
 
             if already:
                 cur.execute(
