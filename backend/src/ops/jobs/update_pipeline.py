@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import perf_counter
+import traceback
 from typing import Any, Dict, List, Optional
 
 from src.db.pg import pg_conn
@@ -11,6 +13,7 @@ from src.ops.jobs.odds_refresh import odds_refresh
 from src.ops.jobs.odds_resolve import odds_resolve_batch
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.models_ensure_1x2_v1 import ensure_models_1x2_v1
+from src.product.model_registry import get_active_model_version
 
 
 @dataclass
@@ -65,22 +68,49 @@ def _current_year_utc() -> int:
     return datetime.now(timezone.utc).year
 
 
+def _infer_latest_core_season(*, league_id: int) -> Optional[int]:
+    sql = "select max(season) from core.fixtures where league_id = %(league_id)s"
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"league_id": int(league_id)})
+            row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
 def _seasons_for_scope(scope: PipelineLeagueScope) -> List[int]:
     if scope.fixed_season is not None:
         return [int(scope.fixed_season)]
+
+    inferred = _infer_latest_core_season(league_id=scope.league_id)
+    if inferred is not None:
+        return [int(inferred)]
+
     year = _current_year_utc()
     return [year - 1, year]
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
 
 
 def update_pipeline_run(
     *,
     only_sport_key: Optional[str] = None,
 ) -> Dict[str, Any]:
+    started_at = datetime.now(timezone.utc)
+    global_t0 = perf_counter()
+
     scopes = _load_pipeline_scopes(only_sport_key=only_sport_key)
+    active_model_version = get_active_model_version()
 
     result: Dict[str, Any] = {
         "ok": True,
         "only_sport_key": only_sport_key,
+        "started_at_utc": started_at.isoformat(),
+        "active_model_version": active_model_version,
         "summary": {
             "leagues_requested": len(scopes),
             "leagues_processed": 0,
@@ -93,29 +123,80 @@ def update_pipeline_run(
             "snapshots_upserted": 0,
             "fallbacks": 0,
             "errors": 0,
+            "elapsed_ms": 0,
         },
         "items": [],
     }
 
-    for scope in scopes:
+    total = len(scopes)
+
+    print(
+        f"[UPDATE_PIPELINE] start scopes={total} only_sport_key={only_sport_key} model_version={active_model_version}",
+        flush=True,
+    )
+
+    for idx, scope in enumerate(scopes, start=1):
+        league_t0 = perf_counter()
+
         league_out: Dict[str, Any] = {
             "sport_key": scope.sport_key,
             "league_id": scope.league_id,
+            "season_policy": scope.season_policy,
+            "fixed_season": scope.fixed_season,
+            "tol_hours": scope.tol_hours,
+            "hours_ahead": scope.hours_ahead,
+            "regions": scope.regions,
             "steps": {},
+            "timing_ms": {},
         }
+
+        print(
+            f"[UPDATE_PIPELINE] [{idx}/{total}] start sport_key={scope.sport_key} "
+            f"league_id={scope.league_id} season_policy={scope.season_policy} "
+            f"fixed_season={scope.fixed_season} hours_ahead={scope.hours_ahead} regions={scope.regions}",
+            flush=True,
+        )
 
         try:
             seasons = _seasons_for_scope(scope)
+            league_out["seasons"] = seasons
 
-            # Step 1 — API-Football / core
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core start seasons={seasons}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             refresh_out = orchestrate_apifootball_pg(
                 league_ids=[scope.league_id],
                 seasons=seasons,
-                max_calls=200,
+                max_calls=30,
             )
             league_out["steps"]["fixtures_core"] = refresh_out
+            league_out["timing_ms"]["fixtures_core"] = int((perf_counter() - step_t0) * 1000)
 
-            # Step 2 — stats
+            leagues_upserts = _safe_int(
+                (((refresh_out or {}).get("core") or {}).get("leagues") or {}).get("upserts", 0)
+            )
+            teams_upserts = _safe_int(
+                (((refresh_out or {}).get("core") or {}).get("teams") or {}).get("upserts", 0)
+            )
+            fixtures_upserts = _safe_int(
+                (((refresh_out or {}).get("core") or {}).get("fixtures") or {}).get("upserts", 0)
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core done "
+                f"leagues_upserts={leagues_upserts} teams_upserts={teams_upserts} "
+                f"fixtures_upserts={fixtures_upserts} "
+                f"elapsed_ms={league_out['timing_ms']['fixtures_core']}",
+                flush=True,
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=stats start seasons={seasons}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             stats_out = recompute_team_season_stats(
                 seasons=seasons,
                 league_ids=[scope.league_id],
@@ -124,15 +205,47 @@ def update_pipeline_run(
                 "deleted": int(stats_out.deleted),
                 "inserted": int(stats_out.inserted),
             }
+            league_out["timing_ms"]["stats"] = int((perf_counter() - step_t0) * 1000)
 
-            # Step 3 — odds refresh
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=stats done "
+                f"inserted={int(stats_out.inserted)} deleted={int(stats_out.deleted)} "
+                f"elapsed_ms={league_out['timing_ms']['stats']}",
+                flush=True,
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=odds_refresh start "
+                f"sport_key={scope.sport_key} regions={scope.regions}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             refresh_odds_out = odds_refresh(
                 sport_key=scope.sport_key,
                 regions=scope.regions,
             )
             league_out["steps"]["odds_refresh"] = refresh_odds_out
+            league_out["timing_ms"]["odds_refresh"] = int((perf_counter() - step_t0) * 1000)
 
-            # Step 4 — resolve
+            odds_events_upserted = _safe_int((refresh_odds_out or {}).get("events_upserted", 0))
+            odds_snapshots_inserted = _safe_int((refresh_odds_out or {}).get("snapshots_inserted", 0))
+            odds_market_attempted = _safe_int((refresh_odds_out or {}).get("market_snapshots_attempted", 0))
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=odds_refresh done "
+                f"events_upserted={odds_events_upserted} "
+                f"snapshots_inserted={odds_snapshots_inserted} "
+                f"market_snapshots_attempted={odds_market_attempted} "
+                f"elapsed_ms={league_out['timing_ms']['odds_refresh']}",
+                flush=True,
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=resolve start "
+                f"sport_key={scope.sport_key} assume_league_id={scope.league_id}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             resolve_out = odds_resolve_batch(
                 sport_key=scope.sport_key,
                 assume_league_id=scope.league_id,
@@ -143,8 +256,35 @@ def update_pipeline_run(
                 limit=500,
             )
             league_out["steps"]["resolve"] = resolve_out
+            league_out["timing_ms"]["resolve"] = int((perf_counter() - step_t0) * 1000)
 
-            # Step 5 — ensure models
+            resolve_persisted = _safe_int(
+                (((resolve_out or {}).get("counters") or {}).get("persisted", 0))
+            )
+            resolve_exact = _safe_int(
+                (((resolve_out or {}).get("counters") or {}).get("exact", 0))
+            )
+            resolve_probable = _safe_int(
+                (((resolve_out or {}).get("counters") or {}).get("probable", 0))
+            )
+            resolve_not_found = _safe_int(
+                (((resolve_out or {}).get("counters") or {}).get("not_found", 0))
+            )
+            
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=resolve done "
+                f"persisted={resolve_persisted} exact={resolve_exact} "
+                f"probable={resolve_probable} not_found={resolve_not_found} "
+                f"elapsed_ms={league_out['timing_ms']['resolve']}",
+                flush=True,
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=models start "
+                f"sport_key={scope.sport_key}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             models_out = ensure_models_1x2_v1(
                 only_sport_key=scope.sport_key,
                 max_seasons=3,
@@ -152,39 +292,89 @@ def update_pipeline_run(
                 C=1.0,
             )
             league_out["steps"]["models"] = models_out
+            league_out["timing_ms"]["models"] = int((perf_counter() - step_t0) * 1000)
 
-            # Step 6 — snapshots
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=models done "
+                f"elapsed_ms={league_out['timing_ms']['models']}",
+                flush=True,
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=snapshots start "
+                f"sport_key={scope.sport_key} model_version={active_model_version}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
             snapshots_out = snapshots_materialize(
                 sport_key=scope.sport_key,
                 mode="window",
                 hours_ahead=scope.hours_ahead,
                 limit=500,
+                model_version=active_model_version,
             )
             league_out["steps"]["snapshots"] = snapshots_out
+            league_out["timing_ms"]["snapshots"] = int((perf_counter() - step_t0) * 1000)
 
-            # Aggregates
-            result["summary"]["leagues_processed"] += 1
-            result["summary"]["fixtures_updated"] += int(
-                (((refresh_out or {}).get("core") or {}).get("fixtures") or {}).get("upserts", 0)
+            snapshots_upserted = _safe_int(
+                (((snapshots_out or {}).get("counters") or {}).get("snapshots_upserted", 0))
             )
+            snapshots_fallback = _safe_int(
+                (((snapshots_out or {}).get("counters") or {}).get("snapshots_team_fallback", 0))
+            )
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=snapshots done "
+                f"snapshots_upserted={snapshots_upserted} "
+                f"snapshots_team_fallback={snapshots_fallback} "
+                f"elapsed_ms={league_out['timing_ms']['snapshots']}",
+                flush=True,
+            )
+
+            result["summary"]["leagues_processed"] += 1
+            result["summary"]["fixtures_updated"] += fixtures_upserts
             result["summary"]["stats_inserted"] += int(stats_out.inserted)
             result["summary"]["stats_deleted"] += int(stats_out.deleted)
             result["summary"]["odds_refresh_runs"] += 1
-            result["summary"]["events_resolved"] += int(
-                (((resolve_out or {}).get("counters") or {}).get("persisted", 0))
-            )
-            result["summary"]["snapshots_upserted"] += int(
-                (((snapshots_out or {}).get("counters") or {}).get("snapshots_upserted", 0))
-            )
-            result["summary"]["fallbacks"] += int(
-                (((snapshots_out or {}).get("counters") or {}).get("snapshots_team_fallback", 0))
+            result["summary"]["events_resolved"] += resolve_persisted
+            result["summary"]["snapshots_upserted"] += snapshots_upserted
+            result["summary"]["fallbacks"] += snapshots_fallback
+
+            league_out["timing_ms"]["total"] = int((perf_counter() - league_t0) * 1000)
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] done sport_key={scope.sport_key} "
+                f"league_id={scope.league_id} total_elapsed_ms={league_out['timing_ms']['total']}",
+                flush=True,
             )
 
         except Exception as e:
             league_out["error"] = str(e)
+            league_out["traceback"] = traceback.format_exc()
+            league_out["timing_ms"]["total"] = int((perf_counter() - league_t0) * 1000)
+
             result["summary"]["errors"] += 1
             result["ok"] = False
 
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] error sport_key={scope.sport_key} "
+                f"league_id={scope.league_id} elapsed_ms={league_out['timing_ms']['total']} "
+                f"error={e}",
+                flush=True,
+            )
+            print(league_out["traceback"], flush=True)
+
         result["items"].append(league_out)
+
+    result["summary"]["elapsed_ms"] = int((perf_counter() - global_t0) * 1000)
+    result["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    print(
+        f"[UPDATE_PIPELINE] finished ok={result['ok']} "
+        f"leagues_processed={result['summary']['leagues_processed']} "
+        f"errors={result['summary']['errors']} "
+        f"elapsed_ms={result['summary']['elapsed_ms']}",
+        flush=True,
+    )
 
     return result
