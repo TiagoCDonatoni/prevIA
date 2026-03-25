@@ -1,5 +1,7 @@
 import React, { useMemo, useEffect, useState } from "react";
 
+import { PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
+
 import { t, type Lang } from "../i18n";
 import {
   dailyLimitForPlan,
@@ -39,6 +41,8 @@ export function PlanChangeModal(props: {
   const lang = (rawLang === "ptbr" || rawLang === "pt-br" ? "pt" : rawLang) as Lang;
 
   const currentPlan = store.state.plan as PlanId;
+
+  const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED;
 
   const tr = useMemo(
     () => (k: string, vars?: Record<string, any>) => t(lang, k, vars),
@@ -215,14 +219,18 @@ export function PlanChangeModal(props: {
 
           <button
             className="um-btn-primary"
-            disabled={!selectedPlan}
+            disabled={!selectedPlan || !canApplyLocalPlanChange}
             onClick={() => {
               if (!selectedPlan) return;
-              store.setPlan(selectedPlan);
+
+              if (canApplyLocalPlanChange) {
+                store.setPlan(selectedPlan);
+              }
+
               props.onClose();
             }}
           >
-            {tr("plans.cta.upgrade")}
+            {canApplyLocalPlanChange ? tr("plans.cta.upgrade") : tr("plans.price.placeholder")}
           </button>
         </div>
 

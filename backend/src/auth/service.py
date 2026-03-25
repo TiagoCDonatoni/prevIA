@@ -41,6 +41,17 @@ def _safe_plan_code(raw: str | None) -> str:
     plan = str(raw or "FREE").strip().upper()
     return plan if plan in ALLOWED_PLAN_CODES else "FREE"
 
+def _resolve_billing_cycle(subscription: Dict[str, Any]) -> str | None:
+    plan_code = _safe_plan_code(subscription.get("plan_code"))
+    provider = str(subscription.get("provider") or "").strip().lower()
+
+    if plan_code == "FREE":
+        return None
+
+    if provider == "manual":
+        return "monthly"
+
+    return None
 
 def _coerce_json_dict(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
@@ -65,6 +76,7 @@ def _build_anonymous_payload() -> Dict[str, Any]:
             "plan_code": "FREE",
             "status": "inactive",
             "provider": None,
+            "billing_cycle": None,
         },
         "entitlements": build_entitlements_for_plan("FREE"),
         "usage": {
@@ -590,6 +602,7 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
             "plan_code": subscription["plan_code"],
             "status": subscription["status"],
             "provider": subscription["provider"],
+            "billing_cycle": _resolve_billing_cycle(subscription),
         },
         "entitlements": entitlements,
         "usage": {
@@ -893,6 +906,7 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 "plan_code": actor["plan_code"],
                 "status": "active",
                 "provider": "manual",
+                "billing_cycle": "monthly" if actor["plan_code"] != "FREE" else None,
             },
             "entitlements": actor["entitlements"],
             "usage": {

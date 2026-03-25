@@ -173,7 +173,10 @@ export default function OddsIntel() {
     try {
       timer = setInterval(() => {
         setRunAllPct((prev) => {
-          if (prev >= 90) return prev;
+          if (prev >= 90) {
+            setRunAllStepLabel("Processando no backend…");
+            return prev;
+          }
           if (prev < 15) return Math.min(prev + 6, 90);
           if (prev < 35) return Math.min(prev + 5, 90);
           if (prev < 60) return Math.min(prev + 4, 90);

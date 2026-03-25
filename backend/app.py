@@ -10,6 +10,9 @@ from src.http.admin_router import admin_router, admin_odds_router
 
 from src.http.odds_router import router as odds_router
 
+# Public site
+from src.http.public_router import router as public_router
+
 # Odds admin (legado, se ainda existir e for necessário)
 from src.http.admin_odds_router import router as legacy_admin_odds_router
 
@@ -47,6 +50,7 @@ def create_app() -> FastAPI:
     # Routers
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
+    api.include_router(public_router)
     api.include_router(legacy_admin_odds_router)
     api.include_router(admin_matchup_router)
 

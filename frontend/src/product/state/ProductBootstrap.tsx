@@ -27,6 +27,15 @@ export default function ProductBootstrap({
           email: data.user?.email ?? null,
           plan: normalizeBackendPlanCode(data.subscription?.plan_code),
           auth_mode: data.auth_mode ?? null,
+          user_id: data.user?.user_id ?? null,
+          full_name: data.user?.full_name ?? null,
+          preferred_lang: data.user?.preferred_lang ?? null,
+          user_status: data.user?.status ?? null,
+          email_verified: data.user?.email_verified ?? null,
+          subscription_plan_code: data.subscription?.plan_code ?? null,
+          subscription_status: data.subscription?.status ?? null,
+          subscription_provider: data.subscription?.provider ?? null,
+          subscription_billing_cycle: data.subscription?.billing_cycle ?? null,
         });
 
         if (!data.is_authenticated) {

@@ -1,9 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AuthRequestError, postAuthLogin, postAuthSignup } from "../api/auth";
+import {
+  AuthRequestError,
+  postAuthForgotPassword,
+  postAuthGoogleLogin,
+  postAuthLogin,
+  postAuthResetPassword,
+  postAuthSignup,
+  type AuthMeResponse,
+} from "../api/auth";
 import { t, type Lang } from "../i18n";
 
-type Mode = "login" | "signup";
+type Mode = "login" | "signup" | "forgot" | "reset";
 
 function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "INVALID_EMAIL") return langT("auth.errorInvalidEmail");
@@ -11,7 +19,23 @@ function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "EMAIL_ALREADY_EXISTS") return langT("auth.errorEmailAlreadyExists");
   if (code === "INVALID_CREDENTIALS") return langT("auth.errorInvalidCredentials");
   if (code === "ACCOUNT_BLOCKED") return langT("auth.errorAccountBlocked");
+  if (code === "INVALID_RESET_TOKEN") return langT("auth.errorInvalidResetToken");
+  if (code === "INVALID_GOOGLE_CREDENTIAL") return langT("auth.errorInvalidGoogleCredential");
   return langT("auth.genericError");
+}
+
+function getTitle(tr: (k: string) => string, mode: Mode) {
+  if (mode === "signup") return tr("auth.signupTitle");
+  if (mode === "forgot") return tr("auth.forgotTitle");
+  if (mode === "reset") return tr("auth.resetTitle");
+  return tr("auth.loginTitle");
+}
+
+function getSubtitle(tr: (k: string) => string, mode: Mode) {
+  if (mode === "signup") return tr("auth.signupBenefit");
+  if (mode === "forgot") return tr("auth.forgotSubtitle");
+  if (mode === "reset") return tr("auth.resetSubtitle");
+  return tr("auth.loginSubtitle");
 }
 
 export function ProductAuthModal(props: {
@@ -19,44 +43,49 @@ export function ProductAuthModal(props: {
   lang: Lang;
   initialMode?: Mode;
   onClose: () => void;
-  onAuthSuccess: () => void;
+  onAuthSuccess: (payload: AuthMeResponse) => void | Promise<void>;
 }) {
   const { open, lang } = props;
-  const authEnabled = String(import.meta.env.VITE_PRODUCT_AUTH_ENABLED ?? "false").toLowerCase() === "true";
+  const authEnabled =
+    String(import.meta.env.VITE_PRODUCT_AUTH_ENABLED ?? "false").toLowerCase() === "true";
+  const googleAuthEnabled =
+    String(import.meta.env.VITE_PRODUCT_GOOGLE_AUTH_ENABLED ?? "false").toLowerCase() === "true";
+  const googleClientId = String(import.meta.env.VITE_PRODUCT_GOOGLE_CLIENT_ID ?? "").trim();
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const [mode, setMode] = useState<Mode>(props.initialMode ?? "signup");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [infoText, setInfoText] = useState("");
 
   const tr = useMemo(() => (k: string, vars?: Record<string, any>) => t(lang, k, vars), [lang]);
 
-  if (!open || !authEnabled) return null;
+  useEffect(() => {
+    if (!open) return;
+    setMode(props.initialMode ?? "signup");
+    setErrorText("");
+    setInfoText("");
+    setPassword("");
+    setResetToken("");
+  }, [open, props.initialMode]);
 
-  async function submit() {
-    if (!email.trim() || !password.trim()) return;
-    if (mode === "signup" && !fullName.trim()) return;
+  async function handleGoogleCredential(credential: string) {
+    if (!credential) {
+      setErrorText(tr("auth.errorInvalidGoogleCredential"));
+      return;
+    }
 
     setBusy(true);
     setErrorText("");
+    setInfoText("");
 
     try {
-      if (mode === "signup") {
-        await postAuthSignup({
-          email: email.trim(),
-          password,
-          full_name: fullName.trim(),
-        });
-      } else {
-        await postAuthLogin({
-          email: email.trim(),
-          password,
-        });
-      }
-
-      props.onAuthSuccess();
+      const authPayload = await postAuthGoogleLogin({ credential });
+      await props.onAuthSuccess(authPayload);
     } catch (err) {
       if (err instanceof AuthRequestError) {
         setErrorText(mapAuthErrorCode(tr, err.code));
@@ -68,88 +97,283 @@ export function ProductAuthModal(props: {
     }
   }
 
+  useEffect(() => {
+    if (!open || !authEnabled) return;
+    if (!googleAuthEnabled || !googleClientId) return;
+    if (mode !== "login" && mode !== "signup") return;
+    if (!googleButtonRef.current) return;
+    if (!window.google?.accounts?.id) return;
+
+    googleButtonRef.current.innerHTML = "";
+
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: (response) => {
+        void handleGoogleCredential(String(response.credential || ""));
+      },
+      auto_select: false,
+      cancel_on_tap_outside: true,
+      use_fedcm_for_prompt: true,
+    });
+
+    window.google.accounts.id.renderButton(googleButtonRef.current, {
+      theme: "outline",
+      size: "large",
+      text: mode === "signup" ? "signup_with" : "signin_with",
+      shape: "rectangular",
+      logo_alignment: "left",
+      width: 320,
+    });
+  }, [open, authEnabled, googleAuthEnabled, googleClientId, mode]);
+
+  if (!open || !authEnabled) return null;
+
+  async function submit() {
+    if (mode === "signup") {
+      if (!email.trim() || !password.trim() || !fullName.trim()) return;
+    } else if (mode === "login") {
+      if (!email.trim() || !password.trim()) return;
+    } else if (mode === "forgot") {
+      if (!email.trim()) return;
+    } else if (!resetToken.trim() || !password.trim()) {
+      return;
+    }
+
+    setBusy(true);
+    setErrorText("");
+    setInfoText("");
+
+    try {
+      if (mode === "signup") {
+        const authPayload = await postAuthSignup({
+          email: email.trim(),
+          password,
+          full_name: fullName.trim(),
+        });
+        await props.onAuthSuccess(authPayload);
+        return;
+      }
+
+      if (mode === "login") {
+        const authPayload = await postAuthLogin({
+          email: email.trim(),
+          password,
+        });
+        await props.onAuthSuccess(authPayload);
+        return;
+      }
+
+      if (mode === "forgot") {
+        const response = await postAuthForgotPassword({
+          email: email.trim(),
+        });
+
+        if (response.debug?.reset_token) {
+          setResetToken(response.debug.reset_token);
+          setMode("reset");
+          setInfoText(tr("auth.resetDebugTokenReady"));
+          return;
+        }
+
+        setInfoText(tr("auth.forgotSuccess"));
+        return;
+      }
+
+      await postAuthResetPassword({
+        token: resetToken.trim(),
+        new_password: password,
+      });
+
+      setPassword("");
+      setMode("login");
+      setInfoText(tr("auth.resetSuccess"));
+    } catch (err) {
+      if (err instanceof AuthRequestError) {
+        setErrorText(mapAuthErrorCode(tr, err.code));
+      } else {
+        setErrorText(tr("auth.genericError"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const actionLabel =
+    mode === "signup"
+      ? tr("auth.createAccountAction")
+      : mode === "login"
+      ? tr("auth.loginAction")
+      : mode === "forgot"
+      ? tr("auth.forgotAction")
+      : tr("auth.resetAction");
+
   return (
     <div className="um-overlay" role="dialog" aria-modal="true">
-      <div className="um-modal">
-        <div className="">
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>
-              {mode === "signup" ? tr("auth.signupTitle") : tr("auth.loginTitle")}
-            </div>
-            {mode === "signup" ? (
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>{tr("auth.signupBenefit")}</div>
-            ) : null}
+      <div className="um-modal product-auth-modal">
+        <div className="product-modal-head">
+          <div className="product-modal-head-copy">
+            <div className="product-modal-kicker">prevIA</div>
+            <div className="product-modal-title">{getTitle(tr, mode)}</div>
+            <div className="product-modal-subtitle">{getSubtitle(tr, mode)}</div>
           </div>
 
-          <button className="product-modal-close" onClick={props.onClose} aria-label={tr("common.close")}>
+          <button
+            type="button"
+            className="product-modal-close"
+            onClick={props.onClose}
+            aria-label={tr("common.close")}
+          >
             ×
           </button>
         </div>
 
-        <div className="">
+        <div className="product-modal-body">
+          {(mode === "login" || mode === "signup") && googleAuthEnabled && googleClientId ? (
+            <>
+              <div className="product-google-slot">
+                <div ref={googleButtonRef} />
+              </div>
+              <div className="product-auth-divider">
+                <span>{tr("auth.orContinueWithEmail")}</span>
+              </div>
+            </>
+          ) : null}
+
           {mode === "signup" ? (
             <label className="product-field">
               <span>{tr("auth.fullName")}</span>
-              <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Seu nome" />
+              <input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder={tr("auth.fullNamePlaceholder")}
+              />
             </label>
           ) : null}
 
-          <label className="product-field">
-            <span>{tr("auth.email")}</span>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" />
-          </label>
-
-          <label className="product-field">
-            <span>{tr("auth.password")}</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-          </label>
-
-          {errorText ? (
-            <div style={{ fontSize: 12, color: "var(--danger, #c0392b)", marginBottom: 8 }}>
-              {errorText}
-            </div>
+          {mode !== "reset" ? (
+            <label className="product-field">
+              <span>{tr("auth.email")}</span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@email.com"
+              />
+            </label>
           ) : null}
 
-          <button
-            className="product-primary"
-            onClick={submit}
-            disabled={
-              busy ||
-              !email.trim() ||
-              !password.trim() ||
-              (mode === "signup" && !fullName.trim())
-            }
-          >
-            {busy ? tr("common.loading") : tr("auth.continue")}
-          </button>
+          {mode === "reset" ? (
+            <label className="product-field">
+              <span>{tr("auth.resetToken")}</span>
+              <input
+                value={resetToken}
+                onChange={(e) => setResetToken(e.target.value)}
+                placeholder={tr("auth.resetTokenPlaceholder")}
+              />
+            </label>
+          ) : null}
+
+          {mode !== "forgot" ? (
+            <label className="product-field">
+              <span>{mode === "reset" ? tr("auth.newPassword") : tr("auth.password")}</span>
+              <input
+                type="password"
+                autoComplete={
+                  mode === "signup" ? "new-password" : mode === "login" ? "current-password" : "new-password"
+                }
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </label>
+          ) : null}
+
+          {errorText ? <div className="product-auth-error">{errorText}</div> : null}
+          {infoText ? <div className="product-auth-info">{infoText}</div> : null}
+
+          <div className="product-auth-actions">
+            <button
+              type="button"
+              className="product-secondary"
+              onClick={props.onClose}
+              disabled={busy}
+            >
+              {tr("common.back")}
+            </button>
+
+            <button
+              type="button"
+              className="product-primary"
+              onClick={submit}
+              disabled={
+                busy ||
+                (mode === "signup" && (!email.trim() || !password.trim() || !fullName.trim())) ||
+                (mode === "login" && (!email.trim() || !password.trim())) ||
+                (mode === "forgot" && !email.trim()) ||
+                (mode === "reset" && (!resetToken.trim() || !password.trim()))
+              }
+            >
+              {busy ? tr("common.loading") : actionLabel}
+            </button>
+          </div>
 
           <div className="product-modal-footer">
             {mode === "signup" ? (
               <button
+                type="button"
                 className="product-link"
                 onClick={() => {
                   setMode("login");
                   setErrorText("");
+                  setInfoText("");
                 }}
               >
                 {tr("auth.haveAccount")}
               </button>
-            ) : (
+            ) : null}
+
+            {mode === "login" ? (
+              <>
+                <button
+                  type="button"
+                  className="product-link"
+                  onClick={() => {
+                    setMode("forgot");
+                    setErrorText("");
+                    setInfoText("");
+                  }}
+                >
+                  {tr("auth.forgot")}
+                </button>
+
+                <button
+                  type="button"
+                  className="product-link"
+                  onClick={() => {
+                    setMode("signup");
+                    setErrorText("");
+                    setInfoText("");
+                  }}
+                >
+                  {tr("auth.noAccount")}
+                </button>
+              </>
+            ) : null}
+
+            {mode === "forgot" || mode === "reset" ? (
               <button
+                type="button"
                 className="product-link"
                 onClick={() => {
-                  setMode("signup");
+                  setMode("login");
                   setErrorText("");
+                  setInfoText("");
                 }}
               >
-                {tr("auth.noAccount")}
+                {tr("auth.backToLogin")}
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

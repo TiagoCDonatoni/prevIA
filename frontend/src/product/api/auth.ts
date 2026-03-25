@@ -17,6 +17,7 @@ export type AuthMeResponse = {
     plan_code: string;
     status: string;
     provider: string | null;
+    billing_cycle: "monthly" | "quarterly" | "semiannual" | "annual" | null;
   };
   entitlements: {
     credits?: {
@@ -54,6 +55,28 @@ export type AuthErrorResponse = {
   message: string;
 };
 
+export type AuthForgotPasswordResponse = {
+  ok: true;
+  message: string;
+  debug?: {
+    reset_token?: string;
+    expires_at_utc?: string;
+  };
+  meta?: {
+    generated_at_utc?: string;
+  };
+};
+
+export type AuthResetPasswordResponse = {
+  ok: true;
+  message: string;
+  meta?: {
+    generated_at_utc?: string;
+  };
+};
+
+export type AuthGoogleLoginResponse = AuthMeResponse;
+
 export class AuthRequestError extends Error {
   status: number;
   code?: string;
@@ -74,10 +97,10 @@ async function readJsonSafe<T>(res: Response): Promise<T | null> {
   }
 }
 
-async function requestAuth<TBody extends Record<string, any> | undefined>(
+async function requestJson<TResponse, TBody extends Record<string, any> | undefined>(
   path: string,
   body?: TBody
-): Promise<AuthMeResponse> {
+): Promise<TResponse> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: body ? "POST" : "GET",
     credentials: "include",
@@ -97,7 +120,14 @@ async function requestAuth<TBody extends Record<string, any> | undefined>(
     throw new AuthRequestError(message, res.status, code);
   }
 
-  return data as AuthMeResponse;
+  return data as TResponse;
+}
+
+async function requestAuth<TBody extends Record<string, any> | undefined>(
+  path: string,
+  body?: TBody
+): Promise<AuthMeResponse> {
+  return requestJson<AuthMeResponse, TBody>(path, body);
 }
 
 export async function fetchAuthMe(): Promise<AuthMeResponse> {
@@ -137,8 +167,29 @@ export async function postAuthLogout(): Promise<{ ok: boolean }> {
   return data ?? { ok: true };
 }
 
-export function normalizeBackendPlanCode(raw: string | null | undefined): PlanId {
+export function normalizeBackendPlanCode(
+  raw: string | null | undefined
+): Exclude<PlanId, "FREE_ANON"> {
   const v = String(raw ?? "").trim().toUpperCase();
   if (v === "FREE" || v === "BASIC" || v === "LIGHT" || v === "PRO") return v;
   return "FREE";
+}
+
+export async function postAuthForgotPassword(payload: {
+  email: string;
+}): Promise<AuthForgotPasswordResponse> {
+  return requestJson<AuthForgotPasswordResponse, typeof payload>("/auth/password/forgot", payload);
+}
+
+export async function postAuthResetPassword(payload: {
+  token: string;
+  new_password: string;
+}): Promise<AuthResetPasswordResponse> {
+  return requestJson<AuthResetPasswordResponse, typeof payload>("/auth/password/reset", payload);
+}
+
+export async function postAuthGoogleLogin(payload: {
+  credential: string;
+}): Promise<AuthGoogleLoginResponse> {
+  return requestJson<AuthGoogleLoginResponse, typeof payload>("/auth/google/login", payload);
 }

@@ -1,0 +1,59 @@
+.brand-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  line-height: 1;
+  user-select: none;
+}
+
+.brand-logo-wordmark {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  letter-spacing: -0.03em;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.brand-logo-prev {
+  color: #0f172a;
+  font-weight: 400;
+  margin-right: 2px;
+}
+
+.brand-logo-ia {
+  color: #0b2f8a;
+  font-weight: 900;
+}
+
+.brand-logo-subtitle {
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: #64748b;
+}
+
+.brand-logo.is-compact .brand-logo-wordmark {
+  font-size: 18px;
+}
+
+.brand-logo.is-compact .brand-logo-subtitle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .brand-logo-wordmark {
+    font-size: 22px;
+  }
+
+  .brand-logo-subtitle {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+  }
+
+  .brand-logo.is-compact .brand-logo-wordmark {
+    font-size: 17px;
+  }
+}

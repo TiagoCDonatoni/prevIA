@@ -1,13 +1,19 @@
-import React, { useState } from "react";
-import { Outlet } from "react-router-dom";
+import React, { useCallback, useState } from "react";
+import { Link, Outlet } from "react-router-dom";
 
 import { IS_DEV, PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
-import { LANGS, t, type Lang } from "../i18n";
+import { fetchAccessUsage } from "../api/access";
+import {
+  normalizeBackendPlanCode,
+  postAuthLogout,
+  type AuthMeResponse,
+} from "../api/auth";
+import { t, type Lang } from "../i18n";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
 import { ProductAuthModal } from "../auth/ProductAuthModal";
 import { PlanChangeModal } from "../components/PlanChangeModal";
-import BrandLogo from "../components/BrandLogo";
+import BrandLogo from "../../shared/BrandLogo";
 
 import brFlag from "../assets/br.svg";
 import gbFlag from "../assets/gb.svg";
@@ -18,6 +24,54 @@ function langLabel(l: Lang) {
   if (l === "en") return { src: gbFlag, code: "EN", name: "English" };
   return { src: esFlag, code: "ES", name: "Español" };
 }
+
+ const PRODUCT_FOOTER_COPY = {
+  pt: {
+    body:
+      "Camada aplicada do prevIA para leitura prática, contexto analítico e aprofundamento progressivo.",
+    navigationTitle: "Navegação",
+    socialTitle: "Redes sociais",
+    links: {
+      home: "Home",
+      howItWorks: "Como funciona",
+      glossary: "Glossário",
+      about: "Sobre",
+      contact: "Contato",
+    },
+    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    madeIn: "Feito no Brasil @prevIA {year}",
+  },
+  en: {
+    body:
+      "Applied prevIA layer for practical reading, analytical context, and progressive depth.",
+    navigationTitle: "Navigation",
+    socialTitle: "Social",
+    links: {
+      home: "Home",
+      howItWorks: "How it works",
+      glossary: "Glossary",
+      about: "About",
+      contact: "Contact",
+    },
+    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    madeIn: "Built in Brazil @prevIA {year}",
+  },
+  es: {
+    body:
+      "Capa aplicada de prevIA para lectura práctica, contexto analítico y profundidad progresiva.",
+    navigationTitle: "Navegación",
+    socialTitle: "Redes sociales",
+    links: {
+      home: "Home",
+      howItWorks: "Cómo funciona",
+      glossary: "Glosario",
+      about: "Sobre",
+      contact: "Contacto",
+    },
+    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    madeIn: "Hecho en Brasil @prevIA {year}",
+  },
+} as const;
 
 function LangDropdown({
   value,
@@ -39,14 +93,11 @@ function LangDropdown({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <img
-            src={cur.src}
-            alt=""
-            className="lang-flag-img"
-            aria-hidden="true"
-          />
+        <img src={cur.src} alt="" className="lang-flag-img" aria-hidden="true" />
         <span className="lang-code">{cur.code}</span>
-        <span className="lang-caret" aria-hidden="true">▾</span>
+        <span className="lang-caret" aria-hidden="true">
+          ▾
+        </span>
       </button>
 
       {open ? (
@@ -60,18 +111,13 @@ function LangDropdown({
                 type="button"
                 className={`lang-dd-item ${active ? "is-active" : ""}`}
                 role="menuitem"
-                onMouseDown={(e) => e.preventDefault()} // evita blur antes do click
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   onChange(l);
                   setOpen(false);
                 }}
               >
-                <img
-                  src={it.src}
-                  alt=""
-                  className="lang-flag-img"
-                  aria-hidden="true"
-                />
+                <img src={it.src} alt="" className="lang-flag-img" aria-hidden="true" />
                 <span className="lang-code">{it.code}</span>
                 <span className="lang-name">{it.name}</span>
               </button>
@@ -83,36 +129,124 @@ function LangDropdown({
   );
 }
 
+export type ProductLayoutOutletContext = {
+  openAuthModal: (mode?: "signup" | "login" | "forgot" | "reset") => void;
+  logout: () => Promise<void>;
+};
+
 export function ProductLayout() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
+  const footer = PRODUCT_FOOTER_COPY[lang];
   const plan = store.state.plan;
   const DEV = IS_DEV;
 
   const [authOpen, setAuthOpen] = useState(false);
+  const [authInitialMode, setAuthInitialMode] = useState<"signup" | "login" | "forgot" | "reset">(
+    "signup"
+  );
   const [planOpen, setPlanOpen] = useState(false);
-  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">("MANUAL");
+
+  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
+    "MANUAL"
+  );
+
+  const allowDevPlanOverride = DEV && PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+  const isAuthenticated = Boolean(store.state.auth.is_logged_in);
+  const accountLabel = store.state.auth.email ?? t(lang, "auth.account");
 
   const remaining = store.backendUsage.is_ready
-    ? (store.backendUsage.remaining ?? store.entitlements.credits.remaining_today)
+    ? store.backendUsage.remaining ?? store.entitlements.credits.remaining_today
     : store.entitlements.credits.remaining_today;
 
   const limit = store.backendUsage.is_ready
-    ? (store.backendUsage.daily_limit ?? store.entitlements.credits.daily_limit)
+    ? store.backendUsage.daily_limit ?? store.entitlements.credits.daily_limit
     : store.entitlements.credits.daily_limit;
+
+  async function syncSessionFromAuthPayload(data: AuthMeResponse) {
+    store.applyBackendBootstrap({
+      is_authenticated: Boolean(data.is_authenticated),
+      email: data.user?.email ?? null,
+      plan: normalizeBackendPlanCode(data.subscription?.plan_code),
+      auth_mode: data.auth_mode ?? null,
+      user_id: data.user?.user_id ?? null,
+      full_name: data.user?.full_name ?? null,
+      preferred_lang: data.user?.preferred_lang ?? null,
+      user_status: data.user?.status ?? null,
+      email_verified: data.user?.email_verified ?? null,
+      subscription_plan_code: data.subscription?.plan_code ?? null,
+      subscription_status: data.subscription?.status ?? null,
+      subscription_provider: data.subscription?.provider ?? null,
+      subscription_billing_cycle: data.subscription?.billing_cycle ?? null,
+    });
+
+    if (!data.is_authenticated) {
+      return;
+    }
+
+    try {
+      const usage = await fetchAccessUsage();
+
+      store.applyBackendUsage({
+        date_key: usage.date_key,
+        credits_used: usage.usage.credits_used,
+        revealed_count: usage.usage.revealed_count,
+        daily_limit: usage.usage.daily_limit,
+        remaining: usage.usage.remaining,
+        revealed_fixture_keys: usage.usage.revealed_fixture_keys,
+      });
+    } catch (err) {
+      console.error("product auth usage sync failed", err);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      store.promoteCurrentSessionToDeviceAnonShadow();
+      await postAuthLogout();
+
+      store.applyBackendBootstrap({
+        is_authenticated: false,
+        email: null,
+        plan: "FREE",
+        auth_mode: "anonymous",
+        user_id: null,
+        full_name: null,
+        preferred_lang: null,
+        user_status: null,
+        email_verified: null,
+        subscription_plan_code: null,
+        subscription_status: null,
+        subscription_provider: null,
+        subscription_billing_cycle: null,
+      });
+
+      setAuthOpen(false);
+      setPlanOpen(false);
+    } catch (err) {
+      console.error("product logout failed", err);
+    }
+  }
+
+  const openAuthModal = useCallback(
+    (mode: "signup" | "login" | "forgot" | "reset" = "signup") => {
+      setAuthInitialMode(mode);
+      setAuthOpen(true);
+    },
+    []
+  );
 
   return (
     <div className="product-shell">
       <header className="product-header">
-        <div className="product-brand">
+        <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
           <BrandLogo />
-        </div>
+        </Link>
 
         <div className="product-header-right">
-
-          {DEV ? (
+          {allowDevPlanOverride ? (
             <div className="product-pill">
-              <span className="product-pill-label">{t(lang, "nav.plan")}</span>
+              <span className="product-pill-label">DEV PLAN</span>
               <select
                 className="product-select"
                 value={plan}
@@ -139,11 +273,23 @@ export function ProductLayout() {
             </button>
           ) : null}
 
-          {DEV && PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
-            <div className="product-pill" title="Sessão dev automática ativa">
-              <span className="product-pill-label">DEV AUTH</span>
-              <span>{store.state.auth.email ?? "dev@previa.local"}</span>
-            </div>
+          {isAuthenticated ? (
+            <Link to="account" className="product-pill product-account-link">
+              <span className="product-pill-label">{t(lang, "auth.account")}</span>
+              <span>{accountLabel}</span>
+            </Link>
+          ) : null}
+
+          {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
+            <button
+              type="button"
+              className="product-reset-btn"
+              onClick={() => {
+                void handleLogout();
+              }}
+            >
+              {t(lang, "auth.logout")}
+            </button>
           ) : null}
 
           <div className="product-pill product-pill-lang">
@@ -151,18 +297,14 @@ export function ProductLayout() {
           </div>
 
           <div className="pl-credits-wrap">
-            <div className="pl-credits">
-              {t(lang, "credits.counter", { remaining, limit })}
-            </div>
+            <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
 
             {(() => {
-              const plan = store.state.plan;
+              const currentPlan = store.state.plan;
 
-              // Pro: não mostra CTA
-              if (plan === "PRO") return null;
+              if (currentPlan === "PRO") return null;
 
-              // Free anon: criar conta grátis
-              if (plan === "FREE_ANON") {
+              if (currentPlan === "FREE_ANON") {
                 if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
                   return null;
                 }
@@ -171,51 +313,109 @@ export function ProductLayout() {
                   <button
                     className="pl-credits-cta"
                     onClick={() => {
-                      setAuthOpen(true);
+                    openAuthModal("signup");
                     }}
                   >
-                    {t(lang, "auth.createFreeAccount")}
+                    {(() => {
+                      const label = t(lang, "auth.createFreeAccount");
+                      return label === "auth.createFreeAccount" ? t(lang, "auth.signup") : label;
+                    })()}
                   </button>
                 );
               }
 
-              // Free+ / Basic / Light: upgrade
               return (
                 <button
                   className="pl-credits-cta"
                   onClick={() => {
                     setPlanReason("MANUAL");
-                      setPlanOpen(true);
+                    setPlanOpen(true);
                   }}
                 >
                   {t(lang, "credits.moreCredits")}
                 </button>
               );
-
             })()}
           </div>
-
         </div>
       </header>
 
       <main className="product-main">
-        <Outlet key={store.resetNonce} />
+        <Outlet
+          key={store.resetNonce}
+          context={{
+            openAuthModal,
+            logout: handleLogout,
+          } satisfies ProductLayoutOutletContext}
+        />
       </main>
 
       <footer className="product-footer">
-        <span className="product-footer-muted">
-          © {new Date().getFullYear()} {t(lang, "common.appName")}
-        </span>
+        <div className="product-footer-inner">
+          <div className="product-footer-grid">
+            <div className="product-footer-brandblock">
+              <Link to="/" className="product-footer-brandlink" aria-label="prevIA home">
+                <BrandLogo compact />
+              </Link>
+
+              <p className="product-footer-body">{footer.body}</p>
+            </div>
+
+            <div className="product-footer-col">
+              <div className="product-footer-title">{footer.navigationTitle}</div>
+
+              <div className="product-footer-links">
+                <Link to={`/${lang}`} className="product-footer-link">
+                  {footer.links.home}
+                </Link>
+
+                <Link to={`/${lang}/how-it-works`} className="product-footer-link">
+                  {footer.links.howItWorks}
+                </Link>
+
+                <Link to={`/${lang}/glossary`} className="product-footer-link">
+                  {footer.links.glossary}
+                </Link>
+
+                <Link to={`/${lang}/about`} className="product-footer-link">
+                  {footer.links.about}
+                </Link>
+
+                <Link to={`/${lang}/contact`} className="product-footer-link">
+                  {footer.links.contact}
+                </Link>
+              </div>
+            </div>
+
+            <div className="product-footer-col">
+              <div className="product-footer-title">{footer.socialTitle}</div>
+
+              <div className="product-footer-socials">
+                {footer.social.map((item) => (
+                  <span key={item} className="product-footer-social-pill">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="product-footer-bottom">
+            <span className="product-footer-muted">
+              {footer.madeIn.replace("{year}", String(new Date().getFullYear()))}
+            </span>
+          </div>
+        </div>
       </footer>
 
       <ProductAuthModal
         open={authOpen}
         lang={lang}
-        initialMode="signup"
+        initialMode={authInitialMode}
         onClose={() => setAuthOpen(false)}
-        onAuthSuccess={() => {
+        onAuthSuccess={async (payload) => {
+          await syncSessionFromAuthPayload(payload);
           setAuthOpen(false);
-          window.location.reload();
         }}
       />
 
@@ -224,7 +424,6 @@ export function ProductLayout() {
         reason={planReason}
         onClose={() => setPlanOpen(false)}
       />
-
     </div>
   );
 }
