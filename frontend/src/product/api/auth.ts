@@ -77,6 +77,23 @@ export type AuthResetPasswordResponse = {
 
 export type AuthGoogleLoginResponse = AuthMeResponse;
 
+export type PatchAuthProfilePayload = {
+  full_name: string;
+  preferred_lang: "pt" | "en" | "es";
+};
+
+export type PatchAuthProfileResponse = {
+  ok: true;
+  user: {
+    user_id: number;
+    email: string;
+    full_name: string | null;
+    preferred_lang: "pt" | "en" | "es" | null;
+    status: string | null;
+    email_verified: boolean | null;
+  };
+};
+
 export class AuthRequestError extends Error {
   status: number;
   code?: string;
@@ -192,4 +209,29 @@ export async function postAuthGoogleLogin(payload: {
   credential: string;
 }): Promise<AuthGoogleLoginResponse> {
   return requestJson<AuthGoogleLoginResponse, typeof payload>("/auth/google/login", payload);
+}
+
+export async function patchAuthProfile(
+  payload: PatchAuthProfilePayload
+): Promise<PatchAuthProfileResponse> {
+  const res = await fetch(`${API_BASE_URL}/auth/profile`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await readJsonSafe<PatchAuthProfileResponse | AuthErrorResponse>(res);
+
+  if (!res.ok) {
+    const message =
+      (data && "message" in data && data.message) || `auth_profile_patch_failed:${res.status}`;
+    const code = data && "code" in data ? data.code : undefined;
+    throw new AuthRequestError(message, res.status, code);
+  }
+
+  return data as PatchAuthProfileResponse;
 }

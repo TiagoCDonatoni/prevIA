@@ -10,8 +10,9 @@ import { PublicHowItWorksPage } from "./public/pages/PublicHowItWorksPage";
 import { GlossaryHubPage } from "./public/pages/GlossaryHubPage";
 import { GlossaryTermPage } from "./public/pages/GlossaryTermPage";
 import { PublicAboutPage } from "./public/pages/PublicAboutPage";
-
 import { PublicContactPage } from "./public/pages/PublicContactPage";
+
+import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP } from "./config";
 
 export function AppRoutes() {
   return (
@@ -30,11 +31,21 @@ export function AppRoutes() {
           <Route path="contact" element={<PublicContactPage />} />
         </Route>
 
-        {/* Produto */}
-        <Route path="/app/*" element={<ProductApp />} />
+        {/* Produto guardado por flag */}
+        <Route
+          path="/app/*"
+          element={
+            ENABLE_PRODUCT_APP ? <ProductApp /> : <Navigate to="/pt" replace />
+          }
+        />
 
-        {/* Admin */}
-        <Route path="/admin/*" element={<AdminApp />} />
+        {/* Admin guardado por flag */}
+        <Route
+          path="/admin/*"
+          element={
+            ENABLE_ADMIN_APP ? <AdminApp /> : <Navigate to="/pt" replace />
+          }
+        />
 
         {/* Fallback global */}
         <Route path="*" element={<Navigate to="/pt" replace />} />

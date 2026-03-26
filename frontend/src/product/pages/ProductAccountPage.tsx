@@ -1,7 +1,8 @@
 import React from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 
 import { t, type Lang } from "../i18n";
+import { patchAuthProfile } from "../api/auth";
 import { PLAN_CATALOG } from "../planCatalog";
 import { PLAN_LABELS } from "../entitlements";
 import { useProductStore } from "../state/productStore";
@@ -81,6 +82,12 @@ function mapBillingCycleLabel(
   return t(uiLang, "auth.notAvailableYet");
 }
 
+function normalizeEditableLang(raw: string | null | undefined, fallback: Lang): Lang {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "pt" || value === "en" || value === "es") return value;
+  return fallback;
+}
+
 export default function ProductAccountPage() {
   const store = useProductStore();
   const { openAuthModal, logout } = useOutletContext<ProductLayoutOutletContext>();
@@ -89,6 +96,13 @@ export default function ProductAccountPage() {
   const isAuthenticated = Boolean(store.state.auth.is_logged_in);
   const account = store.accountSnapshot;
 
+  const [isEditingProfile, setIsEditingProfile] = React.useState(false);
+  const [profileName, setProfileName] = React.useState(account.full_name ?? "");
+  const [profileLang, setProfileLang] = React.useState<Lang>(
+    normalizeEditableLang(account.preferred_lang, lang)
+  );
+  const [isSavingProfile, setIsSavingProfile] = React.useState(false);
+  const [profileError, setProfileError] = React.useState<string | null>(null);
   const snapshotPlan = account.subscription.plan_code;
   const plan =
     snapshotPlan === "FREE_ANON" ||
@@ -139,6 +153,42 @@ export default function ProductAccountPage() {
     lang,
     account.subscription.billing_cycle
   );
+
+  React.useEffect(() => {
+    setProfileName(account.full_name ?? "");
+    setProfileLang(normalizeEditableLang(account.preferred_lang, store.state.lang as Lang));
+  }, [account.full_name, account.preferred_lang, store.state.lang]);
+
+  async function handleSaveProfile() {
+    const nextName = profileName.trim();
+
+    if (nextName.length < 2) {
+      setProfileError(t(lang, "auth.profileNameValidation"));
+      return;
+    }
+
+    try {
+      setProfileError(null);
+      setIsSavingProfile(true);
+
+      const result = await patchAuthProfile({
+        full_name: nextName,
+        preferred_lang: profileLang,
+      });
+
+      store.applyProfileUpdate({
+        full_name: result.user.full_name ?? nextName,
+        preferred_lang: normalizeEditableLang(result.user.preferred_lang, profileLang),
+      });
+
+      setIsEditingProfile(false);
+    } catch (error) {
+      console.error("handleSaveProfile failed", error);
+      setProfileError(t(lang, "auth.profileSaveError"));
+    } finally {
+      setIsSavingProfile(false);
+    }
+  }
   
   return (
     <section className="account-page">
@@ -150,6 +200,10 @@ export default function ProductAccountPage() {
         </div>
 
         <div className="account-hero-actions">
+          <Link to="/" className="product-secondary">
+            {t(lang, "auth.backToApp")}
+          </Link>
+
           {!isAuthenticated ? (
             <>
               <button
@@ -189,24 +243,100 @@ export default function ProductAccountPage() {
             <p>{t(lang, "auth.accountSectionSubtitle")}</p>
           </div>
 
-          <dl className="account-meta">
-            <div>
-              <dt>{t(lang, "auth.fullName")}</dt>
-              <dd>{displayName}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.email")}</dt>
-              <dd>{displayEmail}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.preferredLanguage")}</dt>
-              <dd>{displayPreferredLang}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.accountState")}</dt>
-              <dd>{displayAccountStatus}</dd>
-            </div>
-          </dl>
+          {!isEditingProfile ? (
+            <>
+              <dl className="account-meta">
+                <div>
+                  <dt>{t(lang, "auth.fullName")}</dt>
+                  <dd>{displayName}</dd>
+                </div>
+                <div>
+                  <dt>{t(lang, "auth.email")}</dt>
+                  <dd>{displayEmail}</dd>
+                </div>
+                <div>
+                  <dt>{t(lang, "auth.preferredLanguage")}</dt>
+                  <dd>{displayPreferredLang}</dd>
+                </div>
+                <div>
+                  <dt>{t(lang, "auth.accountState")}</dt>
+                  <dd>{displayAccountStatus}</dd>
+                </div>
+              </dl>
+
+              {isAuthenticated ? (
+                <div className="account-actions-list">
+                  <button
+                    type="button"
+                    className="product-secondary"
+                    onClick={() => {
+                      setProfileError(null);
+                      setProfileName(account.full_name ?? "");
+                      setProfileLang(normalizeEditableLang(account.preferred_lang, lang));
+                      setIsEditingProfile(true);
+                    }}
+                  >
+                    {t(lang, "auth.editProfile")}
+                  </button>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div className="account-actions-list" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span>{t(lang, "auth.fullName")}</span>
+                  <input
+                    type="text"
+                    className="product-input"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    maxLength={120}
+                  />
+                </label>
+
+                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span>{t(lang, "auth.preferredLanguage")}</span>
+                  <select
+                    className="product-select"
+                    value={profileLang}
+                    onChange={(e) => setProfileLang(e.target.value as Lang)}
+                  >
+                    <option value="pt">{t(lang, "auth.languagePortuguese")}</option>
+                    <option value="en">{t(lang, "auth.languageEnglish")}</option>
+                    <option value="es">{t(lang, "auth.languageSpanish")}</option>
+                  </select>
+                </label>
+              </div>
+
+              {profileError ? <div className="account-note">{profileError}</div> : null}
+
+              <div className="account-actions-list">
+                <button
+                  type="button"
+                  className="product-primary"
+                  onClick={() => void handleSaveProfile()}
+                  disabled={isSavingProfile}
+                >
+                  {isSavingProfile ? t(lang, "auth.saving") : t(lang, "auth.saveChanges")}
+                </button>
+
+                <button
+                  type="button"
+                  className="product-secondary"
+                  onClick={() => {
+                    setProfileError(null);
+                    setProfileName(account.full_name ?? "");
+                    setProfileLang(normalizeEditableLang(account.preferred_lang, lang));
+                    setIsEditingProfile(false);
+                  }}
+                  disabled={isSavingProfile}
+                >
+                  {t(lang, "auth.cancel")}
+                </button>
+              </div>
+            </>
+          )}
         </article>
 
         <article className="account-card">

@@ -6,7 +6,17 @@ import { coercePublicLang } from "../lib/publicLang";
 
 import { BetaLeadForm } from "../components/BetaLeadForm";
 
+import previewMainImg from "../assets/previews/landing-main.png";
+import previewMarketImg from "../assets/previews/landing-market.png";
+import previewAnalyticsImg from "../assets/previews/landing-analytics.png";
+
 import { usePublicSeo } from "../lib/publicSeo";
+
+const PREVIEW_IMAGES = [
+  previewMainImg,
+  previewMarketImg,
+  previewAnalyticsImg,
+] as const;
 
 export function PublicHomePage() {
   const { lang } = useParams<{ lang: string }>();
@@ -108,20 +118,32 @@ export function PublicHomePage() {
         </div>
 
         <div className="landing-preview-grid">
-          {copy.home.preview.items.map((item) => (
-            <article key={item.title} className="landing-preview-card">
-              <div className="landing-preview-frame">
-                <div className="landing-preview-window">
-                  <span />
-                  <span />
-                  <span />
+          {copy.home.preview.items.map((item, index) => {
+            const imageSrc = PREVIEW_IMAGES[index];
+
+            return (
+              <article key={item.title} className="landing-preview-card">
+                <div className="landing-preview-frame">
+                  <div className="landing-preview-media">
+                    {imageSrc ? (
+                      <img
+                        src={imageSrc}
+                        alt={item.title}
+                        className="landing-preview-image"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="landing-preview-placeholder">{item.badge}</div>
+                    )}
+                  </div>
                 </div>
-                <div className="landing-preview-placeholder">{item.badge}</div>
-              </div>
-              <h3 className="landing-card-title">{item.title}</h3>
-              <p className="landing-card-body">{item.body}</p>
-            </article>
-          ))}
+
+                <div className="landing-preview-kicker">{item.badge}</div>
+                <h3 className="landing-card-title">{item.title}</h3>
+                <p className="landing-card-body">{item.body}</p>
+              </article>
+            );
+          })}
         </div>
       </section>
 

@@ -1,0 +1,1 @@
+const e="prevIA",o="Cerrar",t="Volver",a="Cargando…",s="Ahora no",c="Reset",n="Restablecer todo y recargar (DEV)",d="Actualizado {ago}",r={appName:e,close:o,back:t,loading:a,notNow:s,devReset:c,devResetTitle:n,updatedAgo:d};export{e as appName,t as back,o as close,r as default,c as devReset,n as devResetTitle,a as loading,s as notNow,d as updatedAgo};

@@ -1,11 +1,12 @@
 import React from "react";
-import { Link, Navigate, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { LANGS, type Lang } from "../../i18n";
+import type { Lang } from "../../i18n";
 import { publicCopy } from "../content/publicCopy";
 import { coercePublicLang, isPublicLang, replaceUrlLang } from "../lib/publicLang";
 import "../public.css";
 import BrandLogo from "../../shared/BrandLogo";
+import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
 const PUBLIC_FOOTER_COPY = {
   pt: {
@@ -55,13 +56,10 @@ const PUBLIC_FOOTER_COPY = {
   },
 } as const;
 
-function labelForLang(lang: Lang) {
-  return LANGS.find((item) => item.lang === lang)?.label ?? lang.toUpperCase();
-}
-
 export function PublicLayout() {
   const { lang } = useParams<{ lang: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
 
   React.useLayoutEffect(() => {
     if (location.hash) return;
@@ -122,21 +120,18 @@ export function PublicLayout() {
           </nav>
 
           <div className="public-header-right">
-            <div className="public-pill">
-              <span className="public-pill-label">{copy.nav.language}</span>
-
-              <div className="public-lang-switcher">
-                {(["pt", "en", "es"] as Lang[]).map((item) => (
-                  <NavLink
-                    key={item}
-                    to={replaceUrlLang(location.pathname, item)}
-                    className={`public-lang-btn ${item === currentLang ? "active" : ""}`}
-                  >
-                    {labelForLang(item)}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
+            <LanguageDropdown
+              value={currentLang}
+              ariaLabel={copy.nav.language}
+              menuAlign="right"
+              onChange={(nextLang) => {
+                navigate({
+                  pathname: replaceUrlLang(location.pathname, nextLang),
+                  search: location.search,
+                  hash: location.hash,
+                });
+              }}
+            />
           </div>
         </div>
       </header>

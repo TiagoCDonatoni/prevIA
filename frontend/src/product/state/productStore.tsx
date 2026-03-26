@@ -71,6 +71,11 @@ export type ProductStore = {
   setLang: (lang: Lang) => void;
   setAuth: (opts: { is_logged_in: boolean; email?: string | null }) => void;
 
+  applyProfileUpdate: (payload: {
+    full_name: string | null;
+    preferred_lang: Lang | null;
+  }) => void;
+
   applyBackendBootstrap: (payload: {
     is_authenticated: boolean;
     email: string | null;
@@ -276,6 +281,32 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
           is_logged_in: opts.is_logged_in,
           email: opts.email ?? null,
         },
+      }));
+    },
+    [persistWith]
+  );
+
+  const applyProfileUpdate = useCallback(
+    (payload: { full_name: string | null; preferred_lang: Lang | null }) => {
+      const nextLang = payload.preferred_lang ? normalizeLang(payload.preferred_lang) : null;
+
+      if (nextLang) {
+        persistWith((prev) => ({
+          ...prev,
+          lang: nextLang,
+        }));
+      }
+
+      setAccountSnapshot((prev) => ({
+        ...prev,
+        full_name: payload.full_name ?? prev.full_name,
+        preferred_lang: nextLang ?? prev.preferred_lang,
+      }));
+
+      setBootstrap((prev) => ({
+        ...prev,
+        full_name: payload.full_name ?? prev.full_name,
+        preferred_lang: nextLang ?? prev.preferred_lang,
       }));
     },
     [persistWith]
@@ -605,6 +636,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       setPlan: setPlanId,
       setLang,
       setAuth,
+      applyProfileUpdate,
       applyBackendBootstrap,
       applyBackendUsage,
       revealViaBackend,
@@ -627,6 +659,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       setPlanId,
       setLang,
       setAuth,
+      applyProfileUpdate,
       applyBackendBootstrap,
       applyBackendUsage,
       revealViaBackend,

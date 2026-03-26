@@ -15,15 +15,7 @@ import { ProductAuthModal } from "../auth/ProductAuthModal";
 import { PlanChangeModal } from "../components/PlanChangeModal";
 import BrandLogo from "../../shared/BrandLogo";
 
-import brFlag from "../assets/br.svg";
-import gbFlag from "../assets/gb.svg";
-import esFlag from "../assets/es.svg";
-
-function langLabel(l: Lang) {
-  if (l === "pt") return { src: brFlag, code: "PT", name: "Português" };
-  if (l === "en") return { src: gbFlag, code: "EN", name: "English" };
-  return { src: esFlag, code: "ES", name: "Español" };
-}
+import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
  const PRODUCT_FOOTER_COPY = {
   pt: {
@@ -72,62 +64,6 @@ function langLabel(l: Lang) {
     madeIn: "Hecho en Brasil @prevIA {year}",
   },
 } as const;
-
-function LangDropdown({
-  value,
-  onChange,
-}: {
-  value: Lang;
-  onChange: (v: Lang) => void;
-}) {
-  const [open, setOpen] = React.useState(false);
-
-  const cur = langLabel(value);
-
-  return (
-    <div className="lang-dd" onBlur={() => setOpen(false)} tabIndex={-1}>
-      <button
-        type="button"
-        className="lang-dd-btn"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <img src={cur.src} alt="" className="lang-flag-img" aria-hidden="true" />
-        <span className="lang-code">{cur.code}</span>
-        <span className="lang-caret" aria-hidden="true">
-          ▾
-        </span>
-      </button>
-
-      {open ? (
-        <div className="lang-dd-menu" role="menu">
-          {(["pt", "en", "es"] as Lang[]).map((l) => {
-            const it = langLabel(l);
-            const active = l === value;
-            return (
-              <button
-                key={l}
-                type="button"
-                className={`lang-dd-item ${active ? "is-active" : ""}`}
-                role="menuitem"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(l);
-                  setOpen(false);
-                }}
-              >
-                <img src={it.src} alt="" className="lang-flag-img" aria-hidden="true" />
-                <span className="lang-code">{it.code}</span>
-                <span className="lang-name">{it.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 export type ProductLayoutOutletContext = {
   openAuthModal: (mode?: "signup" | "login" | "forgot" | "reset") => void;
@@ -293,7 +229,12 @@ export function ProductLayout() {
           ) : null}
 
           <div className="product-pill product-pill-lang">
-            <LangDropdown value={lang} onChange={(v) => store.setLang(v)} />
+            <LanguageDropdown
+              value={lang}
+              onChange={(v) => store.setLang(v)}
+              ariaLabel={t(lang, "nav.language")}
+              menuAlign="right"
+            />
           </div>
 
           <div className="pl-credits-wrap">

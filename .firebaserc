@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "previa-prod"
+  },
+  "targets": {
+    "previa-prod": {
+      "hosting": {
+        "api": [
+          "previa-prod-api"
+        ],
+        "landing": [
+          "previa-prod"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

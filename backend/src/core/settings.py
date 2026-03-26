@@ -36,6 +36,24 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_csv(name: str, default: Optional[List[str]] = None) -> List[str]:
+    raw = _env_str(name, "")
+    if raw == "":
+        return list(default or [])
+
+    items: List[str] = []
+    seen = set()
+
+    for part in raw.split(","):
+        value = part.strip().rstrip("/")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        items.append(value)
+
+    return items
+
+
 @dataclass(frozen=True)
 class Settings:
     apifootball_base_url: str
@@ -48,6 +66,8 @@ class Settings:
     default_lang: str
     supported_langs: List[str]
     app_env: str
+
+    frontend_allowed_origins: List[str]
 
     product_auth_enabled: bool
     admin_auth_enabled: bool
@@ -86,6 +106,19 @@ def load_settings() -> Settings:
     default_lang = app_defaults.get("default_lang", "pt-BR")
     supported_langs = app_defaults.get("supported_langs", ["pt-BR", "en", "es"])
     app_env = _env_str("APP_ENV", "dev").lower()
+
+    default_frontend_allowed_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ]
+    frontend_allowed_origins = _env_csv(
+        "FRONTEND_ALLOWED_ORIGINS",
+        default=default_frontend_allowed_origins if app_env in {"dev", "development"} else [],
+    )
 
     product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
@@ -133,6 +166,7 @@ def load_settings() -> Settings:
         default_lang=default_lang,
         supported_langs=supported_langs,
         app_env=app_env,
+        frontend_allowed_origins=frontend_allowed_origins,
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
         product_dev_auto_login_enabled=product_dev_auto_login_enabled,

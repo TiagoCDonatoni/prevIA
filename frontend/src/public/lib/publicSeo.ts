@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Lang } from "../../i18n";
+import { PUBLIC_SITE_ORIGIN } from "../../config";
 
 type PublicSeoInput = {
   lang: Lang;
@@ -7,9 +8,6 @@ type PublicSeoInput = {
   title: string;
   description: string;
 };
-
-const PUBLIC_SITE_ORIGIN =
-  import.meta.env.VITE_PUBLIC_SITE_ORIGIN?.replace(/\/+$/, "") || "http://localhost:5173";
 
 function upsertMeta(selector: string, attrs: Record<string, string>) {
   let el = document.head.querySelector(selector) as HTMLMetaElement | null;

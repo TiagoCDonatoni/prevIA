@@ -1,0 +1,38 @@
+{
+  "hosting": [
+    {
+      "target": "landing",
+      "public": "frontend/dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
+    },
+    {
+      "target": "api",
+      "public": "firebase-api",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "run": {
+            "serviceId": "previa-api",
+            "region": "southamerica-east1",
+            "pinTag": true
+          }
+        }
+      ]
+    }
+  ]
+}

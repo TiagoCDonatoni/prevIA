@@ -1,0 +1,1 @@
+const e="Probabilities",o="Confidence",t="status",a="Edge (vs market)",n="Value detection enabled",s="No probabilities (model unavailable).",i="No edge data for this match.",c={probabilities:e,confidence:o,status:t,edge:a,valueEnabled:n,noProbs:s,noEdge:i};export{o as confidence,c as default,a as edge,i as noEdge,s as noProbs,e as probabilities,t as status,n as valueEnabled};

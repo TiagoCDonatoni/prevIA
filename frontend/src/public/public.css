@@ -84,26 +84,6 @@
   color: #64748b;
 }
 
-.public-lang-switcher {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.public-lang-btn {
-  text-decoration: none;
-  font-size: 12px;
-  color: #334155;
-  padding: 6px 10px;
-  border-radius: 999px;
-}
-
-.public-lang-btn.active {
-  background: #f1f5f9;
-  color: #0f172a;
-  font-weight: 600;
-}
-
 .public-main {
   flex: 1;
   max-width: 1180px;
@@ -445,18 +425,47 @@
 .landing-preview-card {
   border: 1px solid #e5e7eb;
   border-radius: 22px;
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   padding: 20px;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.landing-preview-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
+  border-color: #dbe3ee;
 }
 
 .landing-preview-frame {
-  border: 1px solid var(--public-brand-soft-border);
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(37, 99, 235, 0.05) 0%, #f8fbff 100%);
-  overflow: hidden;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.landing-preview-media {
+  position: relative;
+  min-height: 220px;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.landing-preview-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  object-fit: contain;
+  object-position: top center;
+  background: transparent;
 }
 
 .landing-preview-window {
@@ -466,7 +475,7 @@
   height: 38px;
   padding: 0 14px;
   border-bottom: 1px solid #e5e7eb;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .landing-preview-window span {
@@ -477,7 +486,7 @@
 }
 
 .landing-preview-placeholder {
-  min-height: 180px;
+  min-height: 220px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -486,6 +495,15 @@
   font-size: 14px;
   font-weight: 600;
   text-align: center;
+}
+
+.landing-preview-kicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--public-brand);
 }
 
 .landing-final-cta {
@@ -1450,4 +1468,8 @@
   .public-footer-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.public-header-right .lang-dd-btn {
+  background: #fff;
 }
