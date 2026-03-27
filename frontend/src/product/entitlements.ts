@@ -1,4 +1,4 @@
-import type { Lang } from "../i18n";
+import type { Lang } from "./i18n";
 
 export type PlanId = "FREE_ANON" | "FREE" | "BASIC" | "LIGHT" | "PRO";
 
@@ -38,6 +38,21 @@ export type Entitlements = {
     chat: boolean;
   };
 };
+
+
+export const PLAN_ORDER: PlanId[] = ["FREE_ANON", "FREE", "BASIC", "LIGHT", "PRO"];
+
+export function getNextPlan(plan: PlanId): PlanId | null {
+  const idx = PLAN_ORDER.indexOf(plan);
+  if (idx === -1 || idx === PLAN_ORDER.length - 1) return null;
+  return PLAN_ORDER[idx + 1];
+}
+
+export function getHigherPlans(plan: PlanId): PlanId[] {
+  const idx = PLAN_ORDER.indexOf(plan);
+  if (idx === -1) return PLAN_ORDER.slice(1);
+  return PLAN_ORDER.slice(idx + 1);
+}
 
 export const PLAN_LABELS: Array<{ id: PlanId; label: string }> = [
   { id: "FREE_ANON", label: "Free (anon)" },
@@ -159,6 +174,23 @@ function nextResetIso(now = new Date()): string {
   return next.toISOString();
 }
 
+function normalizeLang(raw: string | null | undefined): Lang {
+  const v = String(raw ?? "").toLowerCase();
+
+  // aceita formas completas do navegador tipo "pt-BR", "en-US", "es-419"
+  if (v.startsWith("pt")) return "pt";
+  if (v.startsWith("es")) return "es";
+  if (v.startsWith("en")) return "en";
+
+  // fallback mundial
+  return "en";
+}
+
+function detectBrowserLang(): Lang {
+  const raw = navigator.languages?.[0] ?? navigator.language ?? "en";
+  return normalizeLang(raw);
+}
+
 export function loadProductState(): PersistedState {
   const raw = localStorage.getItem(LS_KEY);
   const today = dateKeySaoPaulo();
@@ -166,7 +198,7 @@ export function loadProductState(): PersistedState {
   if (!raw) {
     return {
       plan: "FREE_ANON",
-      lang: "pt",
+      lang: detectBrowserLang(),
       auth: { is_logged_in: false, email: null },
       credits: { date_key: today, used_today: 0, revealed_today: {} },
     };
@@ -174,15 +206,21 @@ export function loadProductState(): PersistedState {
 
   try {
     const parsed = JSON.parse(raw) as PersistedState;
+
     if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
+
+    // garante: só pt/en/es; resto vira en
+    parsed.lang = normalizeLang(parsed.lang);
+
     if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
       parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
     }
+
     return parsed;
   } catch {
     return {
       plan: "FREE_ANON",
-      lang: "pt",
+      lang: detectBrowserLang(),
       auth: { is_logged_in: false, email: null },
       credits: { date_key: today, used_today: 0, revealed_today: {} },
     };

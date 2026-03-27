@@ -1,0 +1,60 @@
+{
+  "v1": {
+    "headline": {
+      "noModel": "Analysis unavailable right now",
+      "balanced": "Balanced game — no clear side",
+      "homeLean": "Slight lean toward {home}",
+      "awayLean": "Slight lean toward {away}",
+      "drawLean": "Draw looks like a relevant outcome",
+      "homeConsistent": "Consistent edge for {home}",
+      "homeClear": "Clear favorite: {home}",
+      "awayConsistent": "Consistent edge for {away}",
+      "awayClear": "Clear favorite: {away}",
+      "drawConsistent": "Draw is a strong scenario",
+      "drawClear": "Draw is the dominant scenario"
+    },
+    "summary": {
+      "depth1": {
+        "high": "Based on the model signals, this match looks fairly stable.",
+        "medium": "There are signals, but with some uncertainty.",
+        "low": "Harder to read — better to be cautious."
+      },
+      "depth2": {
+        "high": "The model indicates a relatively stable scenario for this matchup.",
+        "medium": "The model points to a likely path, but without high conviction.",
+        "low": "The model isn’t very confident here — treat it as a risky match."
+      },
+      "depth3": {
+        "high": "The model points to a more likely side (~{pct}%) with good stability.",
+        "medium": "The model suggests a more likely side (~{pct}%), but with uncertainty.",
+        "low": "Even with an indication (~{pct}%), confidence is low — caution."
+      },
+      "depth4": {
+        "high": "Projection around {pct}% for the dominant scenario, with good stability.",
+        "medium": "Projection around {pct}% for the dominant scenario, with moderate risk.",
+        "low": "Projection around {pct}%, but with low reliability — high risk."
+      }
+    },
+    "bullets": {
+      "context": "Use this as a trend read, not a certainty.",
+      "risk": "Risk management: balanced games and draws can weigh heavily on outcomes."
+    },
+    "price": {
+      "good": "The odds for {who} look higher than the model expects.",
+      "aligned": "The odds for {who} look aligned with what the model expects.",
+      "bad": "The odds for {who} look low for the risk in this match.",
+      "noteLowPay": "Even with a strong chance, the payout can be limited at this price.",
+      "pro": "Pricing vs model ({who}): market {market} vs fair {fair} (edge {edgePp}pp)."
+    },
+    "warning": {
+      "noModel": "No probabilities available (model unavailable).",
+      "lowConfidence": "Low confidence: outcomes may swing and the market may be more efficient here."
+    },
+    "disclaimer": "This is a statistical estimate and does not guarantee results.",
+    "outcomes": {
+      "home": "Home ({home})",
+      "away": "Away ({away})",
+      "draw": "Draw"
+    }
+  }
+}

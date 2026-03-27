@@ -1,0 +1,45 @@
+{
+  "title": "Games (Odds)",
+  "reload": "Reload",
+  "loading": "Loading…",
+  "meta_sport": "sport_key",
+  "meta_api_window": "API window",
+  "meta_showing": "showing",
+  "meta_loaded": "loaded",
+
+  "filters_today": "Today",
+  "filters_days3": "3 days",
+  "filters_days7": "7 days",
+  "filters_days30": "30 days",
+  "filters_days60": "60 days",
+  "filters_all": "All",
+  "filters_sort_date": "Sort by date",
+  "filters_sort_confidence": "Sort by confidence",
+
+  "empty_list": "No games found for these filters.",
+  "select_prompt": "Select a match to see details.",
+
+  "btn_reveal": "Reveal analysis (1 credit)",
+  "btn_view": "View analysis",
+  "btn_get_credits": "Get more credits",
+  "btn_calculating": "Calculating…",
+  "btn_title_no_credits": "No credits",
+
+  "err_unreliable_match": "This match can’t be matched reliably right now.",
+
+  "artifact_label": "Artifact",
+
+  "panel_probs": "Probabilities",
+  "panel_odds_best": "Odds (best)",
+  "panel_confidence": "Confidence",
+  "panel_edge": "Edge (vs market)",
+  "panel_status": "status",
+  "panel_no_probs": "No probabilities (model unavailable).",
+  "panel_no_odds": "No odds available right now.",
+  "panel_no_edge": "No edge data available for this match.",
+  "value_detection_enabled": "Value detection enabled",
+
+  "locked_body": "Available on a higher plan.",
+  "locked_cta": "Unlock now"
+}
+

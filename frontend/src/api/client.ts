@@ -322,11 +322,18 @@ export async function productListOddsEvents(params: {
   sport_key: string;
   hours_ahead?: number;
   limit?: number;
+  assume_league_id?: number;
+  assume_season?: number;
+  artifact_filename?: string;
 }): Promise<ProductOddsEventsResponse> {
   const qs = new URLSearchParams();
   qs.set("sport_key", params.sport_key);
   if (params.hours_ahead != null) qs.set("hours_ahead", String(params.hours_ahead));
   if (params.limit != null) qs.set("limit", String(params.limit));
+
+  if (params.assume_league_id != null) qs.set("assume_league_id", String(params.assume_league_id));
+  if (params.assume_season != null) qs.set("assume_season", String(params.assume_season));
+  if (params.artifact_filename) qs.set("artifact_filename", params.artifact_filename);
 
   const url = new URL("/odds/events", API_BASE_URL);
   url.search = qs.toString();

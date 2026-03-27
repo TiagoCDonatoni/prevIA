@@ -1,0 +1,24 @@
+{
+  "freeAnon": { "name": "Free", "badge": "Sin login", "desc": "Prueba rápida sin cuenta" },
+  "free": { "name": "Free+", "badge": "Con login", "desc": "Empieza y prueba el producto" },
+  "basic": { "name": "Basic", "badge": "Más créditos", "desc": "Uso ligero y constancia" },
+  "light": { "name": "Light", "badge": "Más contexto", "desc": "Seguir varios partidos con holgura" },
+  "pro": { "name": "Pro", "badge": "Avanzado", "desc": "Volumen alto y máxima constancia" },
+
+  "badge": { "recommended": "Recomendado" },
+  "units": { "creditsPerDay": "créditos/día" },
+  "copy": {
+    "moreCredits": "+{plus}/día vs actual",
+    "lessInterruptions": "Menos interrupciones por límite"
+  },
+  "price": {
+    "placeholder": "Precio pronto",
+    "perMonth": "por mes"
+  },
+
+  "cta": {
+    "createAccount": "Crear cuenta",
+    "seePlans": "Ver planes",
+    "upgrade": "Mejorar plan"
+  }
+}

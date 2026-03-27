@@ -1,103 +1,86 @@
+// frontend/src/i18n/index.ts
 export type Lang = "pt" | "en" | "es";
-
-// JSON dictionaries (Vite supports JSON imports)
-import pt_common from "./locales/pt/common.json";
-import pt_nav from "./locales/pt/nav.json";
-import pt_plans from "./locales/pt/plans.json";
-import pt_credits from "./locales/pt/credits.json";
-import pt_matchup from "./locales/pt/matchup.json";
-import pt_odds from "./locales/pt/odds.json";
-import pt_errors from "./locales/pt/errors.json";
-import pt_auth from "./locales/pt/auth.json";
-
-import en_common from "./locales/en/common.json";
-import en_nav from "./locales/en/nav.json";
-import en_plans from "./locales/en/plans.json";
-import en_credits from "./locales/en/credits.json";
-import en_matchup from "./locales/en/matchup.json";
-import en_odds from "./locales/en/odds.json";
-import en_errors from "./locales/en/errors.json";
-import en_auth from "./locales/en/auth.json";
-
-import es_common from "./locales/es/common.json";
-import es_nav from "./locales/es/nav.json";
-import es_plans from "./locales/es/plans.json";
-import es_credits from "./locales/es/credits.json";
-import es_matchup from "./locales/es/matchup.json";
-import es_odds from "./locales/es/odds.json";
-import es_errors from "./locales/es/errors.json";
-import es_auth from "./locales/es/auth.json";
 
 type Dict = Record<string, any>;
 
-const DICTS: Record<Lang, Dict> = {
-  pt: {
-    common: pt_common,
-    nav: pt_nav,
-    plans: pt_plans,
-    credits: pt_credits,
-    matchup: pt_matchup,
-    odds: pt_odds,
-    errors: pt_errors,
-    auth: pt_auth,
-  },
-  en: {
-    common: en_common,
-    nav: en_nav,
-    plans: en_plans,
-    credits: en_credits,
-    matchup: en_matchup,
-    odds: en_odds,
-    errors: en_errors,
-    auth: en_auth,
-  },
-  es: {
-    common: es_common,
-    nav: es_nav,
-    plans: es_plans,
-    credits: es_credits,
-    matchup: es_matchup,
-    odds: es_odds,
-    errors: es_errors,
-    auth: es_auth,
-  },
-};
+const CACHE: Partial<Record<Lang, Dict>> = {};
+const STORAGE_KEY = "previa_lang_v1";
 
-function getPath(obj: any, path: string): any {
-  const parts = path.split(".");
-  let cur: any = obj;
-  for (const p of parts) {
-    if (cur == null) return undefined;
-    cur = cur[p];
+// IMPORTANT: agora o source-of-truth do produto está em src/product/i18n/locales
+async function loadLang(lang: Lang): Promise<Dict> {
+  if (CACHE[lang]) return CACHE[lang] as Dict;
+
+  try {
+    const [nav, plans, credits, matchup, odds, auth, errors, common, product] =
+      await Promise.all([
+        import(`../product/i18n/locales/${lang}/nav.json`),
+        import(`../product/i18n/locales/${lang}/plans.json`),
+        import(`../product/i18n/locales/${lang}/credits.json`),
+        import(`../product/i18n/locales/${lang}/matchup.json`),
+        import(`../product/i18n/locales/${lang}/odds.json`),
+        import(`../product/i18n/locales/${lang}/auth.json`),
+        import(`../product/i18n/locales/${lang}/errors.json`),
+        import(`../product/i18n/locales/${lang}/common.json`),
+        import(`../product/i18n/locales/${lang}/product.json`),
+      ]);
+
+    const dict: Dict = {
+      nav: nav.default ?? nav,
+      plans: plans.default ?? plans,
+      credits: credits.default ?? credits,
+      matchup: matchup.default ?? matchup,
+      odds: odds.default ?? odds,
+      auth: auth.default ?? auth,
+      errors: errors.default ?? errors,
+      common: common.default ?? common,
+      product: product.default ?? product,
+    };
+
+    CACHE[lang] = dict;
+    return dict;
+  } catch (err) {
+    // Ajuda MUITO quando algum json/path falha
+    console.error("[i18n] loadLang failed:", { lang, err });
+    CACHE[lang] = {}; // evita loop
+    return {};
   }
-  return cur;
 }
 
-function interpolate(str: string, vars?: Record<string, any>): string {
-  if (!vars) return str;
-  return str.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? `{${k}}`));
+function interpolate(template: string, vars?: Record<string, any>) {
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (_, k) =>
+    vars[k] === undefined || vars[k] === null ? `{${k}}` : String(vars[k])
+  );
 }
 
-/**
- * Translation helper.
- *
- * - key format: "namespace.key"
- * - fallback: current lang -> "pt" -> key
- */
-export function t(lang: Lang, key: string, vars?: Record<string, any>): string {
-  const [ns, ...rest] = key.split(".");
-  const leaf = rest.join(".");
-
-  const cur = getPath(DICTS[lang]?.[ns], leaf);
-  if (typeof cur === "string") return interpolate(cur, vars);
-
-  const fb = getPath(DICTS.pt?.[ns], leaf);
-  if (typeof fb === "string") return interpolate(fb, vars);
-
-  return key;
+export function getStoredLang(): Lang {
+  const v = localStorage.getItem(STORAGE_KEY);
+  if (v === "pt" || v === "en" || v === "es") return v;
+  return "pt";
 }
 
-export const LANGS: Array<{ lang: Lang; label: string }> = [
+export function setStoredLang(next: Lang) {
+  localStorage.setItem(STORAGE_KEY, next);
+}
+
+// Util: suporta apenas "ns.key" (1 nível), que é seu padrão atual
+export function t(lang: Lang, key: string, vars?: Record<string, any>) {
+  const [ns, k] = key.split(".");
+  const dict = CACHE[lang];
+
+  const raw = dict?.[ns]?.[k];
+  if (raw == null) return key;
+
+  if (typeof raw === "string") return interpolate(raw, vars);
+  return String(raw);
+}
+
+// Opcional: garantir preload (você pode chamar no bootstrap/layout)
+export async function warmI18n(lang: Lang) {
+  await loadLang(lang);
+}
+
+export const LANGS: { lang: Lang; label: string }[] = [
   { lang: "pt", label: "PT" },
   { lang: "en", label: "EN" },
   { lang: "es", label: "ES" },

@@ -1,0 +1,38 @@
+{
+  "partner": "Socio",
+  "bestOdd": "Mejor cuota",
+  "seeAllBooks": "Ver todas las casas",
+
+  "pageTitle": "Partidos (Cuotas)",
+  "reload": "Recargar",
+  "listAria": "Lista de partidos",
+  "selectHint": "Selecciona un partido para ver detalles.",
+  "bestLabel": "Best",
+  "artifact": "Artifact",
+
+  "filterWindow": "Ventana",
+  "filterStatus": "Estado",
+  "sortBy": "Ordenar",
+
+  "windowToday": "Hoy",
+  "window3d": "3 días",
+  "window7d": "7 días",
+  "window30d": "30 días",
+
+  "statusAll": "Todos",
+  "statusExact": "EXACT",
+  "statusNotFound": "NOT_FOUND",
+
+  "sortDate": "Ordenar por fecha",
+  "sortConfidence": "Ordenar por confianza",
+
+  "meta": "sport_key: {sportKey} • ventana: {hoursAhead}h • mostrando: {showing} ({loaded} cargados)",
+
+  "noOdds": "No hay cuotas disponibles ahora.",
+  "metaCount": "Mostrando: {showing} ({loaded} cargados)",
+  "revealHint": "Haz clic en “Ver análisis” para ver las probabilidades.",
+  "filterLeague": "Filtrar por liga",
+
+  "opportunityDetected": "🔥 Oportunidad detectada"
+
+}

@@ -1,0 +1,9 @@
+{
+  "probabilities": "Probabilities",
+  "confidence": "Confidence",
+  "status": "status",
+  "edge": "Edge (vs market)",
+  "valueEnabled": "Value detection enabled",
+  "noProbs": "No probabilities (model unavailable).",
+  "noEdge": "No edge data for this match."
+}

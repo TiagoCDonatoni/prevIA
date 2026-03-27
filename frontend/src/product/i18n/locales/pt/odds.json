@@ -1,0 +1,37 @@
+{
+  "partner": "Parceiro",
+  "bestOdd": "Melhor odd",
+  "seeAllBooks": "Ver todas as casas",
+
+  "pageTitle": "Jogos (Odds)",
+  "reload": "Recarregar",
+  "listAria": "Lista de jogos",
+  "selectHint": "Selecione um jogo para ver detalhes.",
+  "bestLabel": "Best",
+  "artifact": "Artifact",
+
+  "filterWindow": "Janela",
+  "filterStatus": "Status",
+  "sortBy": "Ordenar",
+
+  "windowToday": "Hoje",
+  "window3d": "3 dias",
+  "window7d": "7 dias",
+  "window30d": "30 dias",
+
+  "statusAll": "Todos",
+  "statusExact": "EXACT",
+  "statusNotFound": "NOT_FOUND",
+
+  "sortDate": "Ordenar por data",
+  "sortConfidence": "Ordenar por confiança",
+
+  "meta": "sport_key: {sportKey} • janela: {hoursAhead}h • exibindo: {showing} ({loaded} carregados)",
+
+  "noOdds": "Sem odds no momento.",
+  "metaCount": "Exibindo: {showing} ({loaded} carregados)",
+  "revealHint": "Clique em “Ver análise” para ver as probabilidades.",
+  "filterLeague": "Filtrar por liga",
+  "opportunityDetected": "🔥 Oportunidade detectada"
+
+}

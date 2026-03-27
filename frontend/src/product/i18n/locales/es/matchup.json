@@ -1,0 +1,9 @@
+{
+  "probabilities": "Probabilidades",
+  "confidence": "Confianza",
+  "status": "estado",
+  "edge": "Edge (vs mercado)",
+  "valueEnabled": "Detección de valor habilitada",
+  "noProbs": "Sin probabilidades (modelo no disponible).",
+  "noEdge": "Sin datos de edge para este partido."
+}

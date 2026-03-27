@@ -52,18 +52,14 @@ def _parse_seasons(seasons_arg: str) -> List[int]:
     return items
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Few leagues + multi-season (API-Football -> RAW -> CORE)")
-    ap.add_argument("--provider", default="apifootball")
-    ap.add_argument("--league-ids", default="39", help="CSV league ids (ex: 39,140)")
-    ap.add_argument("--seasons", required=True, help='ex: "2021-2024" or "2022,2023,2024"')
-    ap.add_argument("--max-calls", type=int, default=30, help="hard cap of API calls for safety")
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-
-    league_ids = _parse_int_list(args.league_ids)
-    seasons = _parse_seasons(args.seasons)
-
+def orchestrate_apifootball_pg(
+    *,
+    provider: str = "apifootball",
+    league_ids: List[int],
+    seasons: List[int],
+    max_calls: int = 30,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     s = load_settings()
     client = ApiFootballClient(
         base_url=s.apifootball_base_url,
@@ -71,9 +67,9 @@ def main() -> None:
         timeout_s=int(s.app_defaults.get("http_timeout_s", 30)),
     )
 
-    calls_left = int(args.max_calls)
+    calls_left = int(max_calls)
 
-    report = {
+    report: Dict[str, Any] = {
         "plan": {"league_ids": league_ids, "seasons": seasons, "max_calls": calls_left},
         "raw": {"leagues": 0, "teams": 0, "fixtures": 0, "dedup": 0},
         "core": {},
@@ -85,14 +81,14 @@ def main() -> None:
         if calls_left <= 0:
             return False
 
-        if args.dry_run:
+        if dry_run:
             status, payload = 200, {"response": [], "paging": {"current": 1, "total": 1}}
         else:
             status, payload = _call(client, path, params)
 
         ok = 200 <= status < 300
         inserted, _ = insert_raw_response(
-            provider=args.provider,
+            provider=provider,
             endpoint=endpoint,
             request_params={"path": path, "params": params},
             response_body=payload,
@@ -114,9 +110,6 @@ def main() -> None:
 
         return ok
 
-    # Estratégia:
-    # - leagues por season (1 chamada por season) -> útil para manter a dimensão atualizada
-    # - teams e fixtures por (league, season)
     for season in seasons:
         if not ingest("leagues", "/leagues", {"season": season}):
             break
@@ -133,12 +126,43 @@ def main() -> None:
 
             ingest("fixtures", "/fixtures", {"league": league_id, "season": season})
 
-    # CORE ETL (limite alto, mas controlado por quantos RAWs você ingeriu)
-    report["core"]["leagues"] = run_core_etl(provider=args.provider, endpoint="leagues", limit=5000, league_ids=league_ids)
-    report["core"]["teams"] = run_core_etl(provider=args.provider, endpoint="teams", limit=5000)
-    report["core"]["fixtures"] = run_core_etl(provider=args.provider, endpoint="fixtures", limit=20000)
+    report["core"]["leagues"] = run_core_etl(
+        provider=provider,
+        endpoint="leagues",
+        limit=5000,
+        league_ids=league_ids,
+    )
+    report["core"]["teams"] = run_core_etl(
+        provider=provider,
+        endpoint="teams",
+        limit=5000,
+    )
+    report["core"]["fixtures"] = run_core_etl(
+        provider=provider,
+        endpoint="fixtures",
+        limit=20000,
+    )
 
     report["plan"]["calls_left"] = calls_left
+    return report
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Few leagues + multi-season (API-Football -> RAW -> CORE)")
+    ap.add_argument("--provider", default="apifootball")
+    ap.add_argument("--league-ids", default="39", help="CSV league ids (ex: 39,140)")
+    ap.add_argument("--seasons", required=True, help='ex: "2021-2024" or "2022,2023,2024"')
+    ap.add_argument("--max-calls", type=int, default=30, help="hard cap of API calls for safety")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    report = orchestrate_apifootball_pg(
+        provider=args.provider,
+        league_ids=_parse_int_list(args.league_ids),
+        seasons=_parse_seasons(args.seasons),
+        max_calls=args.max_calls,
+        dry_run=args.dry_run,
+    )
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

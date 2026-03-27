@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { t, type Lang } from "../../i18n";
+import { t, type Lang } from "../i18n";
 
 type Mode = "login" | "signup";
 
@@ -34,9 +34,9 @@ export function ProductAuthModal(props: {
   }
 
   return (
-    <div className="product-modal-overlay" role="dialog" aria-modal="true">
-      <div className="product-modal">
-        <div className="product-modal-header">
+    <div className="um-overlay" role="dialog" aria-modal="true">
+      <div className="um-modal">
+        <div className="">
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>
               {mode === "signup" ? tr("auth.signupTitle") : tr("auth.loginTitle")}
@@ -51,7 +51,7 @@ export function ProductAuthModal(props: {
           </button>
         </div>
 
-        <div className="product-modal-body">
+        <div className="">
           <label className="product-field">
             <span>{tr("auth.email")}</span>
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" />

@@ -1,0 +1,11 @@
+{
+  "appName": "prevIA",
+  "close": "Fechar",
+  "loading": "Carregando…",
+  "notNow": "Agora não",
+  "devReset": "Reset",
+  "devResetTitle": "Resetar tudo e recarregar (DEV)",
+
+  "updatedAgo": "Atualizado {ago}"
+
+}

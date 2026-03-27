@@ -5,15 +5,31 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel
+
+from fastapi import Body, Query
+from pydantic import BaseModel
+
+from src.odds.matchup_resolver import _norm_name, _upsert_team_alias_auto
 
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
 from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
-from src.odds.matchup_resolver import resolve_odds_event
+from src.odds.matchup_resolver import resolve_odds_event, resolve_odds_event_team_ids
+from src.odds.matchup_resolver import _norm_name, _upsert_team_alias_auto
+from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
 from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
+
+from src.ops.job_runs import (
+    JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+    CALC_VERSION_SNAPSHOT_V1,
+    start_job_run,
+    finish_job_run,
+    get_last_success_finished_at,
+)
+from src.product.model_registry import get_active_model_version, get_calc_version
 
 router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
 
@@ -22,6 +38,80 @@ DEFAULT_EPL_ARTIFACT = "epl_1x2_logreg_v1_C_2021_2023_C0.3.json"
 
 _STOPWORDS = {"fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"}
 
+def _load_approved_league_map(conn, *, sport_key: str) -> Optional[Dict[str, Any]]:
+    sql = """
+      SELECT sport_key, league_id, season_policy, fixed_season, regions, hours_ahead, tol_hours
+      FROM odds.odds_league_map
+      WHERE sport_key = %(sport_key)s
+        AND enabled = true
+        AND mapping_status = 'approved'
+      LIMIT 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"sport_key": sport_key})
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    (sport_key_db, league_id, season_policy, fixed_season, regions, hours_ahead, tol_hours) = row
+    return {
+        "sport_key": sport_key_db,
+        "league_id": int(league_id),
+        "season_policy": str(season_policy),
+        "fixed_season": int(fixed_season) if fixed_season is not None else None,
+        "regions": str(regions) if regions is not None else None,
+        "hours_ahead": int(hours_ahead) if hours_ahead is not None else None,
+        "tol_hours": int(tol_hours) if tol_hours is not None else None,
+    }
+
+
+def _infer_season_from_core(conn, *, league_id: int) -> Optional[int]:
+    # heurística simples e robusta: pega o maior season existente para essa liga
+    sql = "SELECT MAX(season) FROM core.fixtures WHERE league_id = %(league_id)s"
+    with conn.cursor() as cur:
+        cur.execute(sql, {"league_id": int(league_id)})
+        row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _effective_league_season_tol(
+    conn,
+    *,
+    sport_key: str,
+    assume_league_id: Optional[int],
+    assume_season: Optional[int],
+    tol_hours: Optional[int],
+) -> Tuple[int, int, int, Dict[str, Any]]:
+    lm = _load_approved_league_map(conn, sport_key=sport_key)
+
+    # fallback total: exige assume_*
+    if not lm:
+        if assume_league_id is None or assume_season is None or tol_hours is None:
+            raise ValueError(
+                "Missing league/season/tol_hours and no approved odds_league_map for sport_key."
+            )
+        return int(assume_league_id), int(assume_season), int(tol_hours), {"league_map": None}
+
+    eff_league_id = int(assume_league_id) if assume_league_id is not None else int(lm["league_id"])
+
+    # season: fixed > inferred > assume
+    if assume_season is not None:
+        eff_season = int(assume_season)
+    elif lm["fixed_season"] is not None:
+        eff_season = int(lm["fixed_season"])
+    else:
+        inferred = _infer_season_from_core(conn, league_id=eff_league_id)
+        if inferred is None:
+            raise ValueError(
+                f"Cannot infer season from core.fixtures for league_id={eff_league_id}. "
+                "You likely need to backfill fixtures (API-football)."
+            )
+        eff_season = int(inferred)
+
+    eff_tol = int(tol_hours) if tol_hours is not None else int(lm["tol_hours"] or 6)
+
+    return eff_league_id, eff_season, eff_tol, {"league_map": lm}
 
 def _client() -> TheOddsClient:
     s = load_settings()
@@ -312,7 +402,11 @@ def admin_odds_upcoming(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> List[Dict[str, Any]]:
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+        raw = _client().get_odds_h2h(
+            sport_key=sport_key,
+            regions=regions,
+            markets="h2h,totals",
+        )
     except TheOddsApiError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -355,16 +449,13 @@ def admin_odds_upcoming(
         )
     return out
 
-from pydantic import BaseModel
-
-
 class AdminOddsRefreshResponse(BaseModel):
     ok: bool = True
     sport_key: str
     regions: str
     captured_at_utc: str
     counters: Dict[str, int]
-
+    matchup_snapshots_error_msg: Optional[str] = None
 
 def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
     if not s:
@@ -380,16 +471,28 @@ def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
     except Exception:
         return None
 
-
-def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, Any]], captured_at_utc: datetime) -> Dict[str, int]:
+def _persist_odds_h2h_batch(
+    conn,
+    *,
+    sport_key: str,
+    raw_events: List[Dict[str, Any]],
+    captured_at_utc: datetime,
+) -> Tuple[Dict[str, int], List[str]]:
     """
     Persiste:
-      - odds.odds_events (upsert por event_id)
-      - odds.odds_snapshots_1x2 (dedup via unique index)
+      - odds.odds_events (upsert)
+      - odds.odds_snapshots_1x2 (insert idempotente por captured_at_utc)
+    Retorna:
+      - counters (somente ints)
+      - event_ids_touched (lista de event_id tocados no batch)
     """
-    c_events_upsert = 0
-    c_snapshots_inserted = 0
-    c_snapshots_skipped = 0
+    c: Dict[str, int] = {
+        "events_upserted": 0,
+        "snapshots_inserted": 0,
+        "snapshots_skipped": 0,
+    }
+
+    event_ids_touched: set[str] = set()
 
     sql_upsert_event = """
       INSERT INTO odds.odds_events (
@@ -406,7 +509,6 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
         updated_at_utc = now()
     """
 
-    # Com unique index: (event_id, bookmaker, market, captured_at_utc)
     sql_insert_snapshot = """
       INSERT INTO odds.odds_snapshots_1x2 (
         event_id, bookmaker, market, odds_home, odds_draw, odds_away, captured_at_utc
@@ -418,7 +520,7 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
     """
 
     with conn.cursor() as cur:
-        for ev in raw_events:
+        for ev in (raw_events or []):
             event_id = ev.get("id") or ev.get("event_id")
             home = ev.get("home_team") or ev.get("home_name")
             away = ev.get("away_team") or ev.get("away_name")
@@ -427,17 +529,20 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
             if not event_id or not home or not away:
                 continue
 
+            event_id_s = str(event_id)
+            event_ids_touched.add(event_id_s)
+
             cur.execute(
                 sql_upsert_event,
                 {
-                    "event_id": str(event_id),
+                    "event_id": event_id_s,
                     "sport_key": str(sport_key),
                     "commence_time_utc": commence,
                     "home_name": str(home),
                     "away_name": str(away),
                 },
             )
-            c_events_upsert += 1
+            c["events_upserted"] += 1
 
             # snapshots: varrer bookmakers -> market h2h
             bookmakers = ev.get("bookmakers") or []
@@ -447,13 +552,12 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
                 for mk in markets:
                     if (mk.get("key") or mk.get("market") or "h2h") != "h2h":
                         continue
-                    outcomes = mk.get("outcomes") or []
 
+                    outcomes = mk.get("outcomes") or []
                     odds_home = None
                     odds_draw = None
                     odds_away = None
 
-                    # outcomes: {name, price}
                     for oc in outcomes:
                         nm = oc.get("name")
                         pr = oc.get("price")
@@ -462,14 +566,13 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
                         elif nm == away:
                             odds_away = pr
                         else:
-                            # draw costuma vir como "Draw"
                             if isinstance(nm, str) and nm.strip().lower() == "draw":
                                 odds_draw = pr
 
                     cur.execute(
                         sql_insert_snapshot,
                         {
-                            "event_id": str(event_id),
+                            "event_id": event_id_s,
                             "bookmaker": str(bk_title) if bk_title else None,
                             "market": "h2h",
                             "odds_home": odds_home,
@@ -479,87 +582,481 @@ def _persist_odds_h2h_batch(conn, *, sport_key: str, raw_events: List[Dict[str, 
                         },
                     )
                     if cur.rowcount == 1:
-                        c_snapshots_inserted += 1
+                        c["snapshots_inserted"] += 1
                     else:
-                        c_snapshots_skipped += 1
+                        c["snapshots_skipped"] += 1
+
+    event_ids_sorted = sorted(event_ids_touched)
+    return c, event_ids_sorted
+def _persist_odds_markets_batch(
+    *,
+    conn,
+    event_id: str,
+    bookmaker_title: str | None,
+    captured_at_utc,
+    markets: list,
+    home_name: str,
+    away_name: str,
+) -> int:
+    """
+    Persiste snapshots genéricos (totals, btts e também h2h opcional) em odds.odds_snapshots_market.
+    Retorna quantidade de tentativas de insert (não garante insert real por causa do ON CONFLICT DO NOTHING).
+    """
+    sql_insert_market_snapshot = """
+      INSERT INTO odds.odds_snapshots_market (
+        event_id, bookmaker, market_key, selection_key, point, price, captured_at_utc
+      )
+      VALUES (
+        %(event_id)s, %(bookmaker)s, %(market_key)s, %(selection_key)s, %(point)s, %(price)s, %(captured_at_utc)s
+      )
+      ON CONFLICT DO NOTHING
+    """
+
+    attempted = 0
+
+    with conn.cursor() as cur:
+        for mkt in (markets or []):
+            mkey = (mkt.get("key") or "").strip().lower()
+            if mkey not in ("h2h", "totals", "btts"):
+                continue
+
+            outcomes = mkt.get("outcomes") or []
+            for o in outcomes:
+                nm = o.get("name")
+                pr = o.get("price")
+                pt = o.get("point")
+
+                if nm is None or pr is None:
+                    continue
+
+                selection_key = None
+                point = None
+
+                if mkey == "h2h":
+                    # home/away/draw
+                    if nm == home_name:
+                        selection_key = "H"
+                    elif nm == away_name:
+                        selection_key = "A"
+                    elif isinstance(nm, str) and nm.strip().lower() == "draw":
+                        selection_key = "D"
+                    point = None
+
+                elif mkey == "totals":
+                    # Over/Under + point obrigatório
+                    if isinstance(nm, str):
+                        low = nm.strip().lower()
+                        if low == "over":
+                            selection_key = "over"
+                        elif low == "under":
+                            selection_key = "under"
+                    try:
+                        point = float(pt) if pt is not None else None
+                    except Exception:
+                        point = None
+
+                    if point is None:
+                        continue
+
+                elif mkey == "btts":
+                    # Yes/No
+                    if isinstance(nm, str):
+                        low = nm.strip().lower()
+                        if low == "yes":
+                            selection_key = "yes"
+                        elif low == "no":
+                            selection_key = "no"
+                    point = None
+
+                if not selection_key:
+                    continue
+
+                cur.execute(
+                    sql_insert_market_snapshot,
+                    {
+                        "event_id": str(event_id),
+                        "bookmaker": (str(bookmaker_title) if bookmaker_title else None),
+                        "market_key": mkey,
+                        "selection_key": selection_key,
+                        "point": point,
+                        "price": pr,
+                        "captured_at_utc": captured_at_utc,
+                    },
+                )
+                attempted += 1
+
+    return attempted
+
+def _persist_btts_for_events(
+    *,
+    conn,
+    sport_key: str,
+    regions: str,
+    event_ids: list[str],
+    captured_at_utc,
+) -> dict:
+    """
+    Busca BTTS via endpoint single-event e persiste em odds_snapshots_market.
+    Retorna counters para debug/observabilidade.
+    """
+    attempted_events = 0
+    ok_events = 0
+    fail_events = 0
+    market_attempted = 0
+
+    first_error: str | None = None
+    first_error_type: str | None = None
+
+    for event_id in event_ids:
+        attempted_events += 1
+        try:
+            ev = _client().get_event_odds(
+                sport_key=sport_key,
+                event_id=str(event_id),
+                regions=regions,
+                markets="btts",
+            )
+
+            # resposta costuma vir como um "event" com bookmakers/markets
+            home = ev.get("home_team") or ev.get("home_name")
+            away = ev.get("away_team") or ev.get("away_name")
+            bookmakers = ev.get("bookmakers") or []
+
+            if not home or not away:
+                # sem nomes, não persistimos
+                fail_events += 1
+                continue
+
+            for bk in bookmakers:
+                bk_title = bk.get("title") or bk.get("key") or None
+                markets = bk.get("markets") or []
+                market_attempted += _persist_odds_markets_batch(
+                    conn=conn,
+                    event_id=str(ev.get("id") or event_id),
+                    bookmaker_title=(str(bk_title) if bk_title else None),
+                    captured_at_utc=captured_at_utc,
+                    markets=markets,
+                    home_name=str(home),
+                    away_name=str(away),
+                )
+
+            ok_events += 1
+
+        except Exception as e:
+            # não derrubar refresh inteiro por BTTS, mas guardar 1 erro para debug
+            fail_events += 1
+            if first_error is None:
+                first_error = str(e)
+                first_error_type = type(e).__name__
+
 
     return {
-        "events_upserted": c_events_upsert,
-        "snapshots_inserted": c_snapshots_inserted,
-        "snapshots_skipped": c_snapshots_skipped,
+        "btts_events_attempted": attempted_events,
+        "btts_events_ok": ok_events,
+        "btts_events_fail": fail_events,
+        "btts_market_snapshots_attempted": int(market_attempted),
+        "btts_first_error_type": first_error_type,
+        "btts_first_error": first_error,
     }
+
+
+class AdminOddsLeagueMapPendingItem(BaseModel):
+    sport_key: str
+    sport_title: Optional[str] = None
+    sport_group: Optional[str] = None
+    league_id: int
+    season_policy: str
+    fixed_season: Optional[int] = None
+    regions: Optional[str] = None
+    hours_ahead: int
+    tol_hours: int
+    enabled: bool
+    mapping_status: str
+    confidence: float
+    notes: Optional[str] = None
+    updated_at_utc: Optional[str] = None
+
+
+@router.get("/league_map/pending")
+def admin_odds_league_map_pending(
+    *,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Lista mapeamentos pendentes em odds.odds_league_map."""
+    sql = """
+      SELECT
+        sport_key, sport_title, sport_group,
+        league_id, season_policy, fixed_season,
+        regions, hours_ahead, tol_hours,
+        enabled, mapping_status, confidence, notes,
+        updated_at_utc
+      FROM odds.odds_league_map
+      WHERE mapping_status = 'pending'
+      ORDER BY updated_at_utc DESC NULLS LAST
+      LIMIT %(limit)s
+    """
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"limit": int(limit)})
+            rows = cur.fetchall()
+
+    items: List[AdminOddsLeagueMapPendingItem] = []
+    for (
+        sport_key,
+        sport_title,
+        sport_group,
+        league_id,
+        season_policy,
+        fixed_season,
+        regions,
+        hours_ahead,
+        tol_hours,
+        enabled,
+        mapping_status,
+        confidence,
+        notes,
+        updated_at_utc,
+    ) in rows:
+        items.append(
+            AdminOddsLeagueMapPendingItem(
+                sport_key=str(sport_key),
+                sport_title=(str(sport_title) if sport_title is not None else None),
+                sport_group=(str(sport_group) if sport_group is not None else None),
+                league_id=int(league_id),
+                season_policy=str(season_policy),
+                fixed_season=(int(fixed_season) if fixed_season is not None else None),
+                regions=(str(regions) if regions is not None else None),
+                hours_ahead=int(hours_ahead),
+                tol_hours=int(tol_hours),
+                enabled=bool(enabled),
+                mapping_status=str(mapping_status),
+                confidence=float(confidence),
+                notes=(str(notes) if notes is not None else None),
+                updated_at_utc=(updated_at_utc.isoformat() if hasattr(updated_at_utc, "isoformat") else (str(updated_at_utc) if updated_at_utc is not None else None)),
+            )
+        )
+
+    return {"ok": True, "items": [it.model_dump() for it in items]}
 
 
 @router.post("/refresh", response_model=AdminOddsRefreshResponse)
 def admin_odds_refresh(
     sport_key: str = Query(..., min_length=2),
     regions: str = Query(default="eu"),
+    include_btts: bool = Query(default=False),
 ) -> AdminOddsRefreshResponse:
     """
     Admin-only: chama provider e persiste no DB (odds_events + odds_snapshots_1x2).
     Isso abastece o Produto (/odds/*) no modo DB-only.
     """
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+        raw = _client().get_odds_h2h(
+            sport_key=sport_key,
+            regions=regions,
+            markets="h2h,totals",
+        )
     except TheOddsApiError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     captured_at = datetime.now(timezone.utc)
+    matchup_snapshots_error_msg: Optional[str] = None
+
+    # ids para BTTS single-event (additional market)
+    event_ids: list[str] = []
+    for ev in raw:
+        eid = ev.get("id") or ev.get("event_id")
+        if eid:
+            event_ids.append(str(eid))
 
     try:
         with pg_conn() as conn:
             conn.autocommit = False
-            counters = _persist_odds_h2h_batch(conn, sport_key=sport_key, raw_events=raw, captured_at_utc=captured_at)
+
+            # 1) Persistência legada (1x2) - não mexe em nada do que já funcionava
+            counters, event_ids_touched = _persist_odds_h2h_batch(
+                conn,
+                sport_key=sport_key,
+                raw_events=raw,
+                captured_at_utc=captured_at,
+            )
+
+            # 2) Persistência genérica (markets: h2h/totals/btts) - novo
+            market_attempted = 0
+            for ev in raw:
+                event_id = ev.get("id") or ev.get("event_id")
+                home = ev.get("home_team") or ev.get("home_name")
+                away = ev.get("away_team") or ev.get("away_name")
+                if not event_id or not home or not away:
+                    continue
+
+                bookmakers = ev.get("bookmakers") or []
+                for bk in bookmakers:
+                    bk_title = bk.get("title") or bk.get("key") or None
+                    markets = bk.get("markets") or []
+                    market_attempted += _persist_odds_markets_batch(
+                        conn=conn,
+                        event_id=str(event_id),
+                        bookmaker_title=(str(bk_title) if bk_title else None),
+                        captured_at_utc=captured_at,
+                        markets=markets,
+                        home_name=str(home),
+                        away_name=str(away),
+                    )
+
+            # acrescenta sem quebrar compatibilidade
+            counters["market_snapshots_attempted"] = int(market_attempted)
+
+            # 3) BTTS (additional market): requer endpoint single-event
+            if include_btts and event_ids:
+                btts_c = _persist_btts_for_events(
+                    conn=conn,
+                    sport_key=sport_key,
+                    regions=regions,
+                    event_ids=event_ids,
+                    captured_at_utc=captured_at,
+                )
+                counters.update(btts_c)
+            else:
+                counters.update(
+                    {
+                        "btts_events_attempted": 0,
+                        "btts_events_ok": 0,
+                        "btts_events_fail": 0,
+                        "btts_market_snapshots_attempted": 0,
+                    }
+                )
+
             conn.commit()
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"persist_failed: {e}")
+
+    # 4) Gatilho MVP: rebuild snapshots do produto após refresh (incremental por event_ids) + observabilidade
+    try:
+        import time as _time
+
+        mv = get_active_model_version()
+        cv = get_calc_version()
+
+        t0 = _time.time()
+
+        with pg_conn() as conn2:
+            conn2.autocommit = False
+
+            # job_run start
+            run_id = start_job_run(
+                conn2,
+                job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                scope_key=sport_key,
+                model_version=mv,
+                calc_version=cv,
+            )
+            conn2.commit()
+
+            with conn2.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '60s'")
+                cur.execute("SET LOCAL lock_timeout = '3s'")
+
+            # preferir o que realmente foi tocado no persist; fallback pro "raw event_ids"
+            event_ids_rebuild = list(event_ids_touched or [])
+
+            team_resolve_counters = resolve_odds_event_team_ids(
+                conn2,
+                sport_key=sport_key,
+                limit=500,
+            )
+            conn2.commit()
+
+            counters["team_ids_events_scanned"] = int((team_resolve_counters or {}).get("events_scanned", 0))
+            counters["team_ids_home_resolved"] = int((team_resolve_counters or {}).get("home_resolved", 0))
+            counters["team_ids_away_resolved"] = int((team_resolve_counters or {}).get("away_resolved", 0))
+            counters["team_ids_fully_resolved"] = int((team_resolve_counters or {}).get("fully_resolved", 0))
+            counters["team_ids_queued"] = int((team_resolve_counters or {}).get("queued_for_review", 0))
+
+            snap_counters = rebuild_matchup_snapshots_v1(
+                conn2,
+                sport_key=sport_key,
+                model_version=mv,
+                event_ids=event_ids_rebuild,
+            )
+            conn2.commit()
+
+            counters_payload = dict(snap_counters or {})
+            counters_payload["mode"] = "event_ids_touched" if event_ids_touched else "event_ids_window"
+            counters_payload["event_ids_count"] = int(len(event_ids_rebuild))
+            counters_payload["model_version"] = mv
+            counters_payload["calc_version"] = cv
+
+            finish_job_run(
+                conn2,
+                run_id=run_id,
+                ok=True,
+                duration_ms=int(round((_time.time() - t0) * 1000)),
+                counters=counters_payload,
+                error_text=None,
+            )
+            conn2.commit()
+
+        counters["matchup_snapshots_rebuilt"] = (
+            int((snap_counters or {}).get("snapshots_upserted", 0))
+            + int((snap_counters or {}).get("snapshots_team_fallback", 0))
+        )
+        counters["matchup_snapshots_candidates"] = int((snap_counters or {}).get("candidates", 0))
+        counters["matchup_snapshots_error"] = 0
+
+    except Exception as e:
+        # não quebrar refresh por causa do rebuild, mas registrar falha (best-effort)
+        try:
+            import time as _time
+
+            with pg_conn() as connE:
+                connE.autocommit = False
+                run_id = start_job_run(
+                    connE,
+                    job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                    scope_key=sport_key,
+                    model_version=get_active_model_version(),
+                    calc_version=get_calc_version(),
+                )
+                finish_job_run(
+                    connE,
+                    run_id=run_id,
+                    ok=False,
+                    duration_ms=0,
+                    counters=None,
+                    error_text=f"{type(e).__name__}: {e}",
+                )
+                connE.commit()
+        except Exception:
+            pass
+
+        counters["matchup_snapshots_rebuilt"] = 0
+        counters["matchup_snapshots_error"] = 1
+        matchup_snapshots_error_msg = f"{type(e).__name__}: {e}"
 
     return AdminOddsRefreshResponse(
         ok=True,
         sport_key=sport_key,
         regions=regions,
-        captured_at_utc=captured_at.isoformat().replace("+00:00", "Z"),
+        captured_at_utc=captured_at.isoformat(),
         counters=counters,
+        matchup_snapshots_error_msg=matchup_snapshots_error_msg if counters.get("matchup_snapshots_error") else None,
     )
 
-class AdminOddsResolveBatchResponse(BaseModel):
-    ok: bool = True
-    sport_key: str
-    window_hours: int
-    assume_league_id: int
-    assume_season: int
-    tol_hours: int
-    counters: Dict[str, int]
+class AdminOddsRefreshBlock(BaseModel):
+    counters: Dict[str, Any]
+
+
+class AdminOddsResolveBlock(BaseModel):
+    counters: Dict[str, Any]
     sample_issues: List[Dict[str, Any]] = []
 
-@router.post("/refresh_and_resolve")
-def admin_odds_refresh_and_resolve(
-    sport_key: str = Query(..., min_length=2),
-    regions: str = Query(default="eu"),
-    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
-    limit: int = Query(default=500, ge=1, le=2000),
-    assume_league_id: int = Query(..., ge=1),
-    assume_season: int = Query(..., ge=1900),
-    tol_hours: int = Query(default=6, ge=1, le=48),
-):
-    """
-    Admin-only (cron-ready): provider refresh + persist + resolve/batch num único passo.
-    """
-    out = run_odds_refresh_and_resolve(
-        sport_key=sport_key,
-        regions=regions,
-        hours_ahead=int(hours_ahead),
-        limit=int(limit),
-        assume_league_id=int(assume_league_id),
-        assume_season=int(assume_season),
-        tol_hours=int(tol_hours),
-    )
 
-    if not out.get("ok"):
-        # manter erro claro no Admin
-        raise HTTPException(status_code=500, detail=out)
+class AdminOddsSnapshotsBlock(BaseModel):
+    counters: Dict[str, Any]
+    mode: Optional[str] = None
+    sample_issues: List[Dict[str, Any]] = []
 
-    return out
 
 class AdminOddsRefreshAndResolveResponse(BaseModel):
     ok: bool = True
@@ -568,159 +1065,142 @@ class AdminOddsRefreshAndResolveResponse(BaseModel):
     captured_at_utc: str
     refresh: Dict[str, Any]
     resolve: Dict[str, Any]
+    snapshots: Dict[str, Any]
 
+class AdminOddsResolveBatchResponse(BaseModel):
+    ok: bool
+    sport_key: str
+    window_hours: int
+
+    # Compat: antigos parâmetros "assume_*" (podem ser omitidos quando houver league_map)
+    assume_league_id: Optional[int] = None
+    assume_season: Optional[int] = None
+
+    # Source of truth efetivo usado na resolução
+    effective_league_id: int
+    effective_season: int
+
+    # Debug de governança (opcional)
+    league_map_status: Optional[str] = None
+
+    tol_hours: int
+    counters: Dict[str, Any]
+    sample_issues: List[Dict[str, Any]] = []
+
+class TeamResolutionPendingItem(BaseModel):
+    sport_key: Optional[str] = None
+    raw_name: Optional[str] = None
+    normalized_name: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+    created_at_utc: Optional[str] = None
+    updated_at_utc: Optional[str] = None
+
+
+class TeamResolutionPendingResponse(BaseModel):
+    ok: bool = True
+    items: List[TeamResolutionPendingItem]
+    count: int
+
+
+class TeamSearchItem(BaseModel):
+    team_id: int
+    name: str
+    country_name: Optional[str] = None
+
+
+class TeamSearchResponse(BaseModel):
+    ok: bool = True
+    items: List[TeamSearchItem]
+    count: int
+
+
+class TeamResolutionApproveRequest(BaseModel):
+    sport_key: str
+    raw_name: str
+    team_id: int
+    normalized_name: Optional[str] = None
+    confidence: float = 1.0
+
+
+class TeamResolutionApproveResponse(BaseModel):
+    ok: bool = True
+    sport_key: str
+    raw_name: str
+    normalized_name: str
+    team_id: int
+    removed_from_queue: int
+    team_resolve_counters: Optional[Dict[str, Any]] = None
+    snapshot_counters: Optional[Dict[str, Any]] = None
 
 @router.post("/refresh_and_resolve", response_model=AdminOddsRefreshAndResolveResponse)
 def admin_odds_refresh_and_resolve(
     sport_key: str = Query(..., min_length=2),
     regions: str = Query(default="eu"),
-
-    # resolve params (iguais ao /resolve/batch)
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
-    assume_league_id: int = Query(..., ge=1),
-    assume_season: int = Query(..., ge=1900, le=2100),
-    tol_hours: int = Query(default=6, ge=1, le=48),
+    assume_league_id: Optional[int] = Query(default=None, ge=1),
+    assume_season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    tol_hours: Optional[int] = Query(default=None, ge=1, le=48),
     limit: int = Query(default=200, ge=1, le=2000),
 ) -> AdminOddsRefreshAndResolveResponse:
-    """
-    Admin-only: fluxo oficial de atualização de odds:
-      1) /refresh  (provider -> persist)
-      2) /resolve/batch (db-only -> match status)
-    Ideal para botão no Admin e para virar cron/job depois.
-    """
-    # 1) REFRESH (provider -> persist)
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
-    except TheOddsApiError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    captured_at = datetime.now(timezone.utc)
-
-    try:
-        with pg_conn() as conn:
-            conn.autocommit = False
-
-            refresh_counters = _persist_odds_h2h_batch(
-                conn,
-                sport_key=sport_key,
-                raw_events=raw,
-                captured_at_utc=captured_at,
-            )
-            conn.commit()
+        out = run_odds_refresh_and_resolve(
+            sport_key=sport_key,
+            regions=regions,
+            hours_ahead=int(hours_ahead),
+            limit=int(limit),
+            assume_league_id=assume_league_id,
+            assume_season=assume_season,
+            tol_hours=tol_hours,
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"refresh_persist_failed: {e}")
+        raise HTTPException(status_code=500, detail=f"refresh_and_resolve_failed: {e}")
 
-    # 2) RESOLVE (db-only -> persist status/score/ids)
-    now = datetime.now(timezone.utc)
-    end = now + timedelta(hours=int(hours_ahead))
+    if not out.get("ok"):
+        raise HTTPException(status_code=500, detail=out)
 
-    sql = """
-      SELECT event_id
-      FROM odds.odds_events
-      WHERE sport_key = %(sport_key)s
-        AND commence_time_utc IS NOT NULL
-        AND commence_time_utc >= %(now)s
-        AND commence_time_utc <= %(end)s
-      ORDER BY commence_time_utc ASC
-      LIMIT %(limit)s
-    """
+    snapshots_block = out.get("snapshots")
+    if not isinstance(snapshots_block, dict):
+        snapshots_block = {
+            "mode": "job_return_default",
+            "counters": {
+                "matchup_snapshots_rebuilt": int(
+                    ((out.get("resolve") or {}).get("counters") or {}).get("matchup_snapshots_rebuilt", 0)
+                ),
+                "matchup_snapshots_candidates": int(
+                    ((out.get("resolve") or {}).get("counters") or {}).get("matchup_snapshots_candidates", 0)
+                ),
+                "matchup_snapshots_error": 0,
+            },
+            "sample_issues": [],
+        }
 
-    resolve_counters = {
-        "events_scanned": 0,
-        "exact": 0,
-        "probable": 0,
-        "ambiguous": 0,
-        "not_found": 0,
-        "errors": 0,
-        "persisted": 0,
-    }
-    sample_issues: List[Dict[str, Any]] = []
+    out["snapshots"] = snapshots_block
 
-    try:
-        with pg_conn() as conn:
-            conn.autocommit = False
-
-            with conn.cursor() as cur:
-                cur.execute(sql, {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)})
-                event_ids = [r[0] for r in cur.fetchall()]
-
-            for event_id in event_ids:
-                resolve_counters["events_scanned"] += 1
-                try:
-                    res = resolve_odds_event(
-                        conn,
-                        event_id=str(event_id),
-                        assume_league_id=int(assume_league_id),
-                        assume_season=int(assume_season),
-                        tol_hours=int(tol_hours),
-                        max_candidates=5,
-                        persist_resolution=True,
-                    )
-                    resolve_counters["persisted"] += 1
-
-                    if res.status == "EXACT":
-                        resolve_counters["exact"] += 1
-                    elif res.status == "PROBABLE":
-                        resolve_counters["probable"] += 1
-                        if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
-                    elif res.status == "AMBIGUOUS":
-                        resolve_counters["ambiguous"] += 1
-                        if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason, "candidates": res.candidates[:3]})
-                    else:
-                        resolve_counters["not_found"] += 1
-                        if len(sample_issues) < 8:
-                            sample_issues.append({"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason})
-
-                except Exception as e:
-                    resolve_counters["errors"] += 1
-                    if len(sample_issues) < 8:
-                        sample_issues.append({"event_id": str(event_id), "status": "ERROR", "error": str(e)})
-
-            conn.commit()
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"resolve_failed: {e}")
-
-    return AdminOddsRefreshAndResolveResponse(
-        ok=True,
-        sport_key=sport_key,
-        regions=regions,
-        captured_at_utc=captured_at.isoformat().replace("+00:00", "Z"),
-        refresh={"counters": refresh_counters},
-        resolve={"counters": resolve_counters, "sample_issues": sample_issues},
-    )
-
+    return AdminOddsRefreshAndResolveResponse(**out)
 
 @router.post("/resolve/batch", response_model=AdminOddsResolveBatchResponse)
+
 def admin_odds_resolve_batch(
-    sport_key: str = Query(..., min_length=2),
-    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
-    assume_league_id: int = Query(..., ge=1),
-    assume_season: int = Query(..., ge=1900),
-    tol_hours: int = Query(default=6, ge=1, le=48),
-    limit: int = Query(default=200, ge=1, le=2000),
+    *,
+    sport_key: str,
+    hours_ahead: int = 720,
+    limit: int = 200,
+    tol_hours: int = 6,
+    max_candidates: int = 5,
+    persist_resolution: bool = True,
+    # Compat (opcionais se houver odds_league_map aprovado)
+    assume_league_id: Optional[int] = None,
+    assume_season: Optional[int] = None,
 ) -> AdminOddsResolveBatchResponse:
     """
-    Admin-only: resolve em lote odds_events -> core.fixtures e persiste status/score/resolved ids.
-    DB-only: não chama provider.
-    """
-    now = datetime.now(timezone.utc)
-    end = now + timedelta(hours=int(hours_ahead))
+    Resolve em lote:
+      odds.odds_events (sport_key) -> core.fixtures via fuzzy + janela temporal
 
-    sql = """
-      SELECT event_id
-      FROM odds.odds_events
-      WHERE sport_key = %(sport_key)s
-        AND commence_time_utc IS NOT NULL
-        AND commence_time_utc >= %(now)s
-        AND commence_time_utc <= %(end)s
-      ORDER BY commence_time_utc ASC
-      LIMIT %(limit)s
+    Regras:
+      - Se existir odds.odds_league_map aprovado para o sport_key, assume_* podem ser omitidos.
+      - Se NÃO existir league_map aprovado, assume_league_id/assume_season/tol_hours devem ser informados.
     """
-
-    counters = {
+    counters: Dict[str, Any] = {
         "events_scanned": 0,
         "exact": 0,
         "probable": 0,
@@ -732,71 +1212,92 @@ def admin_odds_resolve_batch(
     sample_issues: List[Dict[str, Any]] = []
 
     with pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)},
-            )
-            event_ids = [r[0] for r in cur.fetchall()]
+        eff_league_id, eff_season, eff_tol, meta = _effective_league_season_tol(
+            conn,
+            sport_key=sport_key,
+            assume_league_id=assume_league_id,
+            assume_season=assume_season,
+            tol_hours=tol_hours,
+        )
+        lm = meta.get("league_map") if isinstance(meta, dict) else None
+        lm_status = str(lm.get("mapping_status")) if isinstance(lm, dict) and lm.get("mapping_status") is not None else None
 
-        for event_id in event_ids:
+        # Lista eventos (odds) na janela
+        events = list_odds_events(
+            conn,
+            sport_key=sport_key,
+            hours_ahead=int(hours_ahead),
+            limit=int(limit),
+        )
+
+        for ev in events:
             counters["events_scanned"] += 1
             try:
                 res = resolve_odds_event(
                     conn,
-                    event_id=str(event_id),
-                    assume_league_id=int(assume_league_id),
-                    assume_season=int(assume_season),
-                    tol_hours=int(tol_hours),
-                    max_candidates=5,
-                    persist_resolution=True,
+                    event_id=str(ev["event_id"]),
+                    assume_league_id=int(eff_league_id),
+                    assume_season=int(eff_season),
+                    tol_hours=int(eff_tol),
+                    max_candidates=int(max_candidates),
+                    persist_resolution=bool(persist_resolution),
                 )
-                counters["persisted"] += 1
 
-                if res.status == "EXACT":
+                st = str(res.status)
+                if st == "EXACT":
                     counters["exact"] += 1
-                elif res.status == "PROBABLE":
+                elif st == "PROBABLE":
                     counters["probable"] += 1
-                    if len(sample_issues) < 8:
-                        sample_issues.append(
-                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason}
-                        )
-                elif res.status == "AMBIGUOUS":
+                elif st == "AMBIGUOUS":
                     counters["ambiguous"] += 1
-                    if len(sample_issues) < 8:
-                        sample_issues.append(
-                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason, "candidates": res.candidates[:3]}
-                        )
                 else:
                     counters["not_found"] += 1
-                    if len(sample_issues) < 8:
-                        sample_issues.append(
-                            {"event_id": str(event_id), "status": res.status, "confidence": res.confidence, "reason": res.reason}
-                        )
+
+                if persist_resolution:
+                    # resolve_odds_event atualiza odds_events (idempotente); contamos como persisted quando houve update
+                    counters["persisted"] += 1
+
+                if st != "EXACT" and len(sample_issues) < 10:
+                    sample_issues.append(
+                        {
+                            "event_id": ev.get("event_id"),
+                            "commence_time_utc": ev.get("commence_time_utc"),
+                            "home_name": ev.get("home_name"),
+                            "away_name": ev.get("away_name"),
+                            "status": st,
+                            "confidence": float(res.confidence),
+                            "reason": res.reason,
+                            "top_candidate": (res.candidates[0] if res.candidates else None),
+                        }
+                    )
 
             except Exception as e:
                 counters["errors"] += 1
-                if len(sample_issues) < 8:
-                    sample_issues.append({"event_id": str(event_id), "status": "ERROR", "error": str(e)})
-
-        # garante persistência (o resolve_odds_event já faz UPDATE, mas commit explícito ajuda)
-        try:
-            conn.commit()
-        except Exception:
-            pass
+                if len(sample_issues) < 10:
+                    sample_issues.append(
+                        {
+                            "event_id": ev.get("event_id"),
+                            "commence_time_utc": ev.get("commence_time_utc"),
+                            "home_name": ev.get("home_name"),
+                            "away_name": ev.get("away_name"),
+                            "status": "ERROR",
+                            "error": repr(e),
+                        }
+                    )
 
     return AdminOddsResolveBatchResponse(
         ok=True,
         sport_key=sport_key,
         window_hours=int(hours_ahead),
-        assume_league_id=int(assume_league_id),
-        assume_season=int(assume_season),
-        tol_hours=int(tol_hours),
+        assume_league_id=int(assume_league_id) if assume_league_id is not None else None,
+        assume_season=int(assume_season) if assume_season is not None else None,
+        effective_league_id=int(eff_league_id),
+        effective_season=int(eff_season),
+        league_map_status=lm_status,
+        tol_hours=int(eff_tol),
         counters=counters,
         sample_issues=sample_issues,
     )
-
-
 @router.get("/upcoming/orchestrate")
 def admin_odds_upcoming_orchestrate(
     sport_key: str = Query(..., min_length=2),
@@ -807,7 +1308,7 @@ def admin_odds_upcoming_orchestrate(
     assume_season: Optional[int] = Query(default=None, ge=1900, le=2100),
 ) -> List[Dict[str, Any]]:
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=regions)
+        raw = _client().get_odds_h2h(sport_key=sport_key, regions=effective_regions)
     except TheOddsApiError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -861,8 +1362,8 @@ def admin_odds_upcoming_orchestrate(
                         artifact_filename=artifact_filename,
                         league_id=int(league_id),
                         season=int(season),
-                        home_team_id=int(home_team_id),
-                        away_team_id=int(away_team_id),
+                        home_team_id=int(home_id),
+                        away_team_id=int(away_id),
                     )
                 except FileNotFoundError as e:
                     raise HTTPException(status_code=404, detail=str(e))
@@ -1138,6 +1639,8 @@ def admin_odds_queue_intel(
 
     items: List[Dict[str, Any]] = []
     counters = {"total": 0, "ok_model": 0, "missing_team": 0, "model_error": 0}
+
+    matchup_snapshots_error_msg: Optional[str] = None
 
     for (
         event_id,
@@ -1799,57 +2302,35 @@ def admin_odds_audit_snapshot(
     Não busca provider externo. Apenas DB + modelo local.
     """
 
-    # MVP: não deixamos janela gigante derrubar o servidor
-    if hours_ahead > 720:
-        hours_ahead = 720
+    # janela: passado recente (auditoria)
+    if hours_back > 720:
+        hours_back = 720
 
     now_utc = datetime.now(timezone.utc)
-    end_utc = now_utc + timedelta(hours=hours_ahead)
+    start_utc = now_utc - timedelta(hours=int(hours_back))
+    end_utc = now_utc
 
-    conf_clause = "TRUE"
-    if min_confidence == "EXACT":
-        conf_clause = "e.match_confidence = 'EXACT'"
-    elif min_confidence == "ILIKE":
-        conf_clause = "e.match_confidence IN ('ILIKE','EXACT')"
-
-    sql = f"""
-      WITH latest AS (
-        SELECT DISTINCT ON (s.event_id)
-          s.event_id,
-          s.bookmaker,
-          s.market,
-          s.odds_home,
-          s.odds_draw,
-          s.odds_away,
-          s.captured_at_utc
-        FROM odds.odds_snapshots_1x2 s
-        ORDER BY s.event_id, s.captured_at_utc DESC
-      )
+    sql = """
       SELECT
         e.event_id,
-        e.commence_time_utc,
-        e.resolved_home_team_id,
-        e.resolved_away_team_id,
-        e.match_confidence,
-        l.bookmaker,
-        l.market,
-        l.odds_home,
-        l.odds_draw,
-        l.odds_away,
-        l.captured_at_utc
+        e.sport_key,
+        e.kickoff_utc,
+        e.home_name,
+        e.away_name,
+        e.fixture_id,
+        e.confidence,
+        e.updated_at_utc
       FROM odds.odds_events e
-      JOIN latest l ON l.event_id = e.event_id
-      WHERE e.sport_key = (%(sport_key)s)::text
-        AND (e.commence_time_utc IS NULL OR (e.commence_time_utc >= now() AND e.commence_time_utc <= (%(end)s)::timestamptz))
-        AND ({conf_clause})
-      ORDER BY e.commence_time_utc ASC NULLS LAST
+      WHERE e.sport_key = %(sport_key)s
+        AND e.kickoff_utc >= %(start)s
+        AND e.kickoff_utc <= %(end)s
+      ORDER BY e.kickoff_utc DESC
       LIMIT %(limit)s
     """
 
-    rows = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": limit})
+            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": int(limit)})
             rows = cur.fetchall()
 
     inserted = 0
@@ -2199,3 +2680,868 @@ def admin_odds_upcoming_intel_live(
 
     out.sort(key=_best_ev_key, reverse=True)
 
+import time
+
+@router.post("/matchup_snapshots/rebuild")
+def admin_rebuild_matchup_snapshots(
+    sport_key: str = Query(..., min_length=2),
+
+    # modo incremental por padrão
+    mode: str = Query(default="incremental"),  # incremental | window
+
+    # incremental inputs
+    event_ids_csv: str = Query(default=""),    # opcional: "id1,id2,id3"
+
+    # window fallback
+    hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
+    limit: int = Query(default=200, ge=1, le=2000),
+
+    # versão de modelo (default vem do registry/env)
+    model_version: str = Query(default=""),
+):
+    import time
+
+    # resolve model/calc versions
+    mv = (model_version.strip() if model_version.strip() else get_active_model_version())
+    cv = get_calc_version()
+
+    t0 = time.time()
+    print(f"[SNAPSHOT] start sport_key={sport_key} mode={mode} limit={limit} mv={mv} cv={cv}", flush=True)
+
+    try:
+        with pg_conn() as conn:
+            conn.autocommit = False
+
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '60s'")
+                cur.execute("SET LOCAL lock_timeout = '3s'")
+
+            # job_run start
+            run_id = start_job_run(
+                conn,
+                job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                scope_key=sport_key,
+                model_version=mv,
+                calc_version=cv,
+            )
+            conn.commit()  # garante persistência do run_id
+
+            # Decide event_ids
+            event_ids = []
+            if event_ids_csv.strip():
+                event_ids = [x.strip() for x in event_ids_csv.split(",") if x.strip()]
+
+            if (not event_ids) and mode == "incremental":
+                last_ok = get_last_success_finished_at(
+                    conn, job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1, scope_key=sport_key
+                )
+
+                # fallback: se nunca rodou com sucesso, usa janela curta (24h) para iniciar watermark
+                if last_ok is None:
+                    since = datetime.now(timezone.utc) - timedelta(hours=24)
+                else:
+                    since = last_ok
+
+                # eventos atualizados no odds_events desde o último rebuild ok
+                sql = """
+                  SELECT e.event_id
+                  FROM odds.odds_events e
+                  WHERE e.sport_key = %(sport_key)s
+                    AND e.updated_at_utc >= %(since)s
+                  ORDER BY e.updated_at_utc ASC
+                  LIMIT %(limit)s
+                """
+                with conn.cursor() as cur:
+                    cur.execute(sql, {"sport_key": sport_key, "since": since, "limit": int(limit)})
+                    event_ids = [r[0] for r in cur.fetchall()]
+
+            # Rebuild
+            t1 = time.time()
+            counters = rebuild_matchup_snapshots_v1(
+                conn,
+                sport_key=sport_key,
+                hours_ahead=int(hours_ahead),
+                limit=int(limit),
+                model_version=mv,
+                event_ids=(event_ids if event_ids else None),
+            )
+            t2 = time.time()
+
+            # Enriquecer counters com meta mínima
+            counters = dict(counters or {})
+            counters["mode"] = "event_ids" if event_ids else "window"
+            counters["event_ids_count"] = int(len(event_ids)) if event_ids else 0
+            counters["model_version"] = mv
+            counters["calc_version"] = cv
+            counters["elapsed_rebuild_sec"] = round(t2 - t1, 3)
+
+            conn.commit()
+
+            # finish job_run ok
+            finish_job_run(
+                conn,
+                run_id=run_id,
+                ok=True,
+                duration_ms=int(round((time.time() - t0) * 1000)),
+                counters=counters,
+                error_text=None,
+            )
+            conn.commit()
+
+            print(f"[SNAPSHOT] done counters={counters}", flush=True)
+            return {"ok": True, "sport_key": sport_key, "counters": counters}
+
+    except Exception as e:
+        # tentamos persistir falha se possível (best-effort)
+        try:
+            with pg_conn() as connE:
+                connE.autocommit = False
+                run_id = start_job_run(
+                    connE,
+                    job_name=JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
+                    scope_key=sport_key,
+                    model_version=(model_version.strip() if model_version.strip() else get_active_model_version()),
+                    calc_version=get_calc_version(),
+                )
+                finish_job_run(
+                    connE,
+                    run_id=run_id,
+                    ok=False,
+                    duration_ms=int(round((time.time() - t0) * 1000)),
+                    counters=None,
+                    error_text=f"{type(e).__name__}: {e}",
+                )
+                connE.commit()
+        except Exception:
+            pass
+
+        raise HTTPException(status_code=500, detail=f"snapshot_rebuild_failed: {type(e).__name__}: {e}")
+
+def _row_to_dict(cur, row) -> Dict[str, Any]:
+    cols = [d[0] for d in cur.description]
+    out: Dict[str, Any] = {}
+
+    for i, col in enumerate(cols):
+        val = row[i]
+
+        if hasattr(val, "isoformat"):
+            out[col] = val.isoformat()
+        else:
+            out[col] = val
+
+    return out
+
+@router.get("/team_resolution/pending", response_model=TeamResolutionPendingResponse)
+def admin_team_resolution_pending(
+    sport_key: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> TeamResolutionPendingResponse:
+
+    sql = """
+      SELECT *
+      FROM odds.team_name_resolution_queue
+      WHERE 1=1
+    """
+
+    params: Dict[str, Any] = {}
+
+    if sport_key:
+        sql += " AND sport_key = %(sport_key)s"
+        params["sport_key"] = sport_key
+
+    sql += " ORDER BY COALESCE(updated_at_utc, created_at_utc) DESC LIMIT %(limit)s"
+    params["limit"] = int(limit)
+
+    items: List[TeamResolutionPendingItem] = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                d = _row_to_dict(cur, row)
+
+                payload = d.get("payload")
+
+                items.append(
+                    TeamResolutionPendingItem(
+                        sport_key=d.get("sport_key"),
+                        raw_name=d.get("raw_name"),
+                        normalized_name=d.get("normalized_name"),
+                        payload=payload,
+                        created_at_utc=d.get("created_at_utc"),
+                        updated_at_utc=d.get("updated_at_utc"),
+                    )
+                )
+
+    return TeamResolutionPendingResponse(ok=True, items=items, count=len(items))
+
+@router.get("/team_resolution/search_teams", response_model=TeamSearchResponse)
+def admin_team_resolution_search_teams(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> TeamSearchResponse:
+
+    sql = """
+      SELECT team_id, name, country_name
+      FROM core.teams
+      WHERE name ILIKE %(q)s
+      ORDER BY name
+      LIMIT %(limit)s
+    """
+
+    items: List[TeamSearchItem] = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute(
+                sql,
+                {"q": f"%{q}%", "limit": int(limit)},
+            )
+
+            rows = cur.fetchall()
+
+            for team_id, name, country_name in rows:
+
+                items.append(
+                    TeamSearchItem(
+                        team_id=int(team_id),
+                        name=str(name),
+                        country_name=country_name,
+                    )
+                )
+
+    return TeamSearchResponse(ok=True, items=items, count=len(items))
+
+@router.post("/team_resolution/approve", response_model=TeamResolutionApproveResponse)
+def admin_team_resolution_approve(
+    body: TeamResolutionApproveRequest = Body(...),
+) -> TeamResolutionApproveResponse:
+    normalized_name = str(body.normalized_name or _norm_name(body.raw_name))
+
+    with pg_conn() as conn:
+        conn.autocommit = False
+
+        # 1) grava alias aprovado
+        _upsert_team_alias_auto(
+            conn,
+            sport_key=str(body.sport_key),
+            raw_name=str(body.raw_name),
+            normalized_name=normalized_name,
+            team_id=int(body.team_id),
+            confidence=float(body.confidence),
+        )
+
+        # 2) remove da fila
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM odds.team_name_resolution_queue
+                WHERE sport_key = %(sport_key)s
+                  AND raw_name = %(raw_name)s
+                """,
+                {
+                    "sport_key": str(body.sport_key),
+                    "raw_name": str(body.raw_name),
+                },
+            )
+            removed = int(cur.rowcount or 0)
+
+        # 3) reaplica resolução de team_ids para os odds_events desse sport_key
+        team_resolve_counters = resolve_odds_event_team_ids(
+            conn,
+            sport_key=str(body.sport_key),
+            limit=500,
+        )
+
+        # 4) rebuild incremental dos snapshots do produto para refletir os team_ids novos
+        mv = get_active_model_version()
+        snap_counters = rebuild_matchup_snapshots_v1(
+            conn,
+            sport_key=str(body.sport_key),
+            model_version=mv,
+        )
+
+        conn.commit()
+
+    return TeamResolutionApproveResponse(
+        ok=True,
+        sport_key=str(body.sport_key),
+        raw_name=str(body.raw_name),
+        normalized_name=normalized_name,
+        team_id=int(body.team_id),
+        removed_from_queue=removed,
+        team_resolve_counters=team_resolve_counters,
+        snapshot_counters=snap_counters,
+    )
+
+@router.post("/team_resolution/dismiss")
+def admin_team_resolution_dismiss(
+    sport_key: str = Body(...),
+    raw_name: str = Body(...),
+) -> Dict[str, Any]:
+
+    with pg_conn() as conn:
+
+        conn.autocommit = False
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                DELETE FROM odds.team_name_resolution_queue
+                WHERE sport_key = %(sport_key)s
+                AND raw_name = %(raw_name)s
+                """,
+                {
+                    "sport_key": sport_key,
+                    "raw_name": raw_name,
+                },
+            )
+
+            removed = int(cur.rowcount or 0)
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "removed_from_queue": removed,
+    }
+
+@router.get("/markets/totals")
+def admin_odds_market_totals(
+    sport_key: Optional[str] = Query(default=None),
+    hours_ahead: int = Query(default=72, ge=1, le=24 * 60),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> Dict[str, Any]:
+    """
+    Admin-only:
+    visão técnica de Totais por jogo, sem tocar no snapshot legado de 1x2.
+
+    Fonte de mercado observada:
+      - odds.odds_snapshots_market (market_key in totals/totals_points)
+
+    Fonte de modelo:
+      - product.matchup_snapshot_v1.payload -> markets.totals
+    """
+
+    sql = """
+      WITH latest_market AS (
+        SELECT DISTINCT ON (
+          s.event_id,
+          COALESCE(s.bookmaker, ''),
+          s.point,
+          lower(s.selection_key)
+        )
+          s.event_id,
+          s.bookmaker,
+          s.market_key,
+          s.selection_key,
+          s.point,
+          s.price,
+          s.captured_at_utc
+        FROM odds.odds_snapshots_market s
+        WHERE s.market_key IN ('totals', 'totals_points')
+          AND lower(s.selection_key) IN ('over', 'under')
+          AND s.point IS NOT NULL
+        ORDER BY
+          s.event_id,
+          COALESCE(s.bookmaker, ''),
+          s.point,
+          lower(s.selection_key),
+          s.captured_at_utc DESC
+      ),
+      per_line AS (
+        SELECT
+          lm.event_id,
+          lm.point::float8 AS line,
+          MAX(CASE WHEN lower(lm.selection_key) = 'over' THEN lm.price END)::float8 AS best_over,
+          MAX(CASE WHEN lower(lm.selection_key) = 'under' THEN lm.price END)::float8 AS best_under,
+          MAX(lm.captured_at_utc) AS latest_captured_at_utc,
+          COUNT(*)::int AS snapshot_count
+        FROM latest_market lm
+        GROUP BY lm.event_id, lm.point
+      ),
+      ranked_line AS (
+        SELECT
+          pl.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY pl.event_id
+            ORDER BY
+              CASE
+                WHEN pl.best_over IS NOT NULL AND pl.best_under IS NOT NULL THEN 0
+                ELSE 1
+              END ASC,
+              ABS(pl.line - 2.5) ASC,
+              pl.latest_captured_at_utc DESC
+          ) AS rn
+        FROM per_line pl
+      )
+      SELECT
+        e.event_id,
+        e.sport_key,
+        e.commence_time_utc,
+        e.home_name,
+        e.away_name,
+        e.match_confidence,
+        e.resolved_fixture_id,
+        rl.line,
+        rl.best_over,
+        rl.best_under,
+        rl.latest_captured_at_utc,
+        rl.snapshot_count,
+        s.payload
+      FROM odds.odds_events e
+      LEFT JOIN ranked_line rl
+        ON rl.event_id = e.event_id
+       AND rl.rn = 1
+      LEFT JOIN product.matchup_snapshot_v1 s
+        ON s.event_id = e.event_id
+      WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
+        AND (
+          e.commence_time_utc IS NULL
+          OR (
+            e.commence_time_utc >= now()
+            AND e.commence_time_utc <= (now() + (%(hours_ahead)s || ' hours')::interval)
+          )
+        )
+      ORDER BY e.commence_time_utc ASC NULLS LAST
+      LIMIT %(limit)s
+    """
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "sport_key": sport_key,
+                        "hours_ahead": int(hours_ahead),
+                        "limit": int(limit),
+                    },
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"admin_odds_market_totals_failed: {e}")
+
+    items: List[Dict[str, Any]] = []
+    counts = {
+        "total": 0,
+        "with_market_line": 0,
+        "with_snapshot": 0,
+        "with_model_probs": 0,
+    }
+
+    for row in rows:
+        (
+            event_id,
+            sport_key_db,
+            commence_time_utc,
+            home_name,
+            away_name,
+            match_confidence,
+            resolved_fixture_id,
+            line,
+            best_over,
+            best_under,
+            latest_captured_at_utc,
+            snapshot_count,
+            payload,
+        ) = row
+
+        counts["total"] += 1
+
+        kickoff_iso = (
+            commence_time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if commence_time_utc
+            else None
+        )
+        captured_iso = (
+            latest_captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if latest_captured_at_utc
+            else None
+        )
+
+        market_probs = None
+        overround = None
+
+        if best_over and best_under and best_over > 0 and best_under > 0:
+            imp_over = 1.0 / float(best_over)
+            imp_under = 1.0 / float(best_under)
+            s_imp = imp_over + imp_under
+            if s_imp > 0:
+                market_probs = {
+                    "over": imp_over / s_imp,
+                    "under": imp_under / s_imp,
+                }
+                overround = s_imp
+
+        snapshot_summary = None
+        model_probs = None
+        edge = None
+        ev = None
+
+        if isinstance(payload, dict):
+            counts["with_snapshot"] += 1
+
+            mk = payload.get("markets") or {}
+            totals = mk.get("totals") or {}
+            totals_p = totals.get("p_model") or {}
+            totals_lines = totals.get("lines") or {}
+            inputs = payload.get("inputs") or {}
+
+            selected_line_key = None
+            selected_line_model = None
+
+            if line is not None:
+                selected_line_key = str(float(line))
+                if selected_line_key.endswith(".0"):
+                    selected_line_key = selected_line_key[:-2]
+                selected_line_model = totals_lines.get(selected_line_key)
+
+            if selected_line_model and isinstance(selected_line_model, dict):
+                model_probs = {
+                    "over": selected_line_model.get("over"),
+                    "under": selected_line_model.get("under"),
+                    "push": selected_line_model.get("push"),
+                }
+            else:
+                model_probs = {
+                    "over": totals_p.get("over"),
+                    "under": totals_p.get("under"),
+                    "push": None,
+                }
+
+            if model_probs.get("over") is not None or model_probs.get("under") is not None:
+                counts["with_model_probs"] += 1
+
+            if market_probs is not None:
+                edge = {
+                    "over": (
+                        float(model_probs["over"]) - float(market_probs["over"])
+                        if model_probs.get("over") is not None and market_probs.get("over") is not None
+                        else None
+                    ),
+                    "under": (
+                        float(model_probs["under"]) - float(market_probs["under"])
+                        if model_probs.get("under") is not None and market_probs.get("under") is not None
+                        else None
+                    ),
+                }
+
+                ev = {
+                    "over": (
+                        float(model_probs["over"]) * float(best_over) - 1.0
+                        if model_probs.get("over") is not None and best_over is not None
+                        else None
+                    ),
+                    "under": (
+                        float(model_probs["under"]) * float(best_under) - 1.0
+                        if model_probs.get("under") is not None and best_under is not None
+                        else None
+                    ),
+                }
+
+            snapshot_summary = {
+                "model_version": payload.get("model_version"),
+                "calc_version": payload.get("calc_version"),
+                "inputs": {
+                    "lambda_home": inputs.get("lambda_home"),
+                    "lambda_away": inputs.get("lambda_away"),
+                    "lambda_total": inputs.get("lambda_total"),
+                },
+                "totals": {
+                    "main_line": totals.get("main_line"),
+                    "selected_line": line,
+                    "p_model": model_probs,
+                    "best_odds": {
+                        "over": best_over,
+                        "under": best_under,
+                    },
+                    "lines_available": sorted(list(totals_lines.keys())),
+                },
+            }
+
+        if line is not None:
+            counts["with_market_line"] += 1
+
+        items.append(
+            {
+                "event_id": str(event_id),
+                "sport_key": str(sport_key_db),
+                "kickoff_utc": kickoff_iso,
+                "home_name": str(home_name),
+                "away_name": str(away_name),
+                "match_confidence": match_confidence,
+                "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
+                "market": {
+                    "line": float(line) if line is not None else None,
+                    "best_over": float(best_over) if best_over is not None else None,
+                    "best_under": float(best_under) if best_under is not None else None,
+                    "market_probs": market_probs,
+                    "overround": float(overround) if overround is not None else None,
+                    "latest_captured_at_utc": captured_iso,
+                    "snapshot_count": int(snapshot_count) if snapshot_count is not None else 0,
+                },
+                "snapshot": snapshot_summary,
+                "edge": edge,
+                "ev": ev,
+            }
+        )
+
+    return {
+        "ok": True,
+        "meta": {
+            "sport_key": sport_key,
+            "hours_ahead": int(hours_ahead),
+            "limit": int(limit),
+            "counts": counts,
+        },
+        "items": items,
+    }
+
+@router.get("/markets/btts")
+def admin_odds_market_btts(
+    sport_key: Optional[str] = Query(default=None),
+    hours_ahead: int = Query(default=72, ge=1, le=24 * 60),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> Dict[str, Any]:
+    """
+    Admin-only:
+    visão técnica do mercado BTTS usando odds_snapshots_market + matchup_snapshot_v1.
+
+    Fonte de mercado observada:
+      - odds.odds_snapshots_market (market_key in btts / both_teams_to_score)
+
+    Fonte de modelo:
+      - product.matchup_snapshot_v1.payload -> markets.btts
+    """
+
+    sql = """
+      WITH latest_market AS (
+        SELECT DISTINCT ON (
+          s.event_id,
+          COALESCE(s.bookmaker, ''),
+          lower(s.selection_key)
+        )
+          s.event_id,
+          s.bookmaker,
+          s.market_key,
+          s.selection_key,
+          s.price,
+          s.captured_at_utc
+        FROM odds.odds_snapshots_market s
+        WHERE s.market_key IN ('btts', 'both_teams_to_score')
+          AND lower(s.selection_key) IN ('yes', 'no')
+        ORDER BY
+          s.event_id,
+          COALESCE(s.bookmaker, ''),
+          lower(s.selection_key),
+          s.captured_at_utc DESC
+      ),
+      per_event AS (
+        SELECT
+          lm.event_id,
+          MAX(CASE WHEN lower(lm.selection_key) = 'yes' THEN lm.price END)::float8 AS best_yes,
+          MAX(CASE WHEN lower(lm.selection_key) = 'no' THEN lm.price END)::float8 AS best_no,
+          MAX(lm.captured_at_utc) AS latest_captured_at_utc,
+          COUNT(*)::int AS snapshot_count
+        FROM latest_market lm
+        GROUP BY lm.event_id
+      )
+      SELECT
+        e.event_id,
+        e.sport_key,
+        e.commence_time_utc,
+        e.home_name,
+        e.away_name,
+        e.match_confidence,
+        e.resolved_fixture_id,
+        pe.best_yes,
+        pe.best_no,
+        pe.latest_captured_at_utc,
+        pe.snapshot_count,
+        s.payload
+      FROM odds.odds_events e
+      LEFT JOIN per_event pe
+        ON pe.event_id = e.event_id
+      LEFT JOIN product.matchup_snapshot_v1 s
+        ON s.event_id = e.event_id
+      WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
+        AND (
+          e.commence_time_utc IS NULL
+          OR (
+            e.commence_time_utc >= now()
+            AND e.commence_time_utc <= (now() + (%(hours_ahead)s || ' hours')::interval)
+          )
+        )
+      ORDER BY e.commence_time_utc ASC NULLS LAST
+      LIMIT %(limit)s
+    """
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "sport_key": sport_key,
+                        "hours_ahead": int(hours_ahead),
+                        "limit": int(limit),
+                    },
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"admin_odds_market_btts_failed: {e}")
+
+    items: List[Dict[str, Any]] = []
+    counts = {
+        "total": 0,
+        "with_market": 0,
+        "with_snapshot": 0,
+        "with_model_probs": 0,
+    }
+
+    for row in rows:
+        (
+            event_id,
+            sport_key_db,
+            commence_time_utc,
+            home_name,
+            away_name,
+            match_confidence,
+            resolved_fixture_id,
+            best_yes,
+            best_no,
+            latest_captured_at_utc,
+            snapshot_count,
+            payload,
+        ) = row
+
+        counts["total"] += 1
+
+        kickoff_iso = (
+            commence_time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if commence_time_utc
+            else None
+        )
+        captured_iso = (
+            latest_captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if latest_captured_at_utc
+            else None
+        )
+
+        market_probs = None
+        overround = None
+
+        if best_yes and best_no and best_yes > 0 and best_no > 0:
+            imp_yes = 1.0 / float(best_yes)
+            imp_no = 1.0 / float(best_no)
+            s_imp = imp_yes + imp_no
+            if s_imp > 0:
+                market_probs = {
+                    "yes": imp_yes / s_imp,
+                    "no": imp_no / s_imp,
+                }
+                overround = s_imp
+                counts["with_market"] += 1
+
+        snapshot_summary = None
+        model_probs = None
+        edge = None
+        ev = None
+
+        if isinstance(payload, dict):
+            counts["with_snapshot"] += 1
+
+            mk = payload.get("markets") or {}
+            btts = mk.get("btts") or {}
+            inputs = payload.get("inputs") or {}
+
+            model_probs = {
+                "yes": btts.get("yes"),
+                "no": btts.get("no"),
+            }
+
+            if model_probs.get("yes") is not None or model_probs.get("no") is not None:
+                counts["with_model_probs"] += 1
+
+            if market_probs is not None:
+                edge = {
+                    "yes": (
+                        float(model_probs["yes"]) - float(market_probs["yes"])
+                        if model_probs.get("yes") is not None and market_probs.get("yes") is not None
+                        else None
+                    ),
+                    "no": (
+                        float(model_probs["no"]) - float(market_probs["no"])
+                        if model_probs.get("no") is not None and market_probs.get("no") is not None
+                        else None
+                    ),
+                }
+
+                ev = {
+                    "yes": (
+                        float(model_probs["yes"]) * float(best_yes) - 1.0
+                        if model_probs.get("yes") is not None and best_yes is not None
+                        else None
+                    ),
+                    "no": (
+                        float(model_probs["no"]) * float(best_no) - 1.0
+                        if model_probs.get("no") is not None and best_no is not None
+                        else None
+                    ),
+                }
+
+            snapshot_summary = {
+                "model_version": payload.get("model_version"),
+                "calc_version": payload.get("calc_version"),
+                "inputs": {
+                    "lambda_home": inputs.get("lambda_home"),
+                    "lambda_away": inputs.get("lambda_away"),
+                    "lambda_total": inputs.get("lambda_total"),
+                },
+                "btts": {
+                    "p_model": model_probs,
+                    "best_odds": {
+                        "yes": best_yes,
+                        "no": best_no,
+                    },
+                },
+            }
+
+        items.append(
+            {
+                "event_id": str(event_id),
+                "sport_key": str(sport_key_db),
+                "kickoff_utc": kickoff_iso,
+                "home_name": str(home_name),
+                "away_name": str(away_name),
+                "match_confidence": match_confidence,
+                "fixture_id": int(resolved_fixture_id) if resolved_fixture_id is not None else None,
+                "market": {
+                    "best_yes": float(best_yes) if best_yes is not None else None,
+                    "best_no": float(best_no) if best_no is not None else None,
+                    "market_probs": market_probs,
+                    "overround": float(overround) if overround is not None else None,
+                    "latest_captured_at_utc": captured_iso,
+                    "snapshot_count": int(snapshot_count) if snapshot_count is not None else 0,
+                },
+                "snapshot": snapshot_summary,
+                "edge": edge,
+                "ev": ev,
+            }
+        )
+
+    return {
+        "ok": True,
+        "meta": {
+            "sport_key": sport_key,
+            "hours_ahead": int(hours_ahead),
+            "limit": int(limit),
+            "counts": counts,
+        },
+        "items": items,
+    }

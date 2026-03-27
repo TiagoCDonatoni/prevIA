@@ -13,6 +13,17 @@ from src.http.odds_router import router as odds_router
 # Odds admin (legado, se ainda existir e for necessário)
 from src.http.admin_odds_router import router as legacy_admin_odds_router
 
+# Backward-compat shim (re-exporta router real)
+from src.http.admin_matchup_router import router as admin_matchup_router
+
+# Novos endpoints (Sprint 1)
+from src.http.admin_catalog_router import router as admin_catalog_router
+from src.http.product_leagues_router import router as product_leagues_router
+from src.http.product_index_router import router as product_index_router
+
+# Ops (jobs via botões agora, cron-ready depois)
+from src.http.admin_ops_router import router as admin_ops_router
+
 
 def create_app() -> FastAPI:
     settings = load_settings()
@@ -35,8 +46,16 @@ def create_app() -> FastAPI:
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
     api.include_router(legacy_admin_odds_router)
+    api.include_router(admin_matchup_router)
+
     api.include_router(debug_db_router)
     api.include_router(odds_router)
+
+    # Sprint 1: catálogo + leagues + ops
+    api.include_router(admin_catalog_router)
+    api.include_router(product_leagues_router)
+    api.include_router(product_index_router)
+    api.include_router(admin_ops_router)
 
     @api.get("/", response_class=HTMLResponse)
     def index():
@@ -57,5 +76,6 @@ def create_app() -> FastAPI:
         }
 
     return api
+
 
 app = create_app()

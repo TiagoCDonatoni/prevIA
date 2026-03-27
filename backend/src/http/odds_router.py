@@ -11,6 +11,8 @@ from src.db.pg import pg_conn
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 from src.odds.matchup_resolver import resolve_odds_event
 
+import json
+from pathlib import Path
 
 router = APIRouter(prefix="/odds", tags=["odds-product"])
 
@@ -18,6 +20,22 @@ router = APIRouter(prefix="/odds", tags=["odds-product"])
 # ---------------------------
 # Schemas
 # ---------------------------
+class OddsBookRow(BaseModel):
+    key: str
+    name: str
+    odds: Dict[str, Optional[float]]  # H/D/A
+    is_affiliate: bool = False
+    affiliate_url: Optional[str] = None
+
+class EdgeSummary(BaseModel):
+    best_outcome: Optional[str] = None  # "H" | "D" | "A"
+    best_edge: Optional[float] = None   # model_p - market_novig_p
+    best_odd: Optional[float] = None
+    best_book_key: Optional[str] = None
+    best_book_name: Optional[str] = None
+    market_books_count: int = 0
+    market_min_odd: Optional[float] = None
+    market_max_odd: Optional[float] = None
 
 class OddsEventRow(BaseModel):
     event_id: str
@@ -26,10 +44,23 @@ class OddsEventRow(BaseModel):
     home_name: str
     away_name: str
     latest_captured_at_utc: Optional[str] = None
-    odds_best: Optional[Dict[str, Optional[float]]] = None  # H/D/A
     match_status: Optional[str] = None
     match_score: Optional[float] = None
+    odds_best: Optional[Dict[str, Optional[float]]] = None  # H/D/A
+    odds_books: Optional[List[OddsBook]] = None
+    probs_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
+    has_model: Optional[bool] = None
+    edge_summary: Optional[EdgeSummary] = None
+    snapshot_summary: Optional[Dict[str, Any]] = None
+    resolved_home_team_id: Optional[int] = None
+    resolved_away_team_id: Optional[int] = None
 
+class OddsBook(BaseModel):
+    key: str
+    name: str
+    is_affiliate: bool = False
+    url: Optional[str] = None
+    odds_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
 
 class OddsEventsResponse(BaseModel):
     ok: bool = True
@@ -60,7 +91,7 @@ class QuoteRequest(BaseModel):
     event_id: str
     assume_league_id: int
     assume_season: int
-    artifact_filename: str
+    artifact_filename: str | None = None
     tol_hours: int = 6
 
 
@@ -76,6 +107,112 @@ class QuoteResponse(BaseModel):
 # ---------------------------
 # Helpers
 # ---------------------------
+
+def _coerce_payload(payload: Any) -> Dict[str, Any]:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except Exception:
+            return {}
+    return {}
+
+_AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
+
+def _book_key(raw: Optional[str]) -> str:
+    v = (raw or "").strip().lower()
+    v = v.replace("&", "and")
+    for ch in [" ", "-", ".", ",", "/", "\\", "(", ")", "[", "]", "{", "}", "’", "'", "\""]:
+        v = v.replace(ch, "_")
+    while "__" in v:
+        v = v.replace("__", "_")
+    return v.strip("_") or "unknown"
+
+def _load_affiliates() -> Dict[str, Dict[str, str]]:
+    global _AFF_CACHE
+    if _AFF_CACHE is not None:
+        return _AFF_CACHE
+
+    base_dir = Path(__file__).resolve().parents[2]  # .../backend
+    path = base_dir / "config" / "odds.affiliates.json"
+    if not path.exists():
+        _AFF_CACHE = {}
+        return _AFF_CACHE
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            _AFF_CACHE = data
+        else:
+            _AFF_CACHE = {}
+    except Exception:
+        _AFF_CACHE = {}
+
+    return _AFF_CACHE
+
+def _snapshots_to_books(rows: List[tuple]) -> List[OddsBook]:
+    """
+    rows: [(bookmaker, odds_home, odds_draw, odds_away), ...]
+    """
+    aff = _load_affiliates()
+    out: List[OddsBook] = []
+
+    for (bookmaker, oh, od, oa) in rows:
+        key = _book_key(bookmaker)
+        meta = aff.get(key) or {}
+        raw_name = meta.get("name") or bookmaker or key
+        name = str(raw_name).strip() or key
+
+        is_aff = key in aff
+        url = meta.get("url")
+
+        out.append(
+            OddsBook(
+                key=key,
+                name=str(name),
+                is_affiliate=bool(is_aff),
+                url=str(url) if url else None,
+                odds_1x2={
+                    "H": float(oh) if oh is not None else None,
+                    "D": float(od) if od is not None else None,
+                    "A": float(oa) if oa is not None else None,
+                },
+            )
+        )
+
+    return out
+
+def _fetch_latest_books_for_events(conn, event_ids: List[str]) -> Dict[str, List[OddsBook]]:
+    ids = [str(x) for x in (event_ids or []) if str(x).strip()]
+    if not ids:
+        return {}
+
+    sql = """
+      SELECT s.event_id, s.bookmaker, s.odds_home, s.odds_draw, s.odds_away
+      FROM odds.odds_snapshots_1x2 s
+      JOIN (
+          SELECT event_id, bookmaker, MAX(captured_at_utc) AS max_ts
+          FROM odds.odds_snapshots_1x2
+          WHERE event_id = ANY(%(event_ids)s)
+          GROUP BY event_id, bookmaker
+      ) t
+        ON t.event_id = s.event_id
+       AND t.bookmaker = s.bookmaker
+       AND t.max_ts = s.captured_at_utc
+      ORDER BY s.event_id, s.bookmaker NULLS LAST
+    """
+
+    by_event: Dict[str, List[tuple]] = {}
+
+    with conn.cursor() as cur:
+        cur.execute(sql, {"event_ids": ids})
+        for (eid, bookmaker, oh, od, oa) in cur.fetchall():
+            by_event.setdefault(str(eid), []).append((bookmaker, oh, od, oa))
+
+    return {eid: _snapshots_to_books(rows) for eid, rows in by_event.items()}
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -235,12 +372,17 @@ def _pick_model_season(conn, *, league_id: int, requested_season: int) -> Dict[s
 # Endpoints (Produto)
 # ---------------------------
 
-@router.get("/events", response_model=OddsEventsResponse)
+
+@router.get("/events", response_model=OddsEventsResponse, response_model_exclude_none=False)
 def list_odds_events(
     sport_key: str = Query(...),
     hours_ahead: int = Query(168, ge=1, le=24 * 60),
     limit: int = Query(200, ge=1, le=1000),
+    assume_league_id: Optional[int] = Query(None),
+    assume_season: Optional[int] = Query(None),
+    artifact_filename: Optional[str] = Query(None),
 ) -> OddsEventsResponse:
+
     now = datetime.now(timezone.utc)
     end = now + timedelta(hours=hours_ahead)
 
@@ -259,6 +401,24 @@ def list_odds_events(
         FROM odds.odds_snapshots_1x2 s
         JOIN last_ts lt ON lt.event_id = s.event_id AND lt.max_ts = s.captured_at_utc
         GROUP BY s.event_id
+      ),
+      latest_snap_fx AS (
+        SELECT DISTINCT ON (s.fixture_id)
+          s.fixture_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.fixture_id IS NOT NULL
+        ORDER BY s.fixture_id, s.updated_at_utc DESC
+      ),
+      latest_snap_ev AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.event_id IS NOT NULL
+        ORDER BY s.event_id, s.updated_at_utc DESC
       )
       SELECT
         e.event_id,
@@ -266,15 +426,23 @@ def list_odds_events(
         e.commence_time_utc,
         e.home_name,
         e.away_name,
+        e.resolved_home_team_id,
+        e.resolved_away_team_id,
+        e.resolved_fixture_id,
         e.match_status,
         e.match_score,
         lt.max_ts,
         b.odds_home,
         b.odds_draw,
-        b.odds_away
+        b.odds_away,
+        COALESCE(lsfx.payload, lsev.payload) AS snapshot_payload
       FROM odds.odds_events e
       LEFT JOIN last_ts lt ON lt.event_id = e.event_id
       LEFT JOIN best b ON b.event_id = e.event_id
+      LEFT JOIN latest_snap_fx lsfx
+        ON lsfx.fixture_id = e.resolved_fixture_id
+      LEFT JOIN latest_snap_ev lsev
+        ON lsev.event_id = e.event_id
       WHERE e.sport_key = %(sport_key)s
         AND e.commence_time_utc IS NOT NULL
         AND e.commence_time_utc >= %(now)s
@@ -292,21 +460,159 @@ def list_odds_events(
             )
             rows = cur.fetchall()
 
+            event_ids = [str(r[0]) for r in rows]  # r[0] = event_id
+            books_map = _fetch_latest_books_for_events(conn, event_ids)
+
         for (
             event_id,
             sport_key_db,
             commence_time_utc,
             home_name,
             away_name,
+            resolved_home_team_id,
+            resolved_away_team_id,
+            resolved_fixture_id,
             match_status,
             match_score,
             max_ts,
             odds_home,
             odds_draw,
             odds_away,
+            snapshot_payload,
         ) in rows:
+
+            edge_summary = None
+            snapshot_summary = None
+
+            snapshot_payload_obj = _coerce_payload(snapshot_payload)
+            if snapshot_payload_obj:
+                mk = snapshot_payload_obj.get("markets") or {}
+                totals = mk.get("totals") or {}
+                totals_p = totals.get("p_model") or {}
+                totals_odds = totals.get("best_odds") or {}
+                btts = mk.get("btts") or {}
+                btts_p = btts.get("p_model") or {}
+                inputs = snapshot_payload_obj.get("inputs") or {}
+
+                snapshot_summary = {
+                    "totals": {
+                        "line": totals.get("main_line"),
+                        "p_over": totals_p.get("over"),
+                        "p_under": totals_p.get("under"),
+                        "best_over": totals_odds.get("over"),
+                        "best_under": totals_odds.get("under"),
+                    },
+                    "btts": {
+                        "p_yes": btts_p.get("yes"),
+                        "p_no": btts_p.get("no"),
+                    },
+                    "inputs": {
+                        "lambda_home": inputs.get("lambda_home"),
+                        "lambda_away": inputs.get("lambda_away"),
+                        "lambda_total": inputs.get("lambda_total"),
+                    },
+                }
+
+            # Edge summary só se o caller informar liga/temporada/artifact e o evento já tiver ids resolvidos
+            if (
+                assume_league_id is not None
+                and assume_season is not None
+                and artifact_filename
+                and resolved_home_team_id
+                and resolved_away_team_id
+                and (odds_home is not None or odds_draw is not None or odds_away is not None)
+            ):
+                try:
+                    pick = _pick_model_season(
+                        conn,
+                        league_id=int(assume_league_id),
+                        requested_season=int(assume_season),
+                    )
+
+                    if pick.get("season_mode") != "none":
+                        af = (artifact_filename or "").strip()
+                        if not af:
+                            af = _fetch_artifact_filename_for_league(conn, league_id=int(assume_league_id))
+
+                        if not af:
+                            raise ValueError("no_model_artifact_for_league")
+
+                        pred = predict_1x2_from_artifact(
+                            artifact_filename=str(af),
+                            league_id=int(assume_league_id),
+                            season=int(pick["season_used"]),
+                            home_team_id=int(resolved_home_team_id),
+                            away_team_id=int(resolved_away_team_id),
+                        )
+                        probs = pred.get("probs") or pred.get("probs_1x2") or None
+
+                        if probs:
+                            probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+
+                            mkt = _market_probs_from_odds(
+                                float(odds_home) if odds_home is not None else None,
+                                float(odds_draw) if odds_draw is not None else None,
+                                float(odds_away) if odds_away is not None else None,
+                            )
+                            novig = mkt.get("novig") or {}
+
+                            edges = {
+                                "H": _edge(probs_block.get("H"), novig.get("H")),
+                                "D": _edge(probs_block.get("D"), novig.get("D")),
+                                "A": _edge(probs_block.get("A"), novig.get("A")),
+                            }
+
+                            # melhor outcome por edge (ignora None)
+                            best_outcome = None
+                            best_edge = None
+                            for k in ["H", "D", "A"]:
+                                v = edges.get(k)
+                                if v is None:
+                                    continue
+                                if best_edge is None or v > best_edge:
+                                    best_edge = v
+                                    best_outcome = k
+
+                            # melhor execução por outcome (entre books)
+                            best_odd = None
+                            best_book_key = None
+                            best_book_name = None
+                            market_books_count = 0
+                            market_min_odd = None
+                            market_max_odd = None
+
+                            books = books_map.get(str(event_id), []) or []
+                            if best_outcome:
+                                for b in books:
+                                    o = (b.odds_1x2 or {}).get(best_outcome)
+                                    if o is None:
+                                        continue
+                                    odd = float(o)
+                                    market_books_count += 1
+                                    market_min_odd = odd if market_min_odd is None else min(market_min_odd, odd)
+                                    market_max_odd = odd if market_max_odd is None else max(market_max_odd, odd)
+
+                                    if best_odd is None or odd > best_odd:
+                                        best_odd = odd
+                                        best_book_key = b.key
+                                        best_book_name = b.name
+
+                            edge_summary = EdgeSummary(
+                                best_outcome=best_outcome,
+                                best_edge=float(best_edge) if best_edge is not None else None,
+                                best_odd=best_odd,
+                                best_book_key=best_book_key,
+                                best_book_name=best_book_name,
+                                market_books_count=int(market_books_count),
+                                market_min_odd=market_min_odd,
+                                market_max_odd=market_max_odd,
+                            )
+                except Exception:
+                    edge_summary = None
+
             events.append(
                 OddsEventRow(
+                    odds_books=books_map.get(str(event_id), []),
                     event_id=str(event_id),
                     sport_key=str(sport_key_db),
                     commence_time_utc=commence_time_utc.isoformat().replace("+00:00", "Z") if commence_time_utc else None,
@@ -315,6 +621,10 @@ def list_odds_events(
                     match_status=str(match_status) if match_status else None,
                     match_score=float(match_score) if match_score is not None else None,
                     latest_captured_at_utc=max_ts.isoformat().replace("+00:00", "Z") if max_ts else None,
+                    edge_summary=edge_summary,
+                    snapshot_summary=snapshot_summary,
+                    resolved_home_team_id=int(resolved_home_team_id) if resolved_home_team_id is not None else None,
+                    resolved_away_team_id=int(resolved_away_team_id) if resolved_away_team_id is not None else None,
                     odds_best={
                         "H": float(odds_home) if odds_home is not None else None,
                         "D": float(odds_draw) if odds_draw is not None else None,
@@ -382,6 +692,9 @@ def quote(req: QuoteRequest) -> QuoteResponse:
         # 2) carregar odds best/latest do DB
         ev = _fetch_event_and_best_odds(conn, req.event_id)
 
+        books_map = _fetch_latest_books_for_events(conn, [req.event_id])
+        odds_books = books_map.get(req.event_id, [])
+
         matchup = {
             "status": res.status,
             "confidence": float(res.confidence),
@@ -402,6 +715,7 @@ def quote(req: QuoteRequest) -> QuoteResponse:
                 "source": "db",
                 "latest_captured_at_utc": ev.get("latest_captured_at_utc"),
                 "best": ev.get("odds_best"),
+                "books": [b.dict() for b in odds_books],
             }
 
         # 3) modelo (só se tiver ids resolvidos)
@@ -415,20 +729,33 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             if pick["season_mode"] == "none":
                 matchup["model_status"] = "NO_STATS_ANY_SEASON"
             else:
-                try:
-                    pred = predict_1x2_from_artifact(
-                        artifact_filename=req.artifact_filename,
+                # resolve artifact automaticamente se o client não enviar
+                artifact_filename = (req.artifact_filename or "").strip()
+                if not artifact_filename:
+                    artifact_filename = _fetch_artifact_filename_for_league(
+                        conn,
                         league_id=int(req.assume_league_id),
-                        season=int(pick["season_used"]),
-                        home_team_id=int(res.resolved_home_team_id),
-                        away_team_id=int(res.resolved_away_team_id),
                     )
-                    probs = pred.get("probs") or pred.get("probs_1x2") or None
-                    if probs:
-                        probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
-                except ValueError as e:
-                    matchup["model_status"] = "NO_STATS_FOR_MATCH"
-                    matchup["model_error"] = str(e)
+
+                matchup["artifact_filename_used"] = artifact_filename
+
+                if not artifact_filename:
+                    matchup["model_status"] = "NO_MODEL_ARTIFACT"
+                else:
+                    try:
+                        pred = predict_1x2_from_artifact(
+                            artifact_filename=str(artifact_filename),
+                            league_id=int(req.assume_league_id),
+                            season=int(pick["season_used"]),
+                            home_team_id=int(res.resolved_home_team_id),
+                            away_team_id=int(res.resolved_away_team_id),
+                        )
+                        probs = pred.get("probs") or pred.get("probs_1x2") or None
+                        if probs:
+                            probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+                    except ValueError as e:
+                        matchup["model_status"] = "NO_STATS_FOR_MATCH"
+                        matchup["model_error"] = str(e)
 
         # 4) value/edge (opcional)
         if probs_block and ev.get("odds_best"):
@@ -453,3 +780,186 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             odds=odds_block,
             value=value_block,
         )
+
+@router.get("/matchup/snapshot")
+def get_matchup_snapshot(
+    fixture_id: int | None = Query(default=None),
+    event_id: str | None = Query(default=None),
+    model_version: str = Query(default="model_v0"),
+):
+    if fixture_id is None and event_id is None:
+        raise HTTPException(status_code=400, detail="provide fixture_id or event_id")
+
+    if fixture_id is not None:
+        sql = """
+          SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc,
+                 home_name, away_name, source_captured_at_utc, model_version, payload,
+                 generated_at_utc, updated_at_utc
+          FROM product.matchup_snapshot_v1
+          WHERE model_version = %(model_version)s
+            AND fixture_id = %(fixture_id)s
+          ORDER BY updated_at_utc DESC
+          LIMIT 1
+        """
+        params = {"fixture_id": int(fixture_id), "model_version": model_version}
+
+    else:
+        sql = """
+          SELECT snapshot_id, fixture_id, event_id, sport_key, kickoff_utc,
+                 home_name, away_name, source_captured_at_utc, model_version, payload,
+                 generated_at_utc, updated_at_utc
+          FROM product.matchup_snapshot_v1
+          WHERE model_version = %(model_version)s
+            AND event_id = %(event_id)s
+          ORDER BY updated_at_utc DESC
+          LIMIT 1
+        """
+        params = {"event_id": str(event_id), "model_version": model_version}
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            r = cur.fetchone()
+
+    if not r:
+        raise HTTPException(status_code=404, detail="snapshot_not_found")
+
+    return {
+        "snapshot_id": r[0],
+        "fixture_id": r[1],
+        "event_id": r[2],
+        "sport_key": r[3],
+        "kickoff_utc": r[4].isoformat().replace("+00:00", "Z") if r[4] else None,
+        "home_name": r[5],
+        "away_name": r[6],
+        "source_captured_at_utc": r[7].isoformat().replace("+00:00", "Z") if r[7] else None,
+        "model_version": r[8],
+        "payload": r[9],
+        "generated_at_utc": r[10].isoformat().replace("+00:00", "Z") if r[10] else None,
+        "updated_at_utc": r[11].isoformat().replace("+00:00", "Z") if r[11] else None,
+    }
+
+@router.get("/matchups")
+def list_matchups_cards(
+    sport_key: str = Query(..., min_length=2),
+    hours_ahead: int = Query(default=72, ge=1, le=24 * 30),
+    limit: int = Query(default=50, ge=1, le=500),
+    model_version: str = Query(default="model_v0"),
+):
+    """
+    Lista próximos jogos (odds_events) e junta o snapshot mais recente por fixture_id.
+    Retorna também um summary "flat" para uso direto no card do frontend.
+    """
+    sql = """
+      WITH upcoming AS (
+        SELECT
+          e.event_id,
+          e.sport_key,
+          e.commence_time_utc AS kickoff_utc,
+          e.home_name,
+          e.away_name,
+          e.resolved_fixture_id AS fixture_id
+        FROM odds.odds_events e
+        WHERE e.sport_key = %(sport_key)s
+          AND e.commence_time_utc IS NOT NULL
+          AND e.commence_time_utc >= now()
+          AND e.commence_time_utc <= now() + (%(hours_ahead)s || ' hours')::interval
+        ORDER BY e.commence_time_utc ASC
+        LIMIT %(limit)s
+      ),
+    latest_snap_fx AS (
+      SELECT DISTINCT ON (s.fixture_id)
+        s.fixture_id,
+        s.updated_at_utc,
+        s.payload
+      FROM product.matchup_snapshot_v1 s
+      WHERE s.model_version = %(model_version)s
+        AND s.fixture_id IS NOT NULL
+      ORDER BY s.fixture_id, s.updated_at_utc DESC
+    ),
+    latest_snap_ev AS (
+      SELECT DISTINCT ON (s.event_id)
+        s.event_id,
+        s.updated_at_utc,
+        s.payload
+      FROM product.matchup_snapshot_v1 s
+      WHERE s.model_version = %(model_version)s
+        AND s.event_id IS NOT NULL
+      ORDER BY s.event_id, s.updated_at_utc DESC
+    )
+    SELECT
+      u.event_id,
+      u.fixture_id,
+      u.kickoff_utc,
+      u.home_name,
+      u.away_name,
+      COALESCE(lsfx.updated_at_utc, lsev.updated_at_utc) AS snapshot_updated_at,
+      COALESCE(lsfx.payload, lsev.payload) AS payload
+    FROM upcoming u
+    LEFT JOIN latest_snap_fx lsfx
+      ON lsfx.fixture_id = u.fixture_id
+    LEFT JOIN latest_snap_ev lsev
+      ON lsev.event_id = u.event_id
+    ORDER BY u.kickoff_utc ASC;
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "sport_key": sport_key,
+                    "hours_ahead": int(hours_ahead),
+                    "limit": int(limit),
+                    "model_version": model_version,
+                },
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for r in rows:
+        payload = r[6]
+        summary = None
+
+        # payload pode ser None se ainda não gerou snapshot
+        if isinstance(payload, dict):
+            mk = payload.get("markets") or {}
+            totals = mk.get("totals") or {}
+            totals_p = totals.get("p_model") or {}
+            totals_odds = totals.get("best_odds") or {}
+            btts = mk.get("btts") or {}
+            btts_p = btts.get("p_model") or {}
+            inputs = payload.get("inputs") or {}
+
+            summary = {
+                "totals": {
+                    "line": totals.get("main_line"),
+                    "p_over": totals_p.get("over"),
+                    "p_under": totals_p.get("under"),
+                    "best_over": totals_odds.get("over"),
+                    "best_under": totals_odds.get("under"),
+                },
+                "btts": {
+                    "p_yes": btts_p.get("yes"),
+                    "p_no": btts_p.get("no"),
+                },
+                "inputs": {
+                    "lambda_home": inputs.get("lambda_home"),
+                    "lambda_away": inputs.get("lambda_away"),
+                    "lambda_total": inputs.get("lambda_total"),
+                },
+            }
+
+        items.append(
+            {
+                "event_id": r[0],
+                "fixture_id": r[1],
+                "kickoff_utc": r[2].isoformat().replace("+00:00", "Z") if r[2] else None,
+                "home_name": r[3],
+                "away_name": r[4],
+                "snapshot_updated_at": r[5].isoformat().replace("+00:00", "Z") if r[5] else None,
+                "snapshot_summary": summary,
+            }
+        )
+
+    return {"ok": True, "sport_key": sport_key, "items": items}

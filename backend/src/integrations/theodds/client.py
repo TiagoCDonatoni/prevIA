@@ -60,3 +60,47 @@ class TheOddsClient:
                 "dateFormat": date_format,
             },
         )
+
+    def get_event_odds(
+        self,
+        *,
+        sport_key: str,
+        event_id: str,
+        regions: str = "eu",
+        markets: str = "h2h",
+        odds_format: str = "decimal",
+        date_format: str = "iso",
+    ) -> Dict[str, Any]:
+        # GET /v4/sports/{sport_key}/events/{event_id}/odds?markets=...
+        return self._get(
+            f"/sports/{sport_key}/events/{event_id}/odds",
+            params={
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": odds_format,
+                "dateFormat": date_format,
+            },
+        )
+
+    def get_event_odds(
+        self,
+        *,
+        sport_key: str,
+        event_id: str,
+        regions: str,
+        markets: str,
+        odds_format: str = "decimal",
+        date_format: str = "iso",
+    ):
+        """
+        Single-event odds endpoint (required for Additional Markets like btts).
+        """
+        path = f"/v4/sports/{sport_key}/events/{event_id}/odds"
+        params = {
+            "regions": regions,
+            "markets": markets,
+            "oddsFormat": odds_format,
+            "dateFormat": date_format,
+        }
+        return self._get(path, params=params)
+
