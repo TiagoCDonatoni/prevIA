@@ -38,6 +38,14 @@ function getSubtitle(tr: (k: string) => string, mode: Mode) {
   return tr("auth.loginSubtitle");
 }
 
+function clearFeedback(
+  setErrorText: (value: string) => void,
+  setInfoText: (value: string) => void
+) {
+  setErrorText("");
+  setInfoText("");
+}
+
 export function ProductAuthModal(props: {
   open: boolean;
   lang: Lang;
@@ -63,15 +71,63 @@ export function ProductAuthModal(props: {
   const [infoText, setInfoText] = useState("");
 
   const tr = useMemo(() => (k: string, vars?: Record<string, any>) => t(lang, k, vars), [lang]);
+  const initialMode = props.initialMode ?? "signup";
+  const canStepBack = mode === "forgot" || mode === "reset";
+  const secondaryActionLabel = canStepBack ? tr("common.back") : tr("common.notNow");
+
+  function resetFeedback() {
+    clearFeedback(setErrorText, setInfoText);
+  }
+
+  function switchMode(nextMode: Mode) {
+    setMode(nextMode);
+    resetFeedback();
+  }
+
+  function closeModal() {
+    if (busy) return;
+    props.onClose();
+  }
+
+  function handleSecondaryAction() {
+    if (busy) return;
+
+    if (mode === "forgot" || mode === "reset") {
+      switchMode("login");
+      return;
+    }
+
+    props.onClose();
+  }
 
   useEffect(() => {
     if (!open) return;
-    setMode(props.initialMode ?? "signup");
-    setErrorText("");
-    setInfoText("");
+    setMode(initialMode);
+    resetFeedback();
     setPassword("");
     setResetToken("");
-  }, [open, props.initialMode]);
+  }, [open, initialMode]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModal();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, busy]);
 
   async function handleGoogleCredential(credential: string) {
     if (!credential) {
@@ -80,8 +136,7 @@ export function ProductAuthModal(props: {
     }
 
     setBusy(true);
-    setErrorText("");
-    setInfoText("");
+    resetFeedback();
 
     try {
       const authPayload = await postAuthGoogleLogin({ credential });
@@ -140,8 +195,7 @@ export function ProductAuthModal(props: {
     }
 
     setBusy(true);
-    setErrorText("");
-    setInfoText("");
+    resetFeedback();
 
     try {
       if (mode === "signup") {
@@ -208,8 +262,20 @@ export function ProductAuthModal(props: {
       : tr("auth.resetAction");
 
   return (
-    <div className="um-overlay" role="dialog" aria-modal="true">
-      <div className="um-modal product-auth-modal">
+    <div
+      className="um-overlay"
+      role="dialog"
+      aria-modal="true"
+      onClick={() => {
+        closeModal();
+      }}
+    >
+      <div
+        className="um-modal product-auth-modal"
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
+      >
         <div className="product-modal-head">
           <div className="product-modal-head-copy">
             <div className="product-modal-kicker">prevIA</div>
@@ -220,8 +286,9 @@ export function ProductAuthModal(props: {
           <button
             type="button"
             className="product-modal-close"
-            onClick={props.onClose}
+            onClick={closeModal}
             aria-label={tr("common.close")}
+            disabled={busy}
           >
             ×
           </button>
@@ -280,7 +347,11 @@ export function ProductAuthModal(props: {
               <input
                 type="password"
                 autoComplete={
-                  mode === "signup" ? "new-password" : mode === "login" ? "current-password" : "new-password"
+                  mode === "signup"
+                    ? "new-password"
+                    : mode === "login"
+                    ? "current-password"
+                    : "new-password"
                 }
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -296,10 +367,10 @@ export function ProductAuthModal(props: {
             <button
               type="button"
               className="product-secondary"
-              onClick={props.onClose}
+              onClick={handleSecondaryAction}
               disabled={busy}
             >
-              {tr("common.back")}
+              {secondaryActionLabel}
             </button>
 
             <button
@@ -324,9 +395,7 @@ export function ProductAuthModal(props: {
                 type="button"
                 className="product-link"
                 onClick={() => {
-                  setMode("login");
-                  setErrorText("");
-                  setInfoText("");
+                  switchMode("login");
                 }}
               >
                 {tr("auth.haveAccount")}
@@ -339,9 +408,7 @@ export function ProductAuthModal(props: {
                   type="button"
                   className="product-link"
                   onClick={() => {
-                    setMode("forgot");
-                    setErrorText("");
-                    setInfoText("");
+                    switchMode("forgot");
                   }}
                 >
                   {tr("auth.forgot")}
@@ -351,9 +418,7 @@ export function ProductAuthModal(props: {
                   type="button"
                   className="product-link"
                   onClick={() => {
-                    setMode("signup");
-                    setErrorText("");
-                    setInfoText("");
+                    switchMode("signup");
                   }}
                 >
                   {tr("auth.noAccount")}
@@ -366,9 +431,7 @@ export function ProductAuthModal(props: {
                 type="button"
                 className="product-link"
                 onClick={() => {
-                  setMode("login");
-                  setErrorText("");
-                  setInfoText("");
+                  switchMode("login");
                 }}
               >
                 {tr("auth.backToLogin")}

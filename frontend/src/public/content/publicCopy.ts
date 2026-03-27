@@ -3,10 +3,13 @@ import type { Lang } from "../../i18n";
 type PublicCopy = {
   nav: {
     home: string;
+    testFree: string;
     howItWorks: string;
     glossary: string;
     about: string;
     language: string;
+    login: string;
+    createAccount: string;
   };
   footer: {
     copyrightLabel: string;
@@ -32,6 +35,11 @@ type PublicCopy = {
         title: string;
         body: string;
       }>;
+    };
+    freeAnonEmbed: {
+      eyebrow: string;
+      title: string;
+      body: string;
     };
     preview: {
       eyebrow: string;
@@ -73,10 +81,13 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
   pt: {
     nav: {
       home: "Home",
+      testFree: "Teste grátis",
       howItWorks: "Como funciona",
       glossary: "Glossário",
       about: "Sobre",
       language: "Idioma",
+      login: "Entrar",
+      createAccount: "Criar conta grátis",
     },
     footer: {
       copyrightLabel: "© {year} prevIA",
@@ -100,7 +111,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
       trustBar: [
         "Odds, probabilidade e value",
         "Leitura clara em pt, en e es",
-        "Base pública pronta para aquisição",
+        "Acesso simples para começar a explorar",
       ],
       audience: {
         eyebrow: "Para quem é",
@@ -117,9 +128,14 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Tipster ou criador de conteúdo",
-            body: "Precisa de uma camada mais técnica para apoiar análise, comunicação e rotina operacional.",
+            body: "Precisa de mais clareza, consistência e contexto para apoiar análise, comunicação e rotina de trabalho.",
           },
         ],
+      },
+      freeAnonEmbed: {
+        eyebrow: "Teste grátis",
+        title: "Faça 3 consultas grátis por dia",
+        body: "Veja jogos, compare odds e entenda a leitura do mercado. Use hoje e volte amanhã para mais 3 consultas grátis.",
       },
       preview: {
         eyebrow: "O que você vai encontrar",
@@ -138,15 +154,15 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Profundidade analítica",
-            body: "Área pensada para comparações, leitura mais técnica e apoio a decisões com mais critério.",
-            badge: "Camada analítica do app",
+            body: "Área pensada para comparações, leitura mais completa e apoio a decisões com mais critério.",
+            badge: "Comparação e contexto",
           },
         ],
       },
       howItWorks: {
         eyebrow: "Como funciona",
-        title: "A jornada pública já nasce simples, útil e preparada para conversão.",
-        body: "Sem excesso de explicação: conteúdo para entender o produto, captar interesse e preparar a entrada no app.",
+        title: "Uma jornada simples para entender a proposta e começar com clareza.",
+        body: "Sem excesso de explicação: conteúdo para conhecer o prevIA, entender a proposta e decidir se faz sentido para você.",
         steps: [
           {
             step: "01",
@@ -175,19 +191,22 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     glossary: {
       title: "Glossário",
-      body: "Hub multilíngue do universo de bets, odds, mercados, probabilidade e gestão de banca.",
-      boxTitle: "Base pronta para expansão",
-      boxBody: "Nesta etapa estamos criando a fundação da rota, layout e estrutura pública. Os termos e categorias entram na próxima fase.",
+      body: "Um espaço multilíngue para entender melhor conceitos de odds, mercados, probabilidade e gestão de banca.",
+      boxTitle: "Em evolução",
+      boxBody: "O glossário será ampliado aos poucos com novos termos, categorias e explicações para ajudar cada vez mais na leitura do mercado.",
     },
   },
 
   en: {
     nav: {
       home: "Home",
+      testFree: "Free trial",
       howItWorks: "How it works",
       glossary: "Glossary",
       about: "About",
       language: "Language",
+      login: "Sign in",
+      createAccount: "Create free account",
     },
     footer: {
       copyrightLabel: "© {year} prevIA",
@@ -211,7 +230,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
       trustBar: [
         "Odds, probability, and value",
         "Clear reading in pt, en, and es",
-        "Public layer ready for acquisition",
+        "Simple access to start exploring",
       ],
       audience: {
         eyebrow: "Who it is for",
@@ -228,9 +247,14 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Tipster or content creator",
-            body: "Needs a more technical layer to support analysis, communication, and workflow.",
+            body: "Needs more clarity, consistency, and context to support analysis, communication, and workflow.",
           },
         ],
+      },
+      freeAnonEmbed: {
+        eyebrow: "Free trial",
+        title: "Get 3 free checks per day",
+        body: "Browse matches, compare odds, and understand the market reading. Use it today and come back tomorrow for 3 more free checks.",
       },
       preview: {
         eyebrow: "What you will find",
@@ -249,8 +273,8 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Analytical depth",
-            body: "An area designed for comparisons, more technical reading, and more disciplined decision support.",
-            badge: "Analytical layer",
+            body: "An area designed for comparisons, deeper reading, and more disciplined decision support.",
+            badge: "Comparison and context",
           },
         ],
       },
@@ -286,19 +310,22 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     glossary: {
       title: "Glossary",
-      body: "Multilingual hub for betting, odds, markets, probability, and bankroll management concepts.",
-      boxTitle: "Foundation ready to scale",
-      boxBody: "At this stage we are creating the route, layout, and public structure. Terms and categories come next.",
+      body: "A multilingual space to better understand odds, markets, probability, and bankroll management concepts.",
+      boxTitle: "Growing over time",
+      boxBody: "The glossary will expand gradually with new terms, categories, and explanations to make market reading easier and clearer.",
     },
   },
 
   es: {
     nav: {
-      home: "Inicio",
+      home: "Home",
+      testFree: "Prueba gratis",
       howItWorks: "Cómo funciona",
       glossary: "Glosario",
-      about: "Sobre", 
+      about: "Sobre",
       language: "Idioma",
+      login: "Entrar",
+      createAccount: "Crear cuenta gratis",
     },
     footer: {
       copyrightLabel: "© {year} prevIA",
@@ -322,7 +349,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
       trustBar: [
         "Cuotas, probabilidad y value",
         "Lectura clara en pt, en y es",
-        "Capa pública lista para adquisición",
+        "Acceso simple para empezar a explorar",
       ],
       audience: {
         eyebrow: "Para quién es",
@@ -339,9 +366,14 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Tipster o creador de contenido",
-            body: "Necesita una capa más técnica para apoyar análisis, comunicación y rutina operativa.",
+            body: "Necesita más claridad, consistencia y contexto para apoyar su análisis, su comunicación y su rutina de trabajo.",
           },
         ],
+      },
+      freeAnonEmbed: {
+        eyebrow: "Prueba gratis",
+        title: "Haz 3 consultas gratis por día",
+        body: "Mira partidos, compara cuotas y entiende la lectura del mercado. Úsalo hoy y vuelve mañana para 3 consultas gratis más.",
       },
       preview: {
         eyebrow: "Qué vas a encontrar",
@@ -360,15 +392,15 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
           },
           {
             title: "Profundidad analítica",
-            body: "Área pensada para comparaciones, lectura más técnica y apoyo a decisiones con más criterio.",
-            badge: "Capa analítica del producto",
+            body: "Un espacio pensado para comparaciones, una lectura más completa y apoyo a decisiones con más criterio.",
+            badge: "Comparación y contexto",
           },
         ],
       },
       howItWorks: {
         eyebrow: "Cómo funciona",
-        title: "La jornada pública ya nace simple, útil y preparada para convertir.",
-        body: "Sin exceso de explicación: solo la estructura necesaria para explicar el producto, captar interés y preparar la entrada a la app.",
+        title: "Un recorrido simple para entender la propuesta y empezar con claridad.",
+        body: "Sin exceso de explicación: contenido suficiente para conocer prevIA, entender su valor y decidir si encaja contigo.",
         steps: [
           {
             step: "01",
@@ -397,9 +429,9 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     glossary: {
       title: "Glosario",
-      body: "Hub multilingüe sobre apuestas, cuotas, mercados, probabilidad y gestión de banca.",
-      boxTitle: "Base lista para crecer",
-      boxBody: "En esta etapa estamos creando la base de la ruta, el layout y la estructura pública. Los términos y categorías llegan después.",
+      body: "Un espacio multilingüe para entender mejor conceptos de cuotas, mercados, probabilidad y gestión de banca.",
+      boxTitle: "En evolución",
+      boxBody: "El glosario irá creciendo poco a poco con nuevos términos, categorías y explicaciones para facilitar la lectura del mercado.",
     },
   },
 };

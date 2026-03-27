@@ -7,6 +7,7 @@ import { coercePublicLang, isPublicLang, replaceUrlLang } from "../lib/publicLan
 import "../public.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
+import { ProductAuthModal } from "../../product/auth/ProductAuthModal";
 
 const PUBLIC_FOOTER_COPY = {
   pt: {
@@ -80,6 +81,61 @@ export function PublicLayout() {
 
   const footer = PUBLIC_FOOTER_COPY[currentLang];
 
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
+
+  const [authOpen, setAuthOpen] = React.useState(false);
+  const [authInitialMode, setAuthInitialMode] = React.useState<
+    "signup" | "login" | "forgot" | "reset"
+  >("signup");
+
+  const navItems = [
+    {
+      key: "how-it-works",
+      to: `/${currentLang}/how-it-works`,
+      label: copy.nav.howItWorks,
+    },
+    {
+      key: "glossary",
+      to: `/${currentLang}/glossary`,
+      label: copy.nav.glossary,
+    },
+    {
+      key: "about",
+      to: `/${currentLang}/about`,
+      label: copy.nav.about,
+    },
+  ] as const;
+
+  React.useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [location.pathname, location.search, location.hash]);
+
+  React.useEffect(() => {
+    if (!isMobileMenuOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileMenuOpen]);
+
+  function openAuthModal(mode: "signup" | "login") {
+    setAuthInitialMode(mode);
+    setIsMobileMenuOpen(false);
+    setAuthOpen(true);
+  }
+
   return (
     <div className="public-shell">
       <header className="public-header">
@@ -87,54 +143,135 @@ export function PublicLayout() {
           <NavLink to={`/${currentLang}`} className="public-brand" aria-label="prevIA home">
             <BrandLogo />
           </NavLink>
+            <nav className="public-nav" aria-label="Public navigation">
+              <Link
+                to={`/${currentLang}#teste-gratis`}
+                className="public-nav-link public-nav-link-highlight"
+              >
+                {copy.nav.testFree}
+              </Link>
 
-          <nav className="public-nav" aria-label="Public navigation">
-            <NavLink
-              to={`/${currentLang}`}
-              end
-              className={({ isActive }) => `public-nav-link ${isActive ? "active" : ""}`}
-            >
-              {copy.nav.home}
-            </NavLink>
+              {navItems.map((item) => (
+                <NavLink
+                  key={item.key}
+                  to={item.to}
+                  className={({ isActive }) => `public-nav-link ${isActive ? "active" : ""}`}
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
 
-            <NavLink
-              to={`/${currentLang}/how-it-works`}
-              className={({ isActive }) => `public-nav-link ${isActive ? "active" : ""}`}
-            >
-              {copy.nav.howItWorks}
-            </NavLink>
+            <div className="public-header-right">
+              <LanguageDropdown
+                value={currentLang}
+                ariaLabel={copy.nav.language}
+                menuAlign="right"
+                onChange={(nextLang) => {
+                  navigate({
+                    pathname: replaceUrlLang(location.pathname, nextLang),
+                    search: location.search,
+                    hash: location.hash,
+                  });
+                }}
+              />
 
-            <NavLink
-              to={`/${currentLang}/glossary`}
-              className={({ isActive }) => `public-nav-link ${isActive ? "active" : ""}`}
-            >
-              {copy.nav.glossary}
-            </NavLink>
+              <button
+                type="button"
+                className={`public-menu-btn ${isMobileMenuOpen ? "open" : ""}`}
+                aria-label="Toggle navigation menu"
+                aria-expanded={isMobileMenuOpen}
+                aria-controls="public-mobile-nav"
+                onClick={() => setIsMobileMenuOpen((current) => !current)}
+              >
+                <span className="public-menu-btn-bar" />
+                <span className="public-menu-btn-bar" />
+                <span className="public-menu-btn-bar" />
+              </button>
 
-            <NavLink
-              to={`/${currentLang}/about`}
-              className={({ isActive }) => `public-nav-link ${isActive ? "active" : ""}`}
-            >
-              {copy.nav.about}
-            </NavLink>
-          </nav>
+            <div className="public-header-auth">
+              <button
+                type="button"
+                className="public-btn public-btn-secondary public-header-auth-btn"
+                onClick={() => openAuthModal("login")}
+              >
+                {copy.nav.login}
+              </button>
 
-          <div className="public-header-right">
-            <LanguageDropdown
-              value={currentLang}
-              ariaLabel={copy.nav.language}
-              menuAlign="right"
-              onChange={(nextLang) => {
-                navigate({
-                  pathname: replaceUrlLang(location.pathname, nextLang),
-                  search: location.search,
-                  hash: location.hash,
-                });
-              }}
-            />
+              <button
+                type="button"
+                className="public-btn public-btn-primary public-header-auth-btn"
+                onClick={() => openAuthModal("signup")}
+              >
+                {copy.nav.createAccount}
+              </button>
+            </div>
           </div>
         </div>
+
       </header>
+
+      {isMobileMenuOpen ? (
+        <>
+          <button
+            type="button"
+            className="public-mobile-nav-backdrop"
+            aria-label="Close navigation menu"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+
+          <div id="public-mobile-nav" className="public-mobile-nav-panel">
+            <nav className="public-mobile-nav-list" aria-label="Public navigation mobile">
+              <Link
+                to={`/${currentLang}#teste-gratis`}
+                className="public-mobile-nav-link active"
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                {copy.nav.testFree}
+              </Link>
+
+              {navItems.map((item) => (
+                <NavLink
+                  key={item.key}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `public-mobile-nav-link ${isActive ? "active" : ""}`
+                  }
+                  onClick={() => setIsMobileMenuOpen(false)}
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+
+              <Link
+                to={`/${currentLang}/contact`}
+                className="public-mobile-nav-link"
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                {footer.links.contact}
+              </Link>
+
+              <div className="public-mobile-nav-auth">
+                <button
+                  type="button"
+                  className="public-mobile-nav-link public-mobile-nav-link-secondary"
+                  onClick={() => openAuthModal("login")}
+                >
+                  {copy.nav.login}
+                </button>
+
+                <button
+                  type="button"
+                  className="public-mobile-nav-link public-mobile-nav-link-primary"
+                  onClick={() => openAuthModal("signup")}
+                >
+                  {copy.nav.createAccount}
+                </button>
+              </div>
+            </nav>
+          </div>
+        </>
+      ) : null}
 
       <main className="public-main">
         <Outlet />
@@ -197,6 +334,16 @@ export function PublicLayout() {
           </div>
         </div>
       </footer>
+      <ProductAuthModal
+        open={authOpen}
+        lang={currentLang as Lang}
+        initialMode={authInitialMode}
+        onClose={() => setAuthOpen(false)}
+        onAuthSuccess={async () => {
+          setAuthOpen(false);
+          navigate("/app");
+        }}
+      />
     </div>
   );
 }

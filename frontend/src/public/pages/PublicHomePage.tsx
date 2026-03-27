@@ -9,6 +9,8 @@ import { BetaLeadForm } from "../components/BetaLeadForm";
 import previewMainImg from "../assets/previews/landing-main.png";
 import previewMarketImg from "../assets/previews/landing-market.png";
 import previewAnalyticsImg from "../assets/previews/landing-analytics.png";
+import { PublicFreeAnonEmbed } from "../../product/components/PublicFreeAnonEmbed";
+import { ENABLE_PUBLIC_FREE_ANON_EMBED } from "../../config";
 
 import { usePublicSeo } from "../lib/publicSeo";
 
@@ -92,6 +94,17 @@ export function PublicHomePage() {
           </aside>
         </div>
       </section>
+
+      {ENABLE_PUBLIC_FREE_ANON_EMBED ? (
+        <div id="teste-gratis">
+          <PublicFreeAnonEmbed
+            lang={currentLang}
+            eyebrow={copy.home.freeAnonEmbed.eyebrow}
+            title={copy.home.freeAnonEmbed.title}
+            body={copy.home.freeAnonEmbed.body}
+          />
+        </div>
+      ) : null}
 
       <section className="landing-section">
         <div className="landing-section-head compact">
