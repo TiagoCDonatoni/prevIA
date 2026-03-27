@@ -17,6 +17,14 @@ import type {
   ProductOddsEventsResponse,
   ProductOddsQuoteRequest,
   ProductOddsQuoteResponse,
+  AdminOpsJobResponse,
+  ProductLeaguesResponse,
+  TeamResolutionPendingResponse,
+  TeamSearchResponse,
+  TeamResolutionApproveRequest,
+  TeamResolutionApproveResponse,
+  AdminOddsTotalsResponse,
+  AdminOddsBttsResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -273,23 +281,70 @@ export async function getOddsQueueIntel(params: {
   return fetchJson<OddsIntelResponse>(url.toString());
 }
 
+export async function getAdminOddsTotals(params: {
+  sport_key?: string | null;
+  hours_ahead?: number;
+  limit?: number;
+}): Promise<AdminOddsTotalsResponse> {
+  const qs = new URLSearchParams();
+
+  if (params.sport_key) qs.set("sport_key", params.sport_key);
+  if (params.hours_ahead != null) qs.set("hours_ahead", String(params.hours_ahead));
+  if (params.limit != null) qs.set("limit", String(params.limit));
+
+  const url = new URL("/admin/odds/markets/totals", API_BASE_URL);
+  url.search = qs.toString();
+
+  return fetchJson<AdminOddsTotalsResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function getAdminOddsBtts(params: {
+  sport_key?: string | null;
+  hours_ahead?: number;
+  limit?: number;
+}): Promise<AdminOddsBttsResponse> {
+  const qs = new URLSearchParams();
+
+  if (params.sport_key) qs.set("sport_key", params.sport_key);
+  if (params.hours_ahead != null) qs.set("hours_ahead", String(params.hours_ahead));
+  if (params.limit != null) qs.set("limit", String(params.limit));
+
+  const url = new URL("/admin/odds/markets/btts", API_BASE_URL);
+  url.search = qs.toString();
+
+  return fetchJson<AdminOddsBttsResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
 export async function adminOddsRefreshAndResolve(params: {
   sport_key: string;
   regions: string;
   hours_ahead: number;
-  assume_league_id: number;
-  assume_season: number;
-  tol_hours: number;
+  assume_league_id: number | null;
+  assume_season: number | null;
+  tol_hours: number | null;
   limit: number;
 }): Promise<AdminOddsRefreshAndResolveResponse> {
   const qs = new URLSearchParams();
   qs.set("sport_key", params.sport_key);
   qs.set("regions", params.regions);
   qs.set("hours_ahead", String(params.hours_ahead));
-  qs.set("assume_league_id", String(params.assume_league_id));
-  qs.set("assume_season", String(params.assume_season));
-  qs.set("tol_hours", String(params.tol_hours));
   qs.set("limit", String(params.limit));
+
+  if (params.assume_league_id != null) {
+    qs.set("assume_league_id", String(params.assume_league_id));
+  }
+
+  if (params.assume_season != null) {
+    qs.set("assume_season", String(params.assume_season));
+  }
+
+  if (params.tol_hours != null) {
+    qs.set("tol_hours", String(params.tol_hours));
+  }
 
   const url = new URL("/admin/odds/refresh_and_resolve", API_BASE_URL);
   url.search = qs.toString();
@@ -297,6 +352,98 @@ export async function adminOddsRefreshAndResolve(params: {
   return fetchJson<AdminOddsRefreshAndResolveResponse>(url.toString(), {
     method: "POST",
     headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsPipelineRunAll(params?: {
+  only_sport_key?: string | null;
+}): Promise<AdminOpsJobResponse> {
+  const url = new URL("/admin/ops/pipeline/run_all", API_BASE_URL);
+
+  if (params?.only_sport_key) {
+    url.searchParams.set("only_sport_key", params.only_sport_key);
+  }
+
+  return fetchJson<AdminOpsJobResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsPipelineRun(params?: {
+  only_sport_key?: string | null;
+}): Promise<AdminOpsJobResponse> {
+  const url = new URL("/admin/ops/pipeline/run", API_BASE_URL);
+
+  if (params?.only_sport_key) {
+    url.searchParams.set("only_sport_key", params.only_sport_key);
+  }
+
+  return fetchJson<AdminOpsJobResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminTeamResolutionPending(params?: {
+  sport_key?: string | null;
+  limit?: number;
+}): Promise<TeamResolutionPendingResponse> {
+  const url = new URL("/admin/odds/team_resolution/pending", API_BASE_URL);
+
+  if (params?.sport_key) {
+    url.searchParams.set("sport_key", params.sport_key);
+  }
+  if (params?.limit != null) {
+    url.searchParams.set("limit", String(params.limit));
+  }
+
+  return fetchJson<TeamResolutionPendingResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminTeamResolutionSearchTeams(
+  q: string,
+  limit = 20
+): Promise<TeamSearchResponse> {
+  const url = new URL("/admin/odds/team_resolution/search_teams", API_BASE_URL);
+  url.searchParams.set("q", q);
+  url.searchParams.set("limit", String(limit));
+
+  return fetchJson<TeamSearchResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminTeamResolutionApprove(
+  body: TeamResolutionApproveRequest
+): Promise<TeamResolutionApproveResponse> {
+  const url = new URL("/admin/odds/team_resolution/approve", API_BASE_URL);
+
+  return fetchJson<TeamResolutionApproveResponse>(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminTeamResolutionDismiss(body: {
+  sport_key: string;
+  raw_name: string;
+}): Promise<{ ok: boolean; removed_from_queue: number }> {
+  const url = new URL("/admin/odds/team_resolution/dismiss", API_BASE_URL);
+
+  return fetchJson<{ ok: boolean; removed_from_queue: number }>(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 }
 
@@ -316,8 +463,6 @@ export async function listTeamsByLeagueSeason(leagueId: number, season: number, 
   return data.teams;
 }
 
-import type { ProductOddsEventsResponse, ProductOddsQuoteRequest, ProductOddsQuoteResponse } from "./contracts";
-
 export async function productListOddsEvents(params: {
   sport_key: string;
   hours_ahead?: number;
@@ -335,9 +480,14 @@ export async function productListOddsEvents(params: {
   if (params.assume_season != null) qs.set("assume_season", String(params.assume_season));
   if (params.artifact_filename) qs.set("artifact_filename", params.artifact_filename);
 
-  const url = new URL("/odds/events", API_BASE_URL);
+  const url = new URL("/product/index", API_BASE_URL);
   url.search = qs.toString();
   return fetchJson<ProductOddsEventsResponse>(url.toString(), { headers: { Accept: "application/json" } });
+}
+
+export async function productListLeagues(): Promise<ProductLeaguesResponse> {
+  const url = new URL("/product/leagues", API_BASE_URL);
+  return fetchJson<ProductLeaguesResponse>(url.toString(), { headers: { Accept: "application/json" } });
 }
 
 export async function productQuoteOdds(req: ProductOddsQuoteRequest): Promise<ProductOddsQuoteResponse> {
@@ -349,3 +499,73 @@ export async function productQuoteOdds(req: ProductOddsQuoteRequest): Promise<Pr
   });
 }
 
+export async function adminOpsListLeagues(): Promise<{
+  ok: boolean;
+  items: Array<{
+    sport_key: string;
+    sport_title: string | null;
+    sport_group: string | null;
+    league_id: number;
+    season_policy: "current" | "fixed";
+    fixed_season: number | null;
+    regions: string | null;
+    hours_ahead: number | null;
+    tol_hours: number | null;
+    enabled: boolean;
+    computed_status: "approved" | "incomplete" | "pending" | "disabled";
+    mapping_status: string | null;
+    confidence: number | null;
+    notes: string | null;
+    updated_at_utc: string | null;
+  }>;
+  count: number;
+}> {
+  const url = new URL("/admin/ops/leagues", API_BASE_URL);
+
+  return fetchJson(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsToggleLeague(params: {
+  sport_key: string;
+  enabled: boolean;
+}): Promise<{ ok: boolean; sport_key: string; enabled: boolean }> {
+  const url = new URL("/admin/ops/leagues/toggle", API_BASE_URL);
+  url.searchParams.set("sport_key", params.sport_key);
+  url.searchParams.set("enabled", String(params.enabled));
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsAutoResolveLeagues(params?: {
+  only_unresolved?: boolean;
+}): Promise<{
+  ok: boolean;
+  count: number;
+  resolved_count: number;
+  already_resolved_count: number;
+  failed_count: number;
+  items: Array<{
+    ok: boolean;
+    sport_key: string;
+    league_id?: number;
+    reason: string;
+    confidence?: number;
+    notes?: string;
+  }>;
+}> {
+  const url = new URL("/admin/ops/leagues/auto_resolve", API_BASE_URL);
+  url.searchParams.set(
+    "only_unresolved",
+    String(params?.only_unresolved ?? true)
+  );
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}

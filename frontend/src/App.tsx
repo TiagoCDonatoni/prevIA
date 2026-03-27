@@ -6,8 +6,11 @@ import Dashboard from "./views/Dashboard";
 import MatchupLab from "./views/MatchupLab";
 import TeamExplorer from "./views/TeamExplorer";
 import OddsIntel from "./views/OddsIntel";
+import OddsMarketTotals from "./views/OddsMarketTotals";
+import OddsMarketBtts from "./views/OddsMarketBtts";
+import AdminLeagues from "./views/AdminLeagues";
 
-type Page = "dashboard" | "matchup" | "team" | "odds";
+type Page = "dashboard" | "matchup" | "team" | "odds" | "odds_totals" | "odds_btts" | "leagues";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -45,6 +48,27 @@ export default function App() {
           >
             Odds Intel
           </button>
+
+          <button
+            className={`nav-btn ${page === "odds_totals" ? "active" : ""}`}
+            onClick={() => setPage("odds_totals")}
+          >
+            Odds Totais
+          </button>
+
+          <button
+            className={`nav-btn ${page === "odds_btts" ? "active" : ""}`}
+            onClick={() => setPage("odds_btts")}
+          >
+            Odds BTTS
+          </button>
+
+          <button
+            className={`nav-btn ${page === "leagues" ? "active" : ""}`}
+            onClick={() => setPage("leagues")}
+          >
+            Ligas
+          </button>
         </div>
       </div>
 
@@ -53,6 +77,9 @@ export default function App() {
         {page === "matchup" && <MatchupLab />}
         {page === "team" && <TeamExplorer />}
         {page === "odds" && <OddsIntel />}
+        {page === "odds_totals" && <OddsMarketTotals />}
+        {page === "odds_btts" && <OddsMarketBtts />}
+        {page === "leagues" && <AdminLeagues />}
       </div>
     </div>
   );

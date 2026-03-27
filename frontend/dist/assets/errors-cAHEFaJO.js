@@ -1,0 +1,1 @@
+const e="Algo deu errado. Tente novamente.",o="Sem créditos disponíveis hoje.",n="Faça login para continuar.",a="Este jogo ainda não pode ser pareado com confiança.",r={generic:e,noCredits:o,authRequired:n,matchUnreliable:a};export{n as authRequired,r as default,e as generic,a as matchUnreliable,o as noCredits};

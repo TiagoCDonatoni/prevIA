@@ -120,6 +120,61 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
             return {}
     return {}
 
+
+def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not snapshot_payload_obj:
+        return None
+
+    mk = snapshot_payload_obj.get("markets") or {}
+    totals = mk.get("totals") or {}
+    totals_p = totals.get("p_model") or {}
+    totals_odds = totals.get("best_odds") or {}
+    totals_lines = totals.get("lines") or {}
+    totals_25 = totals_lines.get("2.5") or {}
+
+    totals_line = totals.get("main_line")
+    totals_p_over = totals_p.get("over")
+    totals_p_under = totals_p.get("under")
+
+    if totals_line is None and totals_25:
+        totals_line = 2.5
+    if totals_p_over is None:
+        totals_p_over = totals_25.get("over")
+    if totals_p_under is None:
+        totals_p_under = totals_25.get("under")
+
+    btts = mk.get("btts") or {}
+    btts_p = btts.get("p_model") or {}
+    inputs = snapshot_payload_obj.get("inputs") or {}
+
+    snapshot_summary_candidate = {
+        "totals": {
+            "line": totals_line,
+            "p_over": totals_p_over,
+            "p_under": totals_p_under,
+            "best_over": totals_odds.get("over"),
+            "best_under": totals_odds.get("under"),
+        },
+        "btts": {
+            "p_yes": btts_p.get("yes"),
+            "p_no": btts_p.get("no"),
+        },
+        "inputs": {
+            "lambda_home": inputs.get("lambda_home"),
+            "lambda_away": inputs.get("lambda_away"),
+            "lambda_total": inputs.get("lambda_total"),
+        },
+    }
+
+    has_snapshot_data = any(
+        v is not None
+        for group in snapshot_summary_candidate.values()
+        if isinstance(group, dict)
+        for v in group.values()
+    )
+
+    return snapshot_summary_candidate if has_snapshot_data else None
+
 _AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
 
 def _book_key(raw: Optional[str]) -> str:
@@ -485,33 +540,7 @@ def list_odds_events(
             snapshot_summary = None
 
             snapshot_payload_obj = _coerce_payload(snapshot_payload)
-            if snapshot_payload_obj:
-                mk = snapshot_payload_obj.get("markets") or {}
-                totals = mk.get("totals") or {}
-                totals_p = totals.get("p_model") or {}
-                totals_odds = totals.get("best_odds") or {}
-                btts = mk.get("btts") or {}
-                btts_p = btts.get("p_model") or {}
-                inputs = snapshot_payload_obj.get("inputs") or {}
-
-                snapshot_summary = {
-                    "totals": {
-                        "line": totals.get("main_line"),
-                        "p_over": totals_p.get("over"),
-                        "p_under": totals_p.get("under"),
-                        "best_over": totals_odds.get("over"),
-                        "best_under": totals_odds.get("under"),
-                    },
-                    "btts": {
-                        "p_yes": btts_p.get("yes"),
-                        "p_no": btts_p.get("no"),
-                    },
-                    "inputs": {
-                        "lambda_home": inputs.get("lambda_home"),
-                        "lambda_away": inputs.get("lambda_away"),
-                        "lambda_total": inputs.get("lambda_total"),
-                    },
-                }
+            snapshot_summary = _build_snapshot_summary(snapshot_payload_obj)
 
             # Edge summary só se o caller informar liga/temporada/artifact e o evento já tiver ids resolvidos
             if (
@@ -923,32 +952,7 @@ def list_matchups_cards(
 
         # payload pode ser None se ainda não gerou snapshot
         if isinstance(payload, dict):
-            mk = payload.get("markets") or {}
-            totals = mk.get("totals") or {}
-            totals_p = totals.get("p_model") or {}
-            totals_odds = totals.get("best_odds") or {}
-            btts = mk.get("btts") or {}
-            btts_p = btts.get("p_model") or {}
-            inputs = payload.get("inputs") or {}
-
-            summary = {
-                "totals": {
-                    "line": totals.get("main_line"),
-                    "p_over": totals_p.get("over"),
-                    "p_under": totals_p.get("under"),
-                    "best_over": totals_odds.get("over"),
-                    "best_under": totals_odds.get("under"),
-                },
-                "btts": {
-                    "p_yes": btts_p.get("yes"),
-                    "p_no": btts_p.get("no"),
-                },
-                "inputs": {
-                    "lambda_home": inputs.get("lambda_home"),
-                    "lambda_away": inputs.get("lambda_away"),
-                    "lambda_total": inputs.get("lambda_total"),
-                },
-            }
+            summary = _build_snapshot_summary(payload)
 
         items.append(
             {

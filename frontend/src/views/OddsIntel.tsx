@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { getOddsQueueIntel, adminOddsRefreshAndResolve } from "../api/client";
-import type { OddsIntelItem, OddsIntelResponse } from "../api/contracts";
+import {
+  getOddsQueueIntel,
+  adminOddsRefreshAndResolve,
+  adminOpsPipelineRun,
+  adminOpsPipelineRunAll,
+  adminTeamResolutionPending,
+  adminTeamResolutionSearchTeams,
+  adminTeamResolutionApprove,
+  adminTeamResolutionDismiss,
+} from "../api/client";
+import type {
+  OddsIntelItem,
+  OddsIntelResponse,
+  TeamResolutionPendingItem,
+  TeamSearchItem,
+} from "../api/contracts";
 import { Card } from "../ui/Card";
 import { Kpi } from "../ui/Kpi";
 
@@ -15,20 +29,75 @@ function pct(n: number | null | undefined) {
 }
 
 function isoShort(iso: string) {
-  // mantém simples, sem libs
-  // exemplo: 2026-01-17T15:00:00Z -> 2026-01-17 15:00Z
   return iso.replace("T", " ").replace(":00Z", "Z");
 }
 
+function readUnifiedSummary(raw: any) {
+  const result = raw?.result ?? null;
+  const summary = result?.summary ?? null;
+
+  if (summary) {
+    return {
+      leaguesProcessed: summary.leagues_processed ?? summary.leagues_requested ?? 0,
+      fixturesUpdated: summary.fixtures_updated ?? 0,
+      statsInserted: summary.stats_inserted ?? 0,
+      oddsRefreshRuns: summary.odds_refresh_runs ?? 0,
+      eventsResolved: summary.events_resolved ?? 0,
+      snapshotsUpserted: summary.snapshots_upserted ?? 0,
+      fallbacks: summary.fallbacks ?? 0,
+      errors: summary.errors ?? 0,
+    };
+  }
+
+  const items = raw?.counters?.items ?? raw?.items ?? [];
+
+  if (Array.isArray(items) && items.length > 0) {
+    return items.reduce(
+      (acc: any, item: any) => {
+        acc.leaguesProcessed += 1;
+        acc.fixturesUpdated += Number(item?.refresh?.counters?.events_upserted ?? 0);
+        acc.statsInserted += Number(item?.models?.trained_count ?? 0);
+        acc.oddsRefreshRuns += item?.refresh?.ok ? 1 : 0;
+        acc.eventsResolved += Number(item?.resolve?.counters?.exact ?? 0);
+        acc.snapshotsUpserted += Number(item?.snapshots?.counters?.snapshots_upserted ?? 0);
+        acc.fallbacks += Number(item?.snapshots?.counters?.snapshots_team_fallback ?? 0);
+        acc.errors += Number(item?.resolve?.counters?.errors ?? 0);
+        return acc;
+      },
+      {
+        leaguesProcessed: 0,
+        fixturesUpdated: 0,
+        statsInserted: 0,
+        oddsRefreshRuns: 0,
+        eventsResolved: 0,
+        snapshotsUpserted: 0,
+        fallbacks: 0,
+        errors: 0,
+      }
+    );
+  }
+
+  return {
+    leaguesProcessed: 0,
+    fixturesUpdated: 0,
+    statsInserted: 0,
+    oddsRefreshRuns: 0,
+    eventsResolved: 0,
+    snapshotsUpserted: 0,
+    fallbacks: 0,
+    errors: 0,
+  };
+}
+
 export default function OddsIntel() {
-  // defaults alinhados com seu teste atual
   const [sportKey, setSportKey] = useState("soccer_epl");
-  const [hoursAhead, setHoursAhead] = useState(72);
+  const [hoursAhead, setHoursAhead] = useState(720);
   const [limit, setLimit] = useState(50);
   const [minConfidence, setMinConfidence] = useState<"EXACT" | "ILIKE" | "FUZZY" | "NONE">("NONE");
 
-  // Ops (refresh + resolve)
   const [regions, setRegions] = useState("eu");
+  const [opsUseAllowlist, setOpsUseAllowlist] = useState(true);
+
   const [assumeLeagueId, setAssumeLeagueId] = useState(39);
   const [assumeSeason, setAssumeSeason] = useState(2025);
   const [tolHours, setTolHours] = useState(6);
@@ -38,12 +107,35 @@ export default function OddsIntel() {
   const [opsErr, setOpsErr] = useState<string | null>(null);
   const [opsOut, setOpsOut] = useState<any>(null);
 
-  const [sort, setSort] = useState("best_ev"); // best_ev | ev_h | ev_d | ev_a
+  const [sort, setSort] = useState("best_ev");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
 
   const [data, setData] = useState<OddsIntelResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const [runAllLoading, setRunAllLoading] = useState(false);
+  const [runAllErr, setRunAllErr] = useState<string | null>(null);
+  const [runAllOut, setRunAllOut] = useState<any>(null);
+  const [runAllPct, setRunAllPct] = useState(0);
+  const [runAllStepLabel, setRunAllStepLabel] = useState("Aguardando execução");
+
+  const [pipelineLoading, setPipelineLoading] = useState(false);
+  const [pipelineErr, setPipelineErr] = useState<string | null>(null);
+  const [pipelineOut, setPipelineOut] = useState<any>(null);
+  const [showLegacyDebug, setShowLegacyDebug] = useState(false);
+
+  const [teamPendingLoading, setTeamPendingLoading] = useState(false);
+  const [teamPendingErr, setTeamPendingErr] = useState<string | null>(null);
+  const [teamPending, setTeamPending] = useState<TeamResolutionPendingItem[]>([]);
+
+  const [teamSearchLoading, setTeamSearchLoading] = useState(false);
+  const [teamSearchErr, setTeamSearchErr] = useState<string | null>(null);
+  const [teamSearchResults, setTeamSearchResults] = useState<Record<string, TeamSearchItem[]>>({});
+  const [teamSearchText, setTeamSearchText] = useState<Record<string, string>>({});
+  const [teamApproveLoadingKey, setTeamApproveLoadingKey] = useState<string | null>(null);
+
+  const makePendingKey = (it: TeamResolutionPendingItem) => `${it.sport_key || ""}__${it.raw_name || ""}`;
 
   const runOps = async () => {
     setOpsLoading(true);
@@ -53,14 +145,14 @@ export default function OddsIntel() {
         sport_key: sportKey,
         regions,
         hours_ahead: hoursAhead,
-        assume_league_id: assumeLeagueId,
-        assume_season: assumeSeason,
-        tol_hours: tolHours,
+        assume_league_id: opsUseAllowlist ? null : assumeLeagueId,
+        assume_season: opsUseAllowlist ? null : assumeSeason,
+        tol_hours: opsUseAllowlist ? null : tolHours,
         limit: opsLimit,
       });
       setOpsOut(out);
-      // depois de rodar ops, já atualiza a tela intel
       await refresh();
+      await refreshTeamPending();
     } catch (e: any) {
       setOpsOut(null);
       setOpsErr(String(e?.message || e));
@@ -69,6 +161,97 @@ export default function OddsIntel() {
     }
   };
 
+  const runAll = async () => {
+    setRunAllLoading(true);
+    setRunAllErr(null);
+    setRunAllOut(null);
+    setRunAllPct(3);
+    setRunAllStepLabel("Preparando atualização");
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    try {
+      timer = setInterval(() => {
+        setRunAllPct((prev) => {
+          if (prev >= 90) {
+            setRunAllStepLabel("Processando no backend…");
+            return prev;
+          }
+          if (prev < 15) return Math.min(prev + 6, 90);
+          if (prev < 35) return Math.min(prev + 5, 90);
+          if (prev < 60) return Math.min(prev + 4, 90);
+          return Math.min(prev + 2, 90);
+        });
+      }, 450);
+
+      setRunAllStepLabel("Atualizando ligas autorizadas");
+
+      const out = await adminOpsPipelineRun({});
+
+      setRunAllStepLabel("Consolidando resultado");
+      setRunAllPct(100);
+      setRunAllOut(out);
+
+      await refresh();
+      await refreshTeamPending();
+    } catch (e: any) {
+      setRunAllOut(null);
+      setRunAllErr(String(e?.message || e));
+      setRunAllStepLabel("Falha");
+      setRunAllPct(100);
+    } finally {
+      if (timer) clearInterval(timer);
+      setRunAllLoading(false);
+    }
+  };
+
+  const runUnifiedPipeline = async () => {
+    setPipelineLoading(true);
+    setPipelineErr(null);
+    setPipelineOut(null);
+    setPipelinePct(3);
+    setPipelineStepLabel("Preparando atualização");
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    try {
+      timer = setInterval(() => {
+        setPipelinePct((prev) => {
+          setRunAllPct((prev) => {
+            if (prev >= 90) {
+              setRunAllStepLabel("Processando no backend…");
+              return prev;
+            }
+            if (prev < 15) return Math.min(prev + 6, 90);
+            if (prev < 35) return Math.min(prev + 5, 90);
+            if (prev < 60) return Math.min(prev + 4, 90);
+            return Math.min(prev + 2, 90);
+          });
+        });
+      }, 450);
+
+      setPipelineStepLabel("Atualizando ligas / fixtures / core");
+
+      const out = await adminOpsPipelineRunAll({
+        only_sport_key: runAllOnlyThisSport ? sportKey : null,
+      });
+
+      setPipelineStepLabel("Consolidando resultado");
+      setPipelinePct(100);
+      setPipelineOut(out);
+
+      await refresh();
+      await refreshTeamPending();
+    } catch (e: any) {
+      setPipelineOut(null);
+      setPipelineErr(String(e?.message || e));
+      setPipelineStepLabel("Falha");
+      setPipelinePct(100);
+    } finally {
+      if (timer) clearInterval(timer);
+      setPipelineLoading(false);
+    }
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -91,11 +274,87 @@ export default function OddsIntel() {
     }
   };
 
+  const refreshTeamPending = async () => {
+    setTeamPendingLoading(true);
+    setTeamPendingErr(null);
+    try {
+      const out = await adminTeamResolutionPending();
+      setTeamPending(out.items || []);
+    } catch (e: any) {
+      setTeamPending([]);
+      setTeamPendingErr(String(e?.message || e));
+    } finally {
+      setTeamPendingLoading(false);
+    }
+  };
+
+  const searchTeams = async (item: TeamResolutionPendingItem) => {
+    const key = makePendingKey(item);
+    const q = (teamSearchText[key] || item.raw_name || "").trim();
+    if (!q || q.length < 2) return;
+
+    setTeamSearchLoading(true);
+    setTeamSearchErr(null);
+    try {
+      const out = await adminTeamResolutionSearchTeams(q);
+      setTeamSearchResults((prev) => ({
+        ...prev,
+        [key]: out.items || [],
+      }));
+    } catch (e: any) {
+      setTeamSearchErr(String(e?.message || e));
+    } finally {
+      setTeamSearchLoading(false);
+    }
+  };
+
+  const approveTeamAlias = async (item: TeamResolutionPendingItem, teamId: number) => {
+    const key = makePendingKey(item);
+    setTeamApproveLoadingKey(key);
+    try {
+      await adminTeamResolutionApprove({
+        sport_key: String(item.sport_key || ""),
+        raw_name: String(item.raw_name || ""),
+        team_id: Number(teamId),
+        normalized_name: item.normalized_name || undefined,
+        confidence: 1.0,
+      });
+
+      await refreshTeamPending();
+      await refresh(); // <- importante: atualiza o Intel também
+    } catch (e: any) {
+      alert(String(e?.message || e));
+    } finally {
+      setTeamApproveLoadingKey(null);
+    }
+  };
+
+  const dismissTeamPending = async (item: TeamResolutionPendingItem) => {
+    const key = makePendingKey(item);
+    setTeamApproveLoadingKey(key);
+    try {
+      await adminTeamResolutionDismiss({
+        sport_key: String(item.sport_key || ""),
+        raw_name: String(item.raw_name || ""),
+      });
+
+      await refreshTeamPending();
+      await refresh(); // mantém a tela inteira consistente
+    } catch (e: any) {
+      alert(String(e?.message || e));
+    } finally {
+      setTeamApproveLoadingKey(null);
+    }
+  };
+
   useEffect(() => {
     void refresh();
-    // auto refresh on filter changes, igual Dashboard
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sportKey, hoursAhead, limit, minConfidence, sort, order]);
+
+  useEffect(() => {
+    void refreshTeamPending();
+  }, []);
 
   const buckets = useMemo(() => {
     const items = data?.items ?? [];
@@ -121,10 +380,8 @@ export default function OddsIntel() {
 
     let overroundSum = 0;
     let overroundCount = 0;
-
     let divergenceSum = 0;
     let divergenceCount = 0;
-
     let topEv: number | null = null;
 
     for (const it of data.items) {
@@ -138,9 +395,7 @@ export default function OddsIntel() {
         const mpModel = (it.model as any).probs_model;
 
         const d =
-          (Math.abs(mp.H - mpModel.H) +
-            Math.abs(mp.D - mpModel.D) +
-            Math.abs(mp.A - mpModel.A)) / 3;
+          (Math.abs(mp.H - mpModel.H) + Math.abs(mp.D - mpModel.D) + Math.abs(mp.A - mpModel.A)) / 3;
 
         divergenceSum += d;
         divergenceCount += 1;
@@ -162,12 +417,118 @@ export default function OddsIntel() {
     };
   }, [data]);
 
+  const pipelineSummary = useMemo(() => {
+    if (!runAllOut) return null;
+    return readUnifiedSummary(runAllOut);
+  }, [runAllOut]);
+
   return (
     <>
       <div className="section-title">Odds Intel</div>
 
-      <Card title="Ops — Atualizar odds agora (refresh + resolve)">
-        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+      <Card title="Fluxo oficial — Atualização do produto (produção)">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button className="btn" onClick={() => void runAll()} disabled={runAllLoading}>
+            {runAllLoading ? "Atualizando ligas autorizadas…" : "Atualizar ligas autorizadas"}
+          </button>
+
+          <div style={{ marginTop: 14 }}>
+            <div className="note" style={{ marginBottom: 6 }}>
+              Etapa atual: <b>{runAllStepLabel}</b>
+            </div>
+
+            <div
+              style={{
+                width: "100%",
+                height: 12,
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.08)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${runAllPct}%`,
+                  height: "100%",
+                  borderRadius: 999,
+                  background: "linear-gradient(90deg, #4f46e5 0%, #22c55e 100%)",
+                  transition: "width 200ms ease",
+                }}
+              />
+            </div>
+
+            <div className="note" style={{ marginTop: 6 }}>
+              {runAllPct}% concluído
+            </div>
+
+            {runAllLoading && runAllPct >= 90 ? (
+              <div className="note" style={{ marginTop: 6 }}>
+                Aguardando finalização do job no backend. As últimas etapas dependem da resposta consolidada.
+              </div>
+            ) : null}
+
+          </div>
+        </div>
+
+          {runAllErr ? (
+            <div className="note" style={{ marginTop: 10 }}>
+              Error: <b>{runAllErr}</b>
+            </div>
+          ) : null}
+
+          {pipelineSummary ? (
+            <div style={{ marginTop: 14 }}>
+              <div className="note">
+                <b>Resumo do update:</b>{" "}
+                ligas processadas <span className="mono">{pipelineSummary.leaguesProcessed}</span>
+                {" • "}
+                fixtures atualizados <span className="mono">{pipelineSummary.fixturesUpdated}</span>
+                {" • "}
+                stats inseridos <span className="mono">{pipelineSummary.statsInserted}</span>
+                {" • "}
+                odds refresh <span className="mono">{pipelineSummary.oddsRefreshRuns}</span>
+                {" • "}
+                eventos resolvidos <span className="mono">{pipelineSummary.eventsResolved}</span>
+                {" • "}
+                snapshots gerados <span className="mono">{pipelineSummary.snapshotsUpserted}</span>
+                {" • "}
+                fallbacks <span className="mono">{pipelineSummary.fallbacks}</span>
+                {" • "}
+                erros <span className="mono">{pipelineSummary.errors}</span>
+              </div>
+
+              {pipelineSummary.errors > 0 ? (
+                <div className="note" style={{ marginTop: 8 }}>
+                  Atenção: houve erros em parte do update. Revise os logs/retorno do job antes de considerar a execução totalmente saudável.
+                </div>
+              ) : (
+                <div className="note" style={{ marginTop: 8 }}>
+                  Update concluído sem erros reportados no resumo agregado.
+                </div>
+              )}
+            </div>
+          ) : (
+          <div className="note" style={{ marginTop: 10 }}>
+            Fluxo oficial de produção: <span className="mono">allowlist approved + enabled → fixtures/core → stats → odds → resolve → snapshots</span>
+          </div>
+        )}
+      </Card>
+
+      <Card title="Ferramentas de suporte / debug">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="note">
+            Os fluxos abaixo não são o caminho oficial de produção. Use apenas para troubleshooting, comparação ou execução manual pontual.
+          </div>
+
+          <button className="btn" onClick={() => setShowLegacyDebug((v) => !v)}>
+            {showLegacyDebug ? "Ocultar debug legado" : "Mostrar debug legado"}
+          </button>
+        </div>
+      </Card>
+
+      {showLegacyDebug ? (
+        <Card title="Debug manual — Liga única (refresh + resolve + rebuild)">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <label className="note">
             regions&nbsp;
             <input
@@ -178,35 +539,48 @@ export default function OddsIntel() {
             />
           </label>
 
-          <label className="note">
-            assume_league_id&nbsp;
+          <label className="note" style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
-              className="input"
-              style={{ width: 90, marginLeft: 6 }}
-              value={assumeLeagueId}
-              onChange={(e) => setAssumeLeagueId(Number(e.target.value || 0))}
+              type="checkbox"
+              checked={opsUseAllowlist}
+              onChange={(e) => setOpsUseAllowlist(e.target.checked)}
             />
+            usar allowlist aprovada
           </label>
 
-          <label className="note">
-            assume_season&nbsp;
-            <input
-              className="input"
-              style={{ width: 90, marginLeft: 6 }}
-              value={assumeSeason}
-              onChange={(e) => setAssumeSeason(Number(e.target.value || 0))}
-            />
-          </label>
+          {!opsUseAllowlist && (
+            <>
+              <label className="note">
+                assume_league_id&nbsp;
+                <input
+                  className="input"
+                  style={{ width: 90, marginLeft: 6 }}
+                  value={assumeLeagueId}
+                  onChange={(e) => setAssumeLeagueId(Number(e.target.value || 0))}
+                />
+              </label>
 
-          <label className="note">
-            tol_hours&nbsp;
-            <input
-              className="input"
-              style={{ width: 80, marginLeft: 6 }}
-              value={tolHours}
-              onChange={(e) => setTolHours(Number(e.target.value || 0))}
-            />
-          </label>
+              <label className="note">
+                assume_season&nbsp;
+                <input
+                  className="input"
+                  style={{ width: 90, marginLeft: 6 }}
+                  value={assumeSeason}
+                  onChange={(e) => setAssumeSeason(Number(e.target.value || 0))}
+                />
+              </label>
+
+              <label className="note">
+                tol_hours&nbsp;
+                <input
+                  className="input"
+                  style={{ width: 80, marginLeft: 6 }}
+                  value={tolHours}
+                  onChange={(e) => setTolHours(Number(e.target.value || 0))}
+                />
+              </label>
+            </>
+          )}
 
           <label className="note">
             limit&nbsp;
@@ -219,7 +593,7 @@ export default function OddsIntel() {
           </label>
 
           <button className="btn" onClick={() => void runOps()} disabled={opsLoading}>
-            {opsLoading ? "Atualizando…" : "Atualizar odds agora"}
+            {opsLoading ? "Rodando debug manual…" : "Executar debug manual"}
           </button>
         </div>
 
@@ -230,15 +604,177 @@ export default function OddsIntel() {
         ) : null}
 
         {opsOut ? (
-          <pre className="mono" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
-{JSON.stringify(opsOut, null, 2)}
-          </pre>
+          <div style={{ marginTop: 10 }}>
+            <pre className="mono" style={{ whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(opsOut, null, 2)}
+            </pre>
+
+            {opsOut?.snapshots ? (
+              <div className="note" style={{ marginTop: 8 }}>
+                snapshots: <span className="mono">rebuilt={opsOut.snapshots?.counters?.matchup_snapshots_rebuilt ?? 0}</span>
+                {" • "}
+                <span className="mono">candidates={opsOut.snapshots?.counters?.matchup_snapshots_candidates ?? 0}</span>
+                {" • "}
+                <span className="mono">error={opsOut.snapshots?.counters?.matchup_snapshots_error ?? 0}</span>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <div className="note" style={{ marginTop: 10 }}>
-            Dica: esse botão executa <span className="mono">refresh</span> (provider→DB) +{" "}
-            <span className="mono">resolve</span> (EXACT/NOT_FOUND…) em sequência.
+            Uso de debug/manual: este botão executa <span className="mono">refresh</span> (provider → odds_events / snapshots),
+            depois <span className="mono">resolve</span> (match com fixtures) e por fim <span className="mono">rebuild incremental</span> dos snapshots do produto para os eventos da janela de uma única liga.
+            Não é o fluxo oficial de produção.
           </div>
         )}
+      </Card>
+    ) : null}
+
+      {showLegacyDebug ? (
+        <Card title="Debug legado — Pipeline unificado alternativo">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <label className="note" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={runAllOnlyThisSport}
+              onChange={(e) => setRunAllOnlyThisSport(e.target.checked)}
+            />
+            rodar apenas <span className="mono">{sportKey}</span>
+          </label>
+
+          <button className="btn" onClick={() => void runUnifiedPipeline()} disabled={pipelineLoading}>
+            {pipelineLoading ? "Rodando pipeline alternativo…" : "Executar pipeline alternativo"}
+          </button>
+        </div>
+
+        {runAllErr ? (
+          <div className="note" style={{ marginTop: 10 }}>
+            Error: <b>{runAllErr}</b>
+          </div>
+        ) : null}
+
+        {pipelineOut ? (
+          <pre className="mono" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(pipelineOut, null, 2)}
+          </pre>
+          ) : (
+          <div className="note" style={{ marginTop: 10 }}>
+            Fluxo alternativo de suporte: executa <span className="mono">/admin/ops/pipeline/run_all</span>.
+            Manter apenas para comparação/debug até consolidarmos um único job oficial no backend.
+          </div>
+        )}
+        </Card>
+      ) : null}
+
+      <Card title="Ops — Correção manual de nomes de times">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button className="btn" onClick={() => void refreshTeamPending()} disabled={teamPendingLoading}>
+            {teamPendingLoading ? "Carregando fila…" : "Atualizar fila de pendências"}
+          </button>
+
+          <div className="note">
+            pendentes: <span className="mono">{teamPending.length}</span>
+          </div>
+        </div>
+
+        {teamPendingErr ? (
+          <div className="note" style={{ marginTop: 10 }}>
+            Error: <b>{teamPendingErr}</b>
+          </div>
+        ) : null}
+
+        {teamSearchErr ? (
+          <div className="note" style={{ marginTop: 10 }}>
+            Search error: <b>{teamSearchErr}</b>
+          </div>
+        ) : null}
+
+        {teamPending.length === 0 ? (
+          <div className="note" style={{ marginTop: 10 }}>
+            Nenhuma pendência de resolução manual no momento.
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, overflowX: "auto" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>sport_key</th>
+                  <th>raw_name</th>
+                  <th>normalized_name</th>
+                  <th>buscar time</th>
+                  <th>candidatos</th>
+                  <th>ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teamPending.map((it) => {
+                  const key = makePendingKey(it);
+                  const results = teamSearchResults[key] || [];
+                  const loadingThis = teamApproveLoadingKey === key;
+
+                  return (
+                    <tr key={key}>
+                      <td className="mono">{it.sport_key || "—"}</td>
+                      <td>{it.raw_name || "—"}</td>
+                      <td className="mono">{it.normalized_name || "—"}</td>
+
+                      <td>
+                        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                          <input
+                            className="input"
+                            style={{ width: 220 }}
+                            value={teamSearchText[key] ?? it.raw_name ?? ""}
+                            onChange={(e) =>
+                              setTeamSearchText((prev) => ({
+                                ...prev,
+                                [key]: e.target.value,
+                              }))
+                            }
+                          />
+                          <button className="btn" onClick={() => void searchTeams(it)} disabled={teamSearchLoading || loadingThis}>
+                            Buscar
+                          </button>
+                        </div>
+                      </td>
+
+                      <td>
+                        {results.length === 0 ? (
+                          <div className="note">—</div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {results.map((r) => (
+                              <div
+                                key={`${key}__${r.team_id}`}
+                                className="note"
+                                style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+                              >
+                                <span className="mono">{r.team_id}</span>
+                                <span>{r.name}</span>
+                                <span className="note">{r.country_name || "—"}</span>
+                                <button className="btn" onClick={() => void approveTeamAlias(it, r.team_id)} disabled={loadingThis}>
+                                  Aprovar
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+
+                      <td>
+                        <button className="btn" onClick={() => void dismissTeamPending(it)} disabled={loadingThis}>
+                          Ignorar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="note" style={{ marginTop: 10 }}>
+          Fluxo V1: buscar o time correto, aprovar alias e rodar novamente o pipeline para reaproveitar a correção.
+        </div>
       </Card>
 
       <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
@@ -346,36 +882,12 @@ export default function OddsIntel() {
 
       {kpis && (
         <div className="row" style={{ gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-          <Kpi
-            title="Coverage OK"
-            value={`${(kpis.coverageOkPct * 100).toFixed(1)}%`}
-            subtitle="jogos com modelo aplicado"
-          />
-          <Kpi
-            title="Missing Team"
-            value={`${(kpis.missingTeamPct * 100).toFixed(1)}%`}
-            subtitle="falha de mapeamento"
-          />
-          <Kpi
-            title="Model Data Missing"
-            value={`${(kpis.modelErrorPct * 100).toFixed(1)}%`}
-            subtitle="sem stats no banco"
-          />
-          <Kpi
-            title="Overround médio"
-            value={kpis.avgOverround != null ? kpis.avgOverround.toFixed(3) : "—"}
-            subtitle="margem do mercado"
-          />
-          <Kpi
-            title="Divergência vs Market"
-            value={kpis.avgDivergence != null ? (kpis.avgDivergence * 100).toFixed(2) + "%" : "—"}
-            subtitle="|modelo − mercado|"
-          />
-          <Kpi
-            title="Top EV"
-            value={kpis.topEv != null ? kpis.topEv.toFixed(3) : "—"}
-            subtitle="melhor oportunidade"
-          />
+          <Kpi title="Coverage OK" value={`${(kpis.coverageOkPct * 100).toFixed(1)}%`} meta="jogos com modelo aplicado" />
+          <Kpi title="Missing Team" value={`${(kpis.missingTeamPct * 100).toFixed(1)}%`} meta="falha de mapeamento" />
+          <Kpi title="Model Data Missing" value={`${(kpis.modelErrorPct * 100).toFixed(1)}%`} meta="sem stats no banco" />
+          <Kpi title="Overround médio" value={kpis.avgOverround != null ? kpis.avgOverround.toFixed(3) : "—"} meta="margem do mercado" />
+          <Kpi title="Divergência vs Market" value={kpis.avgDivergence != null ? (kpis.avgDivergence * 100).toFixed(2) + "%" : "—"} meta="|modelo − mercado|" />
+          <Kpi title="Top EV" value={kpis.topEv != null ? kpis.topEv.toFixed(3) : "—"} meta="melhor oportunidade" />
         </div>
       )}
 
@@ -419,13 +931,9 @@ export default function OddsIntel() {
                       </div>
                     </td>
                     <td className="mono">{it.latest_snapshot?.bookmaker ?? "—"}</td>
-                    <td className="mono">
-                      {odds ? `${fmt(odds.H, 2)} / ${fmt(odds.D, 2)} / ${fmt(odds.A, 2)}` : "—"}
-                    </td>
+                    <td className="mono">{odds ? `${fmt(odds.H, 2)} / ${fmt(odds.D, 2)} / ${fmt(odds.A, 2)}` : "—"}</td>
                     <td className="mono">{mp ? `${pct(mp.H)} / ${pct(mp.D)} / ${pct(mp.A)}` : "—"}</td>
-                    <td className="mono">
-                      {model ? `${pct(model.H)} / ${pct(model.D)} / ${pct(model.A)}` : "—"}
-                    </td>
+                    <td className="mono">{model ? `${pct(model.H)} / ${pct(model.D)} / ${pct(model.A)}` : "—"}</td>
                     <td className="mono">{bestSide ?? "—"}</td>
                     <td className="mono">{bestEv != null ? fmt(bestEv, 3) : "—"}</td>
                     <td className="mono">{it.latest_snapshot?.freshness_seconds ?? "—"}</td>

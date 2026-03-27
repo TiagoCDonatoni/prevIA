@@ -1,0 +1,1 @@
+const e="Algo salió mal. Inténtalo de nuevo.",a="No hay créditos disponibles hoy.",n="Inicia sesión para continuar.",o="Este partido no se puede emparejar con fiabilidad ahora.",i={generic:e,noCredits:a,authRequired:n,matchUnreliable:o};export{n as authRequired,i as default,e as generic,o as matchUnreliable,a as noCredits};

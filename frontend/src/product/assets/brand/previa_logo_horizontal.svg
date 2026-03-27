@@ -1,0 +1,10 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="300" viewBox="0 0 1400 300">
+  <rect width="100%" height="100%" fill="white"/>
+  <text x="100" y="170"
+        font-family="Inter, Arial, Helvetica, sans-serif"
+        font-size="140"
+        fill="#0F172A">
+    prev<tspan fill="#0B2F8A" font-weight="900">IA</tspan>
+  </text>
+</svg>

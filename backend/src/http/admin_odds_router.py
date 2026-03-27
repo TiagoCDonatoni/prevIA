@@ -1143,14 +1143,23 @@ def admin_odds_refresh_and_resolve(
     limit: int = Query(default=200, ge=1, le=2000),
 ) -> AdminOddsRefreshAndResolveResponse:
     try:
+        with pg_conn() as conn:
+            eff_league_id, eff_season, eff_tol, _meta = _effective_league_season_tol(
+                conn,
+                sport_key=sport_key,
+                assume_league_id=assume_league_id,
+                assume_season=assume_season,
+                tol_hours=tol_hours,
+            )
+
         out = run_odds_refresh_and_resolve(
             sport_key=sport_key,
             regions=regions,
             hours_ahead=int(hours_ahead),
             limit=int(limit),
-            assume_league_id=assume_league_id,
-            assume_season=assume_season,
-            tol_hours=tol_hours,
+            assume_league_id=int(eff_league_id),
+            assume_season=int(eff_season),
+            tol_hours=int(eff_tol),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"refresh_and_resolve_failed: {e}")
@@ -3078,6 +3087,25 @@ def admin_odds_market_totals(
               pl.latest_captured_at_utc DESC
           ) AS rn
         FROM per_line pl
+      ),
+      latest_snap_fx AS (
+        SELECT DISTINCT ON (s.fixture_id)
+          s.fixture_id,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.fixture_id IS NOT NULL
+        ORDER BY s.fixture_id
+      ),
+      latest_snap_ev AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.event_id IS NOT NULL
+        ORDER BY
+          s.event_id,
+          (s.fixture_id IS NULL) ASC,
+          s.fixture_id DESC NULLS LAST
       )
       SELECT
         e.event_id,
@@ -3092,13 +3120,15 @@ def admin_odds_market_totals(
         rl.best_under,
         rl.latest_captured_at_utc,
         rl.snapshot_count,
-        s.payload
+        COALESCE(lsfx.payload, lsev.payload) AS payload
       FROM odds.odds_events e
       LEFT JOIN ranked_line rl
         ON rl.event_id = e.event_id
        AND rl.rn = 1
-      LEFT JOIN product.matchup_snapshot_v1 s
-        ON s.event_id = e.event_id
+      LEFT JOIN latest_snap_fx lsfx
+        ON lsfx.fixture_id = e.resolved_fixture_id
+      LEFT JOIN latest_snap_ev lsev
+        ON lsev.event_id = e.event_id
       WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
         AND (
           e.commence_time_utc IS NULL
@@ -3350,6 +3380,25 @@ def admin_odds_market_btts(
           COUNT(*)::int AS snapshot_count
         FROM latest_market lm
         GROUP BY lm.event_id
+      ),
+      latest_snap_fx AS (
+        SELECT DISTINCT ON (s.fixture_id)
+          s.fixture_id,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.fixture_id IS NOT NULL
+        ORDER BY s.fixture_id
+      ),
+      latest_snap_ev AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.event_id IS NOT NULL
+        ORDER BY
+          s.event_id,
+          (s.fixture_id IS NULL) ASC,
+          s.fixture_id DESC NULLS LAST
       )
       SELECT
         e.event_id,
@@ -3363,12 +3412,14 @@ def admin_odds_market_btts(
         pe.best_no,
         pe.latest_captured_at_utc,
         pe.snapshot_count,
-        s.payload
+        COALESCE(lsfx.payload, lsev.payload) AS payload
       FROM odds.odds_events e
       LEFT JOIN per_event pe
         ON pe.event_id = e.event_id
-      LEFT JOIN product.matchup_snapshot_v1 s
-        ON s.event_id = e.event_id
+      LEFT JOIN latest_snap_fx lsfx
+        ON lsfx.fixture_id = e.resolved_fixture_id
+      LEFT JOIN latest_snap_ev lsev
+        ON lsev.event_id = e.event_id
       WHERE ((%(sport_key)s)::text IS NULL OR e.sport_key = (%(sport_key)s)::text)
         AND (
           e.commence_time_utc IS NULL

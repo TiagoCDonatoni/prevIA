@@ -1,0 +1,1 @@
+const e="Something went wrong. Please try again.",t="No credits available today.",a="Please log in to continue.",n="This match can’t be matched reliably right now.",i={generic:e,noCredits:t,authRequired:a,matchUnreliable:n};export{a as authRequired,i as default,e as generic,n as matchUnreliable,t as noCredits};

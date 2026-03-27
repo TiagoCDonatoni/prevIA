@@ -16,6 +16,7 @@ from src.http.odds_router import (
     _fetch_latest_books_for_events,
     _market_probs_from_odds,
     _edge,
+    _build_snapshot_summary,
 )
 
 router = APIRouter(prefix="/product", tags=["product"])
@@ -125,41 +126,7 @@ def product_index(
             inputs = payload.get("inputs") or {}
             markets = payload.get("markets") or {}
             probs_1x2 = ((markets.get("1x2") or {}).get("p_model") or {})
-
-            totals = markets.get("totals") or {}
-            totals_p = totals.get("p_model") or {}
-            totals_odds = totals.get("best_odds") or {}
-
-            btts = markets.get("btts") or {}
-            btts_p = btts.get("p_model") or {}
-
-            snapshot_summary_candidate = {
-                "totals": {
-                    "line": totals.get("main_line"),
-                    "p_over": totals_p.get("over"),
-                    "p_under": totals_p.get("under"),
-                    "best_over": totals_odds.get("over"),
-                    "best_under": totals_odds.get("under"),
-                },
-                "btts": {
-                    "p_yes": btts_p.get("yes"),
-                    "p_no": btts_p.get("no"),
-                },
-                "inputs": {
-                    "lambda_home": inputs.get("lambda_home"),
-                    "lambda_away": inputs.get("lambda_away"),
-                    "lambda_total": inputs.get("lambda_total"),
-                },
-            }
-
-            has_snapshot_data = any(
-                v is not None
-                for group in snapshot_summary_candidate.values()
-                if isinstance(group, dict)
-                for v in group.values()
-            )
-
-            snapshot_summary = snapshot_summary_candidate if has_snapshot_data else None
+            snapshot_summary = _build_snapshot_summary(payload)
 
             has_model = (
                 probs_1x2.get("home") is not None

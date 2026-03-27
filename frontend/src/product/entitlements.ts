@@ -1,6 +1,19 @@
 import type { Lang } from "./i18n";
+import {
+  PRODUCT_DEV_AUTO_LOGIN_EMAIL,
+  PRODUCT_DEV_AUTO_LOGIN_ENABLED,
+  PRODUCT_DEV_AUTO_LOGIN_PLAN,
+} from "../config";
 
 export type PlanId = "FREE_ANON" | "FREE" | "BASIC" | "LIGHT" | "PRO";
+
+export function normalizePlanId(raw: string | null | undefined): PlanId {
+  const v = String(raw ?? "").trim().toUpperCase();
+  if (v === "FREE_ANON" || v === "FREE" || v === "BASIC" || v === "LIGHT" || v === "PRO") {
+    return v;
+  }
+  return "FREE_ANON";
+}
 
 export type Entitlements = {
   plan: PlanId;
@@ -9,7 +22,7 @@ export type Entitlements = {
     daily_limit: number;
     used_today: number;
     remaining_today: number;
-    resets_at_iso: string; // America/Sao_Paulo boundary, computed client-side for now
+    resets_at_iso: string; // UTC boundary, computed client-side for now
   };
   visibility: {
     odds: {
@@ -136,45 +149,29 @@ type PersistedState = {
   credits: { date_key: string; used_today: number; revealed_today: Record<string, true> };
 };
 
-function dateKeySaoPaulo(now = new Date()): string {
-  // Cheap + robust-enough for client MVP: rely on user's machine time.
-  // In production, backend should be source of truth.
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return fmt.format(now); // YYYY-MM-DD
+function dateKeyUtc(now = new Date()): string {
+  // UTC-0 product boundary.
+  // Backend is the source of truth for authenticated users; this keeps local/free flows aligned.
+  return now.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 function nextResetIso(now = new Date()): string {
-  // next midnight in Sao Paulo
-  const tz = "America/Sao_Paulo";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-
-  const get = (t: string) => parts.find((p) => p.type === t)?.value;
-  const y = Number(get("year"));
-  const m = Number(get("month"));
-  const d = Number(get("day"));
-
-  // Construct a Date at Sao Paulo midnight next day by using UTC as carrier.
-  // This is approximate but sufficient for UI countdown label.
-  const next = new Date(Date.UTC(y, m - 1, d + 1, 3, 0, 0));
-  // 03:00 UTC is typically 00:00 in Sao Paulo (ignoring DST; Brazil currently no DST).
+  // next midnight in UTC
+  const next = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1,
+      0,
+      0,
+      0,
+      0
+    )
+  );
   return next.toISOString();
 }
 
-function normalizeLang(raw: string | null | undefined): Lang {
+export function normalizeLang(raw: string | null | undefined): Lang {
   const v = String(raw ?? "").toLowerCase();
 
   // aceita formas completas do navegador tipo "pt-BR", "en-US", "es-419"
@@ -193,38 +190,55 @@ function detectBrowserLang(): Lang {
 
 export function loadProductState(): PersistedState {
   const raw = localStorage.getItem(LS_KEY);
-  const today = dateKeySaoPaulo();
+  const today = dateKeyUtc();
 
-  if (!raw) {
-    return {
-      plan: "FREE_ANON",
-      lang: detectBrowserLang(),
-      auth: { is_logged_in: false, email: null },
-      credits: { date_key: today, used_today: 0, revealed_today: {} },
-    };
-  }
+  const fallback: PersistedState = {
+    plan: "FREE_ANON",
+    lang: detectBrowserLang(),
+    auth: { is_logged_in: false, email: null },
+    credits: { date_key: today, used_today: 0, revealed_today: {} },
+  };
 
-  try {
-    const parsed = JSON.parse(raw) as PersistedState;
+  let state: PersistedState = fallback;
 
-    if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as PersistedState;
 
-    // garante: só pt/en/es; resto vira en
-    parsed.lang = normalizeLang(parsed.lang);
+      if (!parsed.auth) parsed.auth = { is_logged_in: false, email: null };
 
-    if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
-      parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
+      parsed.lang = normalizeLang(parsed.lang);
+      parsed.plan = normalizePlanId(parsed.plan);
+
+      if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
+        parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
+      }
+
+      state = parsed;
+    } catch {
+      state = fallback;
     }
-
-    return parsed;
-  } catch {
-    return {
-      plan: "FREE_ANON",
-      lang: detectBrowserLang(),
-      auth: { is_logged_in: false, email: null },
-      credits: { date_key: today, used_today: 0, revealed_today: {} },
-    };
   }
+
+  // DEV helper: injeta sessão local para acelerar a fase de desenvolvimento.
+  // Não é source of truth final; é só scaffolding até auth backend entrar.
+  if (PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
+    state = {
+      ...state,
+      plan: normalizePlanId(PRODUCT_DEV_AUTO_LOGIN_PLAN),
+      auth: {
+        is_logged_in: true,
+        email: PRODUCT_DEV_AUTO_LOGIN_EMAIL || "dev@previa.local",
+      },
+    };
+
+    // se alguém habilitar dev auto-login mas deixar FREE_ANON, sobe para FREE
+    if (state.plan === "FREE_ANON") {
+      state.plan = "FREE";
+    }
+  }
+
+  return state;
 }
 
 export function saveProductState(state: PersistedState) {

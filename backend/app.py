@@ -10,16 +10,21 @@ from src.http.admin_router import admin_router, admin_odds_router
 
 from src.http.odds_router import router as odds_router
 
+# Public site
+from src.http.public_router import router as public_router
+
 # Odds admin (legado, se ainda existir e for necessário)
 from src.http.admin_odds_router import router as legacy_admin_odds_router
 
 # Backward-compat shim (re-exporta router real)
 from src.http.admin_matchup_router import router as admin_matchup_router
 
-# Novos endpoints (Sprint 1)
+# Novos endpoints
 from src.http.admin_catalog_router import router as admin_catalog_router
 from src.http.product_leagues_router import router as product_leagues_router
 from src.http.product_index_router import router as product_index_router
+from src.http.auth_router import router as auth_router
+from src.http.access_router import router as access_router
 
 # Ops (jobs via botões agora, cron-ready depois)
 from src.http.admin_ops_router import router as admin_ops_router
@@ -27,17 +32,19 @@ from src.http.admin_ops_router import router as admin_ops_router
 
 def create_app() -> FastAPI:
     settings = load_settings()
+
+    if settings.app_env in {"prod", "production"} and settings.admin_dev_bypass_enabled:
+        raise RuntimeError("ADMIN_DEV_BYPASS_ENABLED must be false in production.")
+
+    if settings.app_env in {"prod", "production"} and settings.product_dev_auto_login_enabled:
+        raise RuntimeError("PRODUCT_DEV_AUTO_LOGIN_ENABLED must be false in production.")
+
     api = FastAPI(title="prevIA", version="v0")
 
     api.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-        ],
-        allow_credentials=False,
+        allow_origins=settings.frontend_allowed_origins,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -45,16 +52,18 @@ def create_app() -> FastAPI:
     # Routers
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
+    api.include_router(public_router)
     api.include_router(legacy_admin_odds_router)
     api.include_router(admin_matchup_router)
 
     api.include_router(debug_db_router)
     api.include_router(odds_router)
+    api.include_router(access_router)
 
-    # Sprint 1: catálogo + leagues + ops
     api.include_router(admin_catalog_router)
     api.include_router(product_leagues_router)
     api.include_router(product_index_router)
+    api.include_router(auth_router)
     api.include_router(admin_ops_router)
 
     @api.get("/", response_class=HTMLResponse)
@@ -69,6 +78,13 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "db_path": settings.db_path,
+            "database_url_set": bool(settings.database_url),
+            "app_env": settings.app_env,
+            "frontend_allowed_origins": settings.frontend_allowed_origins,
+            "product_auth_enabled": settings.product_auth_enabled,
+            "admin_auth_enabled": settings.admin_auth_enabled,
+            "product_dev_auto_login_enabled": settings.product_dev_auto_login_enabled,
+            "admin_dev_bypass_enabled": settings.admin_dev_bypass_enabled,
             "apifootball_base_url_set": bool(settings.apifootball_base_url),
             "apifootball_key_set": bool(settings.apifootball_key),
             "the_odds_api_base_url_set": bool(settings.the_odds_api_base_url),
