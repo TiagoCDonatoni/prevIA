@@ -1732,6 +1732,23 @@
   max-width: 100%;
 }
 
+@media (max-width: 560px) {
+  .pi-opportunity {
+    padding: 3px 8px;
+    min-width: 28px;
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
+    line-height: 1;
+  }
+
+  .pi-opportunity::before {
+    content: "🔥";
+    font-size: 13px;
+    line-height: 1;
+  }
+}
+
 .pi-item-meta {
   display: flex;
   align-items: center;
