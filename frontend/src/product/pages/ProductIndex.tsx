@@ -849,7 +849,8 @@ export default function ProductIndex() {
         </section>
 
         {/* RIGHT: DETALHE + ANÁLISE */}
-        <aside className="pi-card pi-card-analysis">
+        <aside className="pi-card-analysis">
+          <div className="pi-card pi-card-analysis-box">
           {!selected ? (
             <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
           ) : (
@@ -1293,6 +1294,7 @@ export default function ProductIndex() {
               )}
             </div>
           )}
+          </div>
         </aside>
       </div>
 

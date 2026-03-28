@@ -485,14 +485,17 @@
 
 /* Painel da direita fixo na tela enquanto a lista rola */
 .pi-card-analysis {
-  position: sticky;
-  top: 88px;
   align-self: start;
   min-width: 0;
 }
 
+.pi-card-analysis-box {
+  position: sticky;
+  top: 88px;
+}
+
 @media (min-width: 981px) and (max-width: 1280px) {
-  .pi-card-analysis {
+  .pi-card-analysis-box {
     top: 84px;
   }
 }
@@ -535,7 +538,7 @@
     padding-right: 0;
   }
 
-  .pi-card-analysis {
+  .pi-card-analysis-box {
     position: static;
   }
 }
@@ -561,7 +564,7 @@
     padding-right: 0;
   }
 
-  .pi-card-analysis {
+  .pi-card-analysis-box {
     position: static;
   }
 }
@@ -588,7 +591,8 @@
 }
 
 .pi-card-list,
-.pi-card-analysis {
+.pi-card-analysis,
+.pi-card-analysis-box {
   box-sizing: border-box;
 }
 
@@ -596,7 +600,7 @@
   gap: 10px;
 }
 
-.pi-card-analysis {
+.pi-card-analysis-box {
   padding: 14px 14px 16px;
 }
 
@@ -606,7 +610,7 @@
     padding: 13px;
   }
 
-  .pi-card-analysis {
+  .pi-card-analysis-box {
     padding-bottom: 14px;
   }
 }
