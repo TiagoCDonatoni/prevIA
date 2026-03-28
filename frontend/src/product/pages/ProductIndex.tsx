@@ -23,6 +23,14 @@ const UI_DEFAULTS = {
 type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE";
 
+type AnalysisSectionKey = "probabilities" | "goals" | "oddsEdge";
+
+const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
+  probabilities: true,
+  goals: false,
+  oddsEdge: false,
+};
+
 function fmtPct(x: number | null | undefined) {
   const v = typeof x === "number" && Number.isFinite(x) ? x : 0;
   return `${(v * 100).toFixed(1)}%`;
@@ -414,6 +422,17 @@ export default function ProductIndex() {
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
 
+  const [analysisSectionsOpen, setAnalysisSectionsOpen] = useState<Record<AnalysisSectionKey, boolean>>(
+    () => ({ ...DEFAULT_ANALYSIS_SECTIONS_OPEN })
+  );
+
+  const toggleAnalysisSection = useCallback((key: AnalysisSectionKey) => {
+    setAnalysisSectionsOpen((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
+
   const loadLeagues = useCallback(async () => {
     setLeaguesLoading(true);
     setLeaguesError("");
@@ -636,6 +655,10 @@ export default function ProductIndex() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleEvents, selectedId]);
 
+  useEffect(() => {
+    setAnalysisSectionsOpen({ ...DEFAULT_ANALYSIS_SECTIONS_OPEN });
+  }, [selectedId]);
+
   const selected = useMemo(
     () => visibleEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
     [visibleEvents, selectedId]
@@ -851,449 +874,518 @@ export default function ProductIndex() {
         {/* RIGHT: DETALHE + ANÁLISE */}
         <aside className="pi-card-analysis">
           <div className="pi-card pi-card-analysis-box">
-          {!selected ? (
-            <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
-          ) : (
-            <div className="pi-detail">
-              <div className="pi-detail-head">
-                <div>
-                  <div className="pi-detail-title">
-                    {selected.home_name} <span className="pi-vs">vs</span> {selected.away_name}
+            {!selected ? (
+              <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
+            ) : (
+              <div className="pi-detail">
+                <div className="pi-detail-head">
+                  <div>
+                    <div className="pi-detail-title">
+                      {selected.home_name} <span className="pi-vs">vs</span> {selected.away_name}
+                    </div>
+
+                    <div className="pi-detail-sub">
+                      <span className="pi-kick">{fmtKickoff(selected.commence_time_utc, lang)}</span>
+
+                      {selected.odds_best ? (
+                        <>
+                          <span className="pi-subsep">•</span>
+                          <span className="pi-odds-mini">
+                            {t(lang, "odds.bestLabel")}: H {fmtOdds(selected.odds_best.H)} / D{" "}
+                            {fmtOdds(selected.odds_best.D)} / A {fmtOdds(selected.odds_best.A)}
+                          </span>
+                        </>
+                      ) : null}
+
+                      {(() => {
+                        const edge = selected.edge_summary?.best_edge;
+                        const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02; // 2%
+                        if (!hasOpportunity) return null;
+
+                        return <span className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</span>;
+                      })()}
+
+                    </div>
                   </div>
 
-                  <div className="pi-detail-sub">
-                    <span className="pi-kick">{fmtKickoff(selected.commence_time_utc, lang)}</span>
+                <div className="pi-cta-wrap">
+                  <button
+                    className="pi-btn"
+                    onClick={onRevealAndOpen}
+                    disabled={!selectedId || quoteLoading}
+                    title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
+                  >
+                    {t(lang, "credits.viewAnalysis")}
+                  </button>
 
-                    {selected.odds_best ? (
-                      <>
-                        <span className="pi-subsep">•</span>
-                        <span className="pi-odds-mini">
-                          {t(lang, "odds.bestLabel")}: H {fmtOdds(selected.odds_best.H)} / D{" "}
-                          {fmtOdds(selected.odds_best.D)} / A {fmtOdds(selected.odds_best.A)}
-                        </span>
-                      </>
-                    ) : null}
-
-                    {(() => {
-                      const edge = selected.edge_summary?.best_edge;
-                      const hasOpportunity = typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02; // 2%
-                      if (!hasOpportunity) return null;
-
-                      return <span className="pi-opportunity">{t(lang, "odds.opportunityDetected")}</span>;
-                    })()}
-
-                  </div>
+                  {!alreadyRevealed ? (
+                    <div className="pi-cta-sub">
+                      ({t(lang, "credits.oneCredit")})
+                    </div>
+                  ) : null}
+                </div>
                 </div>
 
-              <div className="pi-cta-wrap">
-                <button
-                  className="pi-btn"
-                  onClick={onRevealAndOpen}
-                  disabled={!selectedId || quoteLoading}
-                  title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
-                >
-                  {t(lang, "credits.viewAnalysis")}
-                </button>
+                {quoteError ? <div className="pi-error">{quoteError}</div> : null}
 
-                {!alreadyRevealed ? (
-                  <div className="pi-cta-sub">
-                    ({t(lang, "credits.oneCredit")})
-                  </div>
-                ) : null}
-              </div>
-              </div>
+                {!analysisOpened ? (
+                  <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
+                ) : !quote && !hasEffectiveAnalysis ? (
+                  <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
+                ) : (
+                  <>
+                    {/* ===== Narrativa (destaque) ===== */}
+                    {(() => {
+                      const depth = narrativeDepthForPlan(plan);
 
-              {quoteError ? <div className="pi-error">{quoteError}</div> : null}
+                      const oddsBest =
+                        quote?.odds?.best
+                          ? {
+                              H: quote.odds.best.H ?? null,
+                              D: quote.odds.best.D ?? null,
+                              A: quote.odds.best.A ?? null,
+                            }
+                          : selected?.odds_best
+                          ? {
+                              H: selected.odds_best.H ?? null,
+                              D: selected.odds_best.D ?? null,
+                              A: selected.odds_best.A ?? null,
+                            }
+                          : null;
 
-              {!analysisOpened ? (
-                <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
-              ) : !quote && !hasEffectiveAnalysis ? (
-                <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
-              ) : (
-                <>
-                  {/* ===== Narrativa (destaque) ===== */}
-                  {(() => {
-                    const depth = narrativeDepthForPlan(plan);
+                      const narrative = generateNarrative({
+                        meta: { version: "narrative.v1", lang, depth },
+                        match: {
+                          homeTeam: selected.home_name,
+                          awayTeam: selected.away_name,
+                        },
+                        model: {
+                          probs: effectiveProbs,
+                          status: effectiveMatchStatus,
+                        },
+                        market: {
+                          odds_1x2_best: oddsBest,
+                        },
+                      });
 
-                    const oddsBest =
-                      quote?.odds?.best
-                        ? {
-                            H: quote.odds.best.H ?? null,
-                            D: quote.odds.best.D ?? null,
-                            A: quote.odds.best.A ?? null,
-                          }
-                        : selected?.odds_best
-                        ? {
-                            H: selected.odds_best.H ?? null,
-                            D: selected.odds_best.D ?? null,
-                            A: selected.odds_best.A ?? null,
-                          }
-                        : null;
+                      const headline = narrative.blocks.find((b) => b.type === "headline");
+                      const summary = narrative.blocks.find((b) => b.type === "summary");
+                      const price = narrative.blocks.find((b) => b.type === "price");
+                      const pricePro = narrative.blocks.find((b) => b.type === "pricePro");
+                      const bullets = narrative.blocks.filter((b) => b.type === "bullet");
+                      const warning = narrative.blocks.find((b) => b.type === "warning");
+                      const disclaimer = narrative.blocks.find((b) => b.type === "disclaimer");
 
-                    const narrative = generateNarrative({
-                      meta: { version: "narrative.v1", lang, depth },
-                      match: {
-                        homeTeam: selected.home_name,
-                        awayTeam: selected.away_name,
-                      },
-                      model: {
-                        probs: effectiveProbs,
-                        status: effectiveMatchStatus,
-                      },
-                      market: {
-                        odds_1x2_best: oddsBest,
-                      },
-                    });
-
-                    const headline = narrative.blocks.find((b) => b.type === "headline");
-                    const summary = narrative.blocks.find((b) => b.type === "summary");
-                    const price = narrative.blocks.find((b) => b.type === "price");
-                    const pricePro = narrative.blocks.find((b) => b.type === "pricePro");
-                    const bullets = narrative.blocks.filter((b) => b.type === "bullet");
-                    const warning = narrative.blocks.find((b) => b.type === "warning");
-                    const disclaimer = narrative.blocks.find((b) => b.type === "disclaimer");
-
-                    return (
-                      <div className="pi-narrative">
-                        {headline ? <div className="pi-narrative-head">{headline.text}</div> : null}
-                        {summary ? <div className="pi-narrative-summary">{summary.text}</div> : null}
-                        {price ? <div className="pi-narrative-price">{price.text}</div> : null}
-                        {pricePro ? <div className="pi-narrative-pricepro">{pricePro.text}</div> : null}
-                        
-                        {bullets.length ? (
-                          <ul className="pi-narrative-bullets">
-                            {bullets.map((b, i) => (
-                              <li key={i}>{b.text}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-
-                        {warning ? <div className="pi-narrative-warn">{warning.text}</div> : null}
-                        {disclaimer ? (
-                          <div className="pi-narrative-disclaimer">{disclaimer.text}</div>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
-
-                  {/* ===== Painéis técnicos (mantidos) ===== */}
-                  <div className="pi-panels">
-                    {/* Probabilidades */}
-                    <div className="pi-panel pi-panel-probabilities">
-                      <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
-                      {effectiveProbs ? (
-                        <div className="pi-panel-value">
-                          H {fmtPct(effectiveProbs.H)} <br />
-                          D {fmtPct(effectiveProbs.D)} <br />
-                          A {fmtPct(effectiveProbs.A)}
-                        </div>
-                      ) : (
-                        <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
-                      )}
-                    </div>
-
-                    {/* Mercados de Gols (unificado) */}
-                    {hasGoalsMarketInsight ? (
-                      <div className="pi-panel pi-panel-goals">
-                        <div className="pi-panel-label">
-                          {lang === "en"
-                            ? "Goals markets"
-                            : lang === "es"
-                            ? "Mercados de goles"
-                            : "Mercados de Gols"}
-                        </div>
-
-                        <div className="pi-panel-value">
-                          {hasTotalsInsight
-                            ? totalsInsightLabel(lang, totalsOver, totalsUnder)
-                            : bttsInsightLabel(lang, bttsYes)}
-                        </div>
-
-                        <div className="pi-muted" style={{ marginTop: 6 }}>
-                          {hasTotalsInsight
-                            ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
-                            : bttsInsightHeadline(lang, bttsYes)}
-                        </div>
-
-                        <div className="pi-goals-kpis">
-                          {typeof totalsOver === "number" ? (
-                            <div className="pi-goals-kpi">
-                              <span className="pi-goals-kpi-label">
-                                {lang === "en"
-                                  ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
-                                  : lang === "es"
-                                  ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
-                                  : `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`}
-                              </span>
-                              <strong>{fmtPctNullable(totalsOver)}</strong>
-                            </div>
+                      return (
+                        <div className="pi-narrative">
+                          {headline ? <div className="pi-narrative-head">{headline.text}</div> : null}
+                          {summary ? <div className="pi-narrative-summary">{summary.text}</div> : null}
+                          {price ? <div className="pi-narrative-price">{price.text}</div> : null}
+                          {pricePro ? <div className="pi-narrative-pricepro">{pricePro.text}</div> : null}
+                          
+                          {bullets.length ? (
+                            <ul className="pi-narrative-bullets">
+                              {bullets.map((b, i) => (
+                                <li key={i}>{b.text}</li>
+                              ))}
+                            </ul>
                           ) : null}
 
-                          {typeof bttsYes === "number" ? (
-                            <div className="pi-goals-kpi">
-                              <span className="pi-goals-kpi-label">BTTS</span>
-                              <strong>{fmtPctNullable(bttsYes)}</strong>
-                            </div>
-                          ) : null}
-
-                          {typeof homeGoalProb === "number" ? (
-                            <div className="pi-goals-kpi">
-                              <span className="pi-goals-kpi-label">
-                                {lang === "en"
-                                  ? "Home scores"
-                                  : lang === "es"
-                                  ? "Local marca"
-                                  : "Casa marca"}
-                              </span>
-                              <strong>{fmtPctNullable(homeGoalProb)}</strong>
-                            </div>
-                          ) : null}
-
-                          {typeof awayGoalProb === "number" ? (
-                            <div className="pi-goals-kpi">
-                              <span className="pi-goals-kpi-label">
-                                {lang === "en"
-                                  ? "Away scores"
-                                  : lang === "es"
-                                  ? "Visitante marca"
-                                  : "Fora marca"}
-                              </span>
-                              <strong>{fmtPctNullable(awayGoalProb)}</strong>
-                            </div>
+                          {warning ? <div className="pi-narrative-warn">{warning.text}</div> : null}
+                          {disclaimer ? (
+                            <div className="pi-narrative-disclaimer">{disclaimer.text}</div>
                           ) : null}
                         </div>
+                      );
+                    })()}
 
-                        <div className="pi-goals-sections">
-                          {hasTotalsInsight ? (
-                            <div className="pi-goals-section">
-                              <div className="pi-goals-section-title">
-                                {lang === "en"
-                                  ? "Match totals"
-                                  : lang === "es"
-                                  ? "Totales del partido"
-                                  : "Totais do jogo"}
-                              </div>
+                    {/* ===== Painéis técnicos com accordions no mobile ===== */}
+                    <div className="pi-technical-sections">
+                      <section className={`pi-accordion ${analysisSectionsOpen.probabilities ? "is-open" : ""}`}>
+                        <button
+                          type="button"
+                          className="pi-accordion-header"
+                          onClick={() => toggleAnalysisSection("probabilities")}
+                          aria-expanded={analysisSectionsOpen.probabilities}
+                        >
+                          <span className="pi-accordion-title">
+                            {lang === "en"
+                              ? "Probabilities & confidence"
+                              : lang === "es"
+                              ? "Probabilidades y confianza"
+                              : "Probabilidades e confiança"}
+                          </span>
+                          <span className="pi-accordion-icon" aria-hidden="true">
+                            {analysisSectionsOpen.probabilities ? "−" : "+"}
+                          </span>
+                        </button>
 
-                              <div className="pi-goals-grid">
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? "Main line"
-                                      : lang === "es"
-                                      ? "Línea principal"
-                                      : "Linha principal"}
-                                  </span>
-                                  <strong>
-                                    {typeof totalsLine === "number" && Number.isFinite(totalsLine)
-                                      ? totalsLine.toFixed(1)
-                                      : "—"}
-                                  </strong>
+                        <div className={`pi-accordion-content ${analysisSectionsOpen.probabilities ? "is-open" : ""}`}>
+                          <div className="pi-panels">
+                            {/* Probabilidades */}
+                            <div className="pi-panel pi-panel-probabilities">
+                              <div className="pi-panel-label">{t(lang, "matchup.probabilities")}</div>
+                              {effectiveProbs ? (
+                                <div className="pi-panel-value">
+                                  H {fmtPct(effectiveProbs.H)} <br />
+                                  D {fmtPct(effectiveProbs.D)} <br />
+                                  A {fmtPct(effectiveProbs.A)}
                                 </div>
+                              ) : (
+                                <div className="pi-muted">{t(lang, "matchup.noProbs")}</div>
+                              )}
+                            </div>
 
-                                <div className="pi-goals-line">
-                                  <span>Over</span>
-                                  <strong>{fmtPctNullable(totalsOver)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>Under</span>
-                                  <strong>{fmtPctNullable(totalsUnder)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>xG total</span>
-                                  <strong>{fmtOdds(lambdaTotal)}</strong>
+                            {/* Confiança (por plano) */}
+                            {vis.context.show_confidence_level ? (
+                              <div className="pi-panel">
+                                <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
+                                <div className="pi-panel-value">{fmtPct(effectiveConfidence)}</div>
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.status")}: <b>{effectiveMatchStatus ?? "—"}</b>
                                 </div>
                               </div>
-                            </div>
-                          ) : null}
-
-                          {hasBttsInsight ? (
-                            <div className="pi-goals-section">
-                              <div className="pi-goals-section-title">BTTS</div>
-
-                              <div className="pi-goals-grid">
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? "BTTS Yes"
-                                      : lang === "es"
-                                      ? "Ambos marcan"
-                                      : "Ambos marcam"}
-                                  </span>
-                                  <strong>{fmtPctNullable(bttsYes)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? "BTTS No"
-                                      : lang === "es"
-                                      ? "Ambos no marcan"
-                                      : "Ambos não marcam"}
-                                  </span>
-                                  <strong>{fmtPctNullable(bttsNo)}</strong>
-                                </div>
-                              </div>
-
-                              <div className="pi-muted" style={{ marginTop: 8 }}>
-                                {bttsInsightHeadline(lang, bttsYes)}
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {hasTeamGoalsInsight ? (
-                            <div className="pi-goals-section">
-                              <div className="pi-goals-section-title">
-                                {lang === "en"
-                                  ? "Goals by team"
-                                  : lang === "es"
-                                  ? "Goles por equipo"
-                                  : "Gols por equipe"}
-                              </div>
-
-                              <div className="pi-goals-grid">
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? `${selected.home_name} scores`
-                                      : lang === "es"
-                                      ? `${selected.home_name} marca`
-                                      : `${selected.home_name} marca`}
-                                  </span>
-                                  <strong>{fmtPctNullable(homeGoalProb)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? `${selected.home_name} over 1.5`
-                                      : lang === "es"
-                                      ? `${selected.home_name} over 1.5`
-                                      : `${selected.home_name} over 1.5`}
-                                  </span>
-                                  <strong>{fmtPctNullable(homeOver15Prob)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? `${selected.away_name} scores`
-                                      : lang === "es"
-                                      ? `${selected.away_name} marca`
-                                      : `${selected.away_name} marca`}
-                                  </span>
-                                  <strong>{fmtPctNullable(awayGoalProb)}</strong>
-                                </div>
-
-                                <div className="pi-goals-line">
-                                  <span>
-                                    {lang === "en"
-                                      ? `${selected.away_name} over 1.5`
-                                      : lang === "es"
-                                      ? `${selected.away_name} over 1.5`
-                                      : `${selected.away_name} over 1.5`}
-                                  </span>
-                                  <strong>{fmtPctNullable(awayOver15Prob)}</strong>
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : null}                    
-
-                    {/* Melhor odd */}
-                    <div className="pi-panel">
-                      <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
-                      {quote?.odds?.best ? (
-                        <div className="pi-panel-value">
-                          H {fmtOdds(quote.odds.best.H)} <br />
-                          D {fmtOdds(quote.odds.best.D)} <br />
-                          A {fmtOdds(quote.odds.best.A)}
-                        </div>
-                      ) : selected?.odds_best ? (
-                        <div className="pi-panel-value">
-                          H {fmtOdds(selected.odds_best.H)} <br />
-                          D {fmtOdds(selected.odds_best.D)} <br />
-                          A {fmtOdds(selected.odds_best.A)}
-                        </div>
-                      ) : (
-                        <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
-                      )}
-                    </div>
-
-                    {/* Confiança (por plano) */}
-                    {vis.context.show_confidence_level ? (
-                      <div className="pi-panel">
-                        <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
-                        <div className="pi-panel-value">{fmtPct(effectiveConfidence)}</div>
-                        <div className="pi-muted">
-                          {t(lang, "matchup.status")}: <b>{effectiveMatchStatus ?? "—"}</b>
-                        </div>
-                      </div>
-                    ) : (
-                      <LockedPanel
-                        title={t(lang, "matchup.confidence")}
-                        lang={lang}
-                        onUnlock={() => {
-                          setUpgradeReason("FEATURE_LOCKED");
-                          setUpgradeOpen(true);
-                        }}
-                      />
-                    )}
-
-                    {/* Edge (por plano) */}
-                    {vis.value.show_edge_percent ? (
-                      quote?.value?.edge ? (
-                        <div className="pi-panel">
-                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                          <div className="pi-panel-value">
-                            H {fmtPct(quote.value.edge.H)} <br />
-                            D {fmtPct(quote.value.edge.D)} <br />
-                            A {fmtPct(quote.value.edge.A)}
-                          </div>
-
-                          {vis.value.show_value_detected ? (
-                            <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
-                          ) : null}
-                        </div>
-                      ) : selected?.edge_summary?.best_edge != null ? (
-                        <div className="pi-panel">
-                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                          <div className="pi-panel-value">
-                            {fmtEdge(selected.edge_summary.best_edge)}
-                          </div>
-                          <div className="pi-muted">
-                            {fmtOutcome(
-                              selected.edge_summary.best_outcome,
-                              selected.home_name,
-                              selected.away_name,
-                              lang
+                            ) : (
+                              <LockedPanel
+                                title={t(lang, "matchup.confidence")}
+                                lang={lang}
+                                onUnlock={() => {
+                                  setUpgradeReason("FEATURE_LOCKED");
+                                  setUpgradeOpen(true);
+                                }}
+                              />
                             )}
                           </div>
                         </div>
-                      ) : (
-                        <div className="pi-panel">
-                          <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                          <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                      </section>
+
+                      {hasGoalsMarketInsight ? (
+                        <section className={`pi-accordion ${analysisSectionsOpen.goals ? "is-open" : ""}`}>
+                          <button
+                            type="button"
+                            className="pi-accordion-header"
+                            onClick={() => toggleAnalysisSection("goals")}
+                            aria-expanded={analysisSectionsOpen.goals}
+                          >
+                            <span className="pi-accordion-title">
+                              {lang === "en"
+                                ? "Goals markets"
+                                : lang === "es"
+                                ? "Mercados de goles"
+                                : "Mercados de gols"}
+                            </span>
+                            <span className="pi-accordion-icon" aria-hidden="true">
+                              {analysisSectionsOpen.goals ? "−" : "+"}
+                            </span>
+                          </button>
+
+                          <div className={`pi-accordion-content ${analysisSectionsOpen.goals ? "is-open" : ""}`}>
+                            <div className="pi-panel pi-panel-goals">
+                              <div className="pi-panel-label">
+                                {lang === "en"
+                                  ? "Goals markets"
+                                  : lang === "es"
+                                  ? "Mercados de goles"
+                                  : "Mercados de Gols"}
+                              </div>
+
+                              <div className="pi-panel-value">
+                                {hasTotalsInsight
+                                  ? totalsInsightLabel(lang, totalsOver, totalsUnder)
+                                  : bttsInsightLabel(lang, bttsYes)}
+                              </div>
+
+                              <div className="pi-muted" style={{ marginTop: 6 }}>
+                                {hasTotalsInsight
+                                  ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
+                                  : bttsInsightHeadline(lang, bttsYes)}
+                              </div>
+
+                              <div className="pi-goals-kpis">
+                                {typeof totalsOver === "number" ? (
+                                  <div className="pi-goals-kpi">
+                                    <span className="pi-goals-kpi-label">
+                                      {lang === "en"
+                                        ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
+                                        : lang === "es"
+                                        ? `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`
+                                        : `Over ${typeof totalsLine === "number" ? totalsLine.toFixed(1) : "2.5"}`}
+                                    </span>
+                                    <strong>{fmtPctNullable(totalsOver)}</strong>
+                                  </div>
+                                ) : null}
+
+                                {typeof bttsYes === "number" ? (
+                                  <div className="pi-goals-kpi">
+                                    <span className="pi-goals-kpi-label">BTTS</span>
+                                    <strong>{fmtPctNullable(bttsYes)}</strong>
+                                  </div>
+                                ) : null}
+
+                                {typeof homeGoalProb === "number" ? (
+                                  <div className="pi-goals-kpi">
+                                    <span className="pi-goals-kpi-label">
+                                      {lang === "en"
+                                        ? "Home scores"
+                                        : lang === "es"
+                                        ? "Local marca"
+                                        : "Casa marca"}
+                                    </span>
+                                    <strong>{fmtPctNullable(homeGoalProb)}</strong>
+                                  </div>
+                                ) : null}
+
+                                {typeof awayGoalProb === "number" ? (
+                                  <div className="pi-goals-kpi">
+                                    <span className="pi-goals-kpi-label">
+                                      {lang === "en"
+                                        ? "Away scores"
+                                        : lang === "es"
+                                        ? "Visitante marca"
+                                        : "Fora marca"}
+                                    </span>
+                                    <strong>{fmtPctNullable(awayGoalProb)}</strong>
+                                  </div>
+                                ) : null}
+                              </div>
+
+                              <div className="pi-goals-sections">
+                                {hasTotalsInsight ? (
+                                  <div className="pi-goals-section">
+                                    <div className="pi-goals-section-title">
+                                      {lang === "en"
+                                        ? "Match totals"
+                                        : lang === "es"
+                                        ? "Totales del partido"
+                                        : "Totais do jogo"}
+                                    </div>
+
+                                    <div className="pi-goals-grid">
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? "Main line"
+                                            : lang === "es"
+                                            ? "Línea principal"
+                                            : "Linha principal"}
+                                        </span>
+                                        <strong>
+                                          {typeof totalsLine === "number" && Number.isFinite(totalsLine)
+                                            ? totalsLine.toFixed(1)
+                                            : "—"}
+                                        </strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>Over</span>
+                                        <strong>{fmtPctNullable(totalsOver)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>Under</span>
+                                        <strong>{fmtPctNullable(totalsUnder)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>xG total</span>
+                                        <strong>{fmtOdds(lambdaTotal)}</strong>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {hasBttsInsight ? (
+                                  <div className="pi-goals-section">
+                                    <div className="pi-goals-section-title">BTTS</div>
+
+                                    <div className="pi-goals-grid">
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? "BTTS Yes"
+                                            : lang === "es"
+                                            ? "Ambos marcan"
+                                            : "Ambos marcam"}
+                                        </span>
+                                        <strong>{fmtPctNullable(bttsYes)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? "BTTS No"
+                                            : lang === "es"
+                                            ? "Ambos no marcan"
+                                            : "Ambos não marcam"}
+                                        </span>
+                                        <strong>{fmtPctNullable(bttsNo)}</strong>
+                                      </div>
+                                    </div>
+
+                                    <div className="pi-muted" style={{ marginTop: 8 }}>
+                                      {bttsInsightHeadline(lang, bttsYes)}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {hasTeamGoalsInsight ? (
+                                  <div className="pi-goals-section">
+                                    <div className="pi-goals-section-title">
+                                      {lang === "en"
+                                        ? "Goals by team"
+                                        : lang === "es"
+                                        ? "Goles por equipo"
+                                        : "Gols por equipe"}
+                                    </div>
+
+                                    <div className="pi-goals-grid">
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? `${selected.home_name} scores`
+                                            : lang === "es"
+                                            ? `${selected.home_name} marca`
+                                            : `${selected.home_name} marca`}
+                                        </span>
+                                        <strong>{fmtPctNullable(homeGoalProb)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? `${selected.home_name} over 1.5`
+                                            : lang === "es"
+                                            ? `${selected.home_name} over 1.5`
+                                            : `${selected.home_name} over 1.5`}
+                                        </span>
+                                        <strong>{fmtPctNullable(homeOver15Prob)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? `${selected.away_name} scores`
+                                            : lang === "es"
+                                            ? `${selected.away_name} marca`
+                                            : `${selected.away_name} marca`}
+                                        </span>
+                                        <strong>{fmtPctNullable(awayGoalProb)}</strong>
+                                      </div>
+
+                                      <div className="pi-goals-line">
+                                        <span>
+                                          {lang === "en"
+                                            ? `${selected.away_name} over 1.5`
+                                            : lang === "es"
+                                            ? `${selected.away_name} over 1.5`
+                                            : `${selected.away_name} over 1.5`}
+                                        </span>
+                                        <strong>{fmtPctNullable(awayOver15Prob)}</strong>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      ) : null}
+
+                      <section className={`pi-accordion ${analysisSectionsOpen.oddsEdge ? "is-open" : ""}`}>
+                        <button
+                          type="button"
+                          className="pi-accordion-header"
+                          onClick={() => toggleAnalysisSection("oddsEdge")}
+                          aria-expanded={analysisSectionsOpen.oddsEdge}
+                        >
+                          <span className="pi-accordion-title">
+                            {lang === "en"
+                              ? "Odds & edge"
+                              : lang === "es"
+                              ? "Cuotas y edge"
+                              : "Odds e edge"}
+                          </span>
+                          <span className="pi-accordion-icon" aria-hidden="true">
+                            {analysisSectionsOpen.oddsEdge ? "−" : "+"}
+                          </span>
+                        </button>
+
+                        <div className={`pi-accordion-content ${analysisSectionsOpen.oddsEdge ? "is-open" : ""}`}>
+                          <div className="pi-panels">
+                            {/* Melhor odd */}
+                            <div className="pi-panel">
+                              <div className="pi-panel-label">{t(lang, "odds.bestOdd")}</div>
+                              {quote?.odds?.best ? (
+                                <div className="pi-panel-value">
+                                  H {fmtOdds(quote.odds.best.H)} <br />
+                                  D {fmtOdds(quote.odds.best.D)} <br />
+                                  A {fmtOdds(quote.odds.best.A)}
+                                </div>
+                              ) : selected?.odds_best ? (
+                                <div className="pi-panel-value">
+                                  H {fmtOdds(selected.odds_best.H)} <br />
+                                  D {fmtOdds(selected.odds_best.D)} <br />
+                                  A {fmtOdds(selected.odds_best.A)}
+                                </div>
+                              ) : (
+                                <div className="pi-muted">{t(lang, "odds.noOdds")}</div>
+                              )}
+                            </div>
+
+                            {/* Edge (por plano) */}
+                            {vis.value.show_edge_percent ? (
+                              quote?.value?.edge ? (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                                  <div className="pi-panel-value">
+                                    H {fmtPct(quote.value.edge.H)} <br />
+                                    D {fmtPct(quote.value.edge.D)} <br />
+                                    A {fmtPct(quote.value.edge.A)}
+                                  </div>
+
+                                  {vis.value.show_value_detected ? (
+                                    <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
+                                  ) : null}
+                                </div>
+                              ) : selected?.edge_summary?.best_edge != null ? (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                                  <div className="pi-panel-value">
+                                    {fmtEdge(selected.edge_summary.best_edge)}
+                                  </div>
+                                  <div className="pi-muted">
+                                    {fmtOutcome(
+                                      selected.edge_summary.best_outcome,
+                                      selected.home_name,
+                                      selected.away_name,
+                                      lang
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
+                                  <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                                </div>
+                              )
+                            ) : (
+                              <LockedPanel
+                                title={t(lang, "matchup.edge")}
+                                lang={lang}
+                                onUnlock={() => {
+                                  setUpgradeReason("FEATURE_LOCKED");
+                                  setUpgradeOpen(true);
+                                }}
+                              />
+                            )}
+                          </div>
                         </div>
-                      )
-                    ) : (
-                      <LockedPanel
-                        title={t(lang, "matchup.edge")}
-                        lang={lang}
-                        onUnlock={() => {
-                          setUpgradeReason("FEATURE_LOCKED");
-                          setUpgradeOpen(true);
-                        }}
-                      />
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+                      </section>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </aside>
       </div>
