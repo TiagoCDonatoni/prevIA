@@ -716,49 +716,49 @@ export default function ProductIndex() {
 
   return (
     <div className="pi">
+      <div className="pi-filters">
+        <select
+          className="pi-select"
+          value={league?.sport_key ?? ""}
+          disabled={leaguesLoading || !leagues.length}
+          onChange={(e) => {
+            setSportKey(String(e.target.value));
+            setSelectedId("");
+            clearQuoteUI();
+          }}
+          aria-label={t(lang, "odds.filterLeague")}
+        >
+          {leagues.map((l) => (
+            <option key={l.sport_key} value={l.sport_key}>
+              {leagueDisplayName(l, lang)}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="pi-select"
+          value={windowDays}
+          onChange={(e) => setWindowDays(Number(e.target.value))}
+          aria-label={t(lang, "odds.filterWindow")}
+        >
+          <option value={1}>{t(lang, "odds.windowToday")}</option>
+          <option value={3}>{t(lang, "odds.window3d")}</option>
+          <option value={7}>{t(lang, "odds.window7d")}</option>
+          <option value={30}>{t(lang, "odds.window30d")}</option>
+        </select>
+
+        <select
+          className="pi-select"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+          aria-label={t(lang, "odds.sortBy")}
+        >
+          <option value="DATE">{t(lang, "odds.sortDate")}</option>
+          <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
+        </select>
+      </div>
+
       <div className="pi-topline">
-        <div className="pi-filters" style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-          <select
-            className="pi-select"
-            value={league?.sport_key ?? ""}
-            disabled={leaguesLoading || !leagues.length}
-            onChange={(e) => {
-              setSportKey(String(e.target.value));
-              setSelectedId("");
-              clearQuoteUI();
-            }}
-            aria-label={t(lang, "odds.filterLeague")}
-          >
-            {leagues.map((l) => (
-              <option key={l.sport_key} value={l.sport_key}>
-                {leagueDisplayName(l, lang)}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="pi-select"
-            value={windowDays}
-            onChange={(e) => setWindowDays(Number(e.target.value))}
-            aria-label={t(lang, "odds.filterWindow")}
-          >
-            <option value={1}>{t(lang, "odds.windowToday")}</option>
-            <option value={3}>{t(lang, "odds.window3d")}</option>
-            <option value={7}>{t(lang, "odds.window7d")}</option>
-            <option value={30}>{t(lang, "odds.window30d")}</option>
-          </select>
-
-          <select
-            className="pi-select"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortBy)}
-            aria-label={t(lang, "odds.sortBy")}
-          >
-            <option value="DATE">{t(lang, "odds.sortDate")}</option>
-            <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
-          </select>
-        </div>
-
         <div className="pi-title">{t(lang, "odds.pageTitle")}</div>
 
         <div className="pi-meta">
@@ -776,9 +776,6 @@ export default function ProductIndex() {
             </>
           ) : null}
         </div>
-
-        <div style={{ flex: 1 }} />
-
       </div>
 
       <div className="pi-grid">
