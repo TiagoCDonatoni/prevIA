@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AuthRequestError,
+  postAuthChangePassword,
   postAuthForgotPassword,
   postAuthGoogleLogin,
   postAuthLogin,
@@ -11,7 +12,7 @@ import {
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
 
-type Mode = "login" | "signup" | "forgot" | "reset";
+type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword";
 
 function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "INVALID_EMAIL") return langT("auth.errorInvalidEmail");
@@ -21,6 +22,10 @@ function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "ACCOUNT_BLOCKED") return langT("auth.errorAccountBlocked");
   if (code === "INVALID_RESET_TOKEN") return langT("auth.errorInvalidResetToken");
   if (code === "INVALID_GOOGLE_CREDENTIAL") return langT("auth.errorInvalidGoogleCredential");
+  if (code === "INVALID_CURRENT_PASSWORD") return langT("auth.errorInvalidCurrentPassword");
+  if (code === "AUTH_REQUIRED") return langT("auth.errorAuthRequired");
+  if (code === "PASSWORD_AUTH_NOT_AVAILABLE") return langT("auth.errorPasswordAuthNotAvailable");
+  if (code === "PASSWORD_SAME_AS_CURRENT") return langT("auth.changePasswordSameAsCurrent");
   return langT("auth.genericError");
 }
 
@@ -28,6 +33,7 @@ function getTitle(tr: (k: string) => string, mode: Mode) {
   if (mode === "signup") return tr("auth.signupTitle");
   if (mode === "forgot") return tr("auth.forgotTitle");
   if (mode === "reset") return tr("auth.resetTitle");
+  if (mode === "changePassword") return tr("auth.changePasswordTitle");
   return tr("auth.loginTitle");
 }
 
@@ -35,6 +41,7 @@ function getSubtitle(tr: (k: string) => string, mode: Mode) {
   if (mode === "signup") return tr("auth.signupBenefit");
   if (mode === "forgot") return tr("auth.forgotSubtitle");
   if (mode === "reset") return tr("auth.resetSubtitle");
+  if (mode === "changePassword") return tr("auth.changePasswordSubtitle");
   return tr("auth.loginSubtitle");
 }
 
@@ -66,6 +73,8 @@ export function ProductAuthModal(props: {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [resetToken, setResetToken] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [infoText, setInfoText] = useState("");
@@ -73,7 +82,12 @@ export function ProductAuthModal(props: {
   const tr = useMemo(() => (k: string, vars?: Record<string, any>) => t(lang, k, vars), [lang]);
   const initialMode = props.initialMode ?? "signup";
   const canStepBack = mode === "forgot" || mode === "reset";
-  const secondaryActionLabel = canStepBack ? tr("common.back") : tr("common.notNow");
+  const secondaryActionLabel =
+    mode === "changePassword"
+      ? tr("auth.cancel")
+      : canStepBack
+      ? tr("common.back")
+      : tr("common.notNow");
 
   function resetFeedback() {
     clearFeedback(setErrorText, setInfoText);
@@ -81,6 +95,10 @@ export function ProductAuthModal(props: {
 
   function switchMode(nextMode: Mode) {
     setMode(nextMode);
+    setPassword("");
+    setResetToken("");
+    setCurrentPassword("");
+    setConfirmPassword("");
     resetFeedback();
   }
 
@@ -106,6 +124,8 @@ export function ProductAuthModal(props: {
     resetFeedback();
     setPassword("");
     setResetToken("");
+    setCurrentPassword("");
+    setConfirmPassword("");
   }, [open, initialMode]);
 
   useEffect(() => {
@@ -183,6 +203,19 @@ export function ProductAuthModal(props: {
 
   if (!open || !authEnabled) return null;
 
+  function getChangePasswordClientError(): string {
+    if (mode !== "changePassword") return "";
+
+    if (!currentPassword.trim()) return tr("auth.changePasswordCurrentRequired");
+    if (!password.trim()) return tr("auth.changePasswordNewRequired");
+    if (!confirmPassword.trim()) return tr("auth.changePasswordConfirmRequired");
+    if (password !== confirmPassword) return tr("auth.changePasswordConfirmMismatch");
+    if (currentPassword === password) return tr("auth.changePasswordSameAsCurrent");
+    if (password.length < 8) return tr("auth.errorWeakPassword");
+
+    return "";
+  }
+
   async function submit() {
     if (mode === "signup") {
       if (!email.trim() || !password.trim() || !fullName.trim()) return;
@@ -190,7 +223,16 @@ export function ProductAuthModal(props: {
       if (!email.trim() || !password.trim()) return;
     } else if (mode === "forgot") {
       if (!email.trim()) return;
-    } else if (!resetToken.trim() || !password.trim()) {
+    } else if (mode === "reset") {
+      if (!resetToken.trim() || !password.trim()) return;
+    } else if (!currentPassword.trim() || !password.trim() || !confirmPassword.trim()) {
+      return;
+    }
+
+    const clientError = getChangePasswordClientError();
+    if (clientError) {
+      setErrorText(clientError);
+      setInfoText("");
       return;
     }
 
@@ -233,6 +275,19 @@ export function ProductAuthModal(props: {
         return;
       }
 
+      if (mode === "changePassword") {
+        await postAuthChangePassword({
+          current_password: currentPassword,
+          new_password: password,
+        });
+
+        setCurrentPassword("");
+        setPassword("");
+        setConfirmPassword("");
+        setInfoText(tr("auth.changePasswordSuccess"));
+        return;
+      }
+
       await postAuthResetPassword({
         token: resetToken.trim(),
         new_password: password,
@@ -259,7 +314,18 @@ export function ProductAuthModal(props: {
       ? tr("auth.loginAction")
       : mode === "forgot"
       ? tr("auth.forgotAction")
+      : mode === "changePassword"
+      ? tr("auth.changePasswordAction")
       : tr("auth.resetAction");
+
+  const isChangePasswordDisabled =
+    mode === "changePassword" &&
+    (!currentPassword.trim() ||
+      !password.trim() ||
+      !confirmPassword.trim() ||
+      password !== confirmPassword ||
+      currentPassword === password ||
+      password.length < 8);
 
   return (
     <div
@@ -317,7 +383,7 @@ export function ProductAuthModal(props: {
             </label>
           ) : null}
 
-          {mode !== "reset" ? (
+          {mode !== "reset" && mode !== "changePassword" ? (
             <label className="product-field">
               <span>{tr("auth.email")}</span>
               <input
@@ -341,20 +407,48 @@ export function ProductAuthModal(props: {
             </label>
           ) : null}
 
+          {mode === "changePassword" ? (
+            <label className="product-field">
+              <span>{tr("auth.currentPassword")}</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </label>
+          ) : null}
+
           {mode !== "forgot" ? (
             <label className="product-field">
-              <span>{mode === "reset" ? tr("auth.newPassword") : tr("auth.password")}</span>
+              <span>
+                {mode === "reset" || mode === "changePassword"
+                  ? tr("auth.newPassword")
+                  : tr("auth.password")}
+              </span>
               <input
                 type="password"
                 autoComplete={
-                  mode === "signup"
+                  mode === "signup" || mode === "reset" || mode === "changePassword"
                     ? "new-password"
-                    : mode === "login"
-                    ? "current-password"
-                    : "new-password"
+                    : "current-password"
                 }
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </label>
+          ) : null}
+
+          {mode === "changePassword" ? (
+            <label className="product-field">
+              <span>{tr("auth.confirmNewPassword")}</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="••••••••"
               />
             </label>
@@ -382,7 +476,8 @@ export function ProductAuthModal(props: {
                 (mode === "signup" && (!email.trim() || !password.trim() || !fullName.trim())) ||
                 (mode === "login" && (!email.trim() || !password.trim())) ||
                 (mode === "forgot" && !email.trim()) ||
-                (mode === "reset" && (!resetToken.trim() || !password.trim()))
+                (mode === "reset" && (!resetToken.trim() || !password.trim())) ||
+                isChangePasswordDisabled
               }
             >
               {busy ? tr("common.loading") : actionLabel}

@@ -126,7 +126,6 @@ export function PublicHomePage() {
         </div>
       </section>
 
-      {ENABLE_PUBLIC_PRODUCT_LAYER ? (
         <section className="landing-section">
           <div className="landing-section-head compact">
             <div className="public-eyebrow">{copy.home.preview.eyebrow}</div>
@@ -163,8 +162,7 @@ export function PublicHomePage() {
             })}
           </div>
         </section>
-      ) : null}
-
+        
       <section className="landing-section">
         <div className="landing-section-head compact">
           <div className="public-eyebrow">{copy.home.howItWorks.eyebrow}</div>

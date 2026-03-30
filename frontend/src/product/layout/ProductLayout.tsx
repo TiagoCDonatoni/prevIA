@@ -66,7 +66,9 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 } as const;
 
 export type ProductLayoutOutletContext = {
-  openAuthModal: (mode?: "signup" | "login" | "forgot" | "reset") => void;
+  openAuthModal: (
+    mode?: "signup" | "login" | "forgot" | "reset" | "changePassword"
+  ) => void;
   logout: () => Promise<void>;
 };
 
@@ -78,10 +80,44 @@ export function ProductLayout() {
   const DEV = IS_DEV;
 
   const [authOpen, setAuthOpen] = useState(false);
-  const [authInitialMode, setAuthInitialMode] = useState<"signup" | "login" | "forgot" | "reset">(
-    "signup"
-  );
+  const [authInitialMode, setAuthInitialMode] = useState<
+    "signup" | "login" | "forgot" | "reset" | "changePassword"
+  >("signup");
   const [planOpen, setPlanOpen] = useState(false);
+
+const [isMobileHeaderMenuOpen, setIsMobileHeaderMenuOpen] = useState(false);
+
+React.useEffect(() => {
+  if (!isMobileHeaderMenuOpen) return;
+
+  const previousOverflow = document.body.style.overflow;
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      setIsMobileHeaderMenuOpen(false);
+    }
+  };
+
+  document.body.style.overflow = "hidden";
+  window.addEventListener("keydown", onKeyDown);
+
+  return () => {
+    document.body.style.overflow = previousOverflow;
+    window.removeEventListener("keydown", onKeyDown);
+  };
+}, [isMobileHeaderMenuOpen]);
+
+React.useEffect(() => {
+  const onResize = () => {
+    if (window.innerWidth > 760) {
+      setIsMobileHeaderMenuOpen(false);
+    }
+  };
+
+  window.addEventListener("resize", onResize);
+  return () => window.removeEventListener("resize", onResize);
+}, []);
+
 
   const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
     "MANUAL"
@@ -165,121 +201,240 @@ export function ProductLayout() {
   }
 
   const openAuthModal = useCallback(
-    (mode: "signup" | "login" | "forgot" | "reset" = "signup") => {
+    (
+      mode: "signup" | "login" | "forgot" | "reset" | "changePassword" = "signup"
+    ) => {
       setAuthInitialMode(mode);
       setAuthOpen(true);
     },
     []
   );
 
+
+
+const mobileMenuLabel =
+  lang === "pt" ? "Abrir menu" : lang === "es" ? "Abrir menú" : "Open menu";
+
+const creditsBadge = (
+  <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
+);
+
+const renderCreditsCta = (onAfterClick?: () => void) => {
+  const currentPlan = store.state.plan;
+
+  if (currentPlan === "PRO") return null;
+
+  if (currentPlan === "FREE_ANON") {
+    if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
+      return null;
+    }
+
+    return (
+      <button
+        className="pl-credits-cta"
+        onClick={() => {
+          onAfterClick?.();
+          openAuthModal("signup");
+        }}
+      >
+        {(() => {
+          const label = t(lang, "auth.createFreeAccount");
+          return label === "auth.createFreeAccount" ? t(lang, "auth.signup") : label;
+        })()}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className="pl-credits-cta"
+      onClick={() => {
+        onAfterClick?.();
+        setPlanReason("MANUAL");
+        setPlanOpen(true);
+      }}
+    >
+      {t(lang, "credits.moreCredits")}
+    </button>
+  );
+};
+
+const mobileHeaderMenuContent = (
+  <>
+    {allowDevPlanOverride ? (
+      <div className="product-pill">
+        <span className="product-pill-label">DEV PLAN</span>
+        <select
+          className="product-select"
+          value={plan}
+          onChange={(e) => store.setPlan(e.target.value as PlanId)}
+        >
+          {PLAN_LABELS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    ) : null}
+
+    {DEV ? (
+      <button
+        className="product-reset-btn"
+        onClick={() => {
+          store.resetForTesting();
+          setIsMobileHeaderMenuOpen(false);
+        }}
+        title={t(lang, "common.devResetTitle")}
+      >
+        {t(lang, "common.devReset")}
+      </button>
+    ) : null}
+
+    {isAuthenticated ? (
+      <Link
+        to="account"
+        className="product-pill product-account-link"
+        onClick={() => setIsMobileHeaderMenuOpen(false)}
+      >
+        <span className="product-pill-label">{t(lang, "auth.account")}</span>
+        <span>{accountLabel}</span>
+      </Link>
+    ) : null}
+
+    {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
+      <button
+        type="button"
+        className="product-reset-btn"
+        onClick={() => {
+          setIsMobileHeaderMenuOpen(false);
+          void handleLogout();
+        }}
+      >
+        {t(lang, "auth.logout")}
+      </button>
+    ) : null}
+
+    <div className="product-pill product-pill-lang">
+      <LanguageDropdown
+        value={lang}
+        onChange={(v) => store.setLang(v)}
+        ariaLabel={t(lang, "nav.language")}
+        menuAlign="right"
+      />
+    </div>
+
+    {renderCreditsCta(() => setIsMobileHeaderMenuOpen(false))}
+  </>
+);
+
+
   return (
     <div className="product-shell">
-      <header className="product-header">
-        <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
-          <BrandLogo />
-        </Link>
 
-        <div className="product-header-right">
-          {allowDevPlanOverride ? (
-            <div className="product-pill">
-              <span className="product-pill-label">DEV PLAN</span>
-              <select
-                className="product-select"
-                value={plan}
-                onChange={(e) => store.setPlan(e.target.value as PlanId)}
-              >
-                {PLAN_LABELS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
+<header className={`product-header ${isMobileHeaderMenuOpen ? "is-mobile-menu-open" : ""}`}>
+  <div className="product-header-bar">
+    <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
+      <BrandLogo />
+    </Link>
 
-          {DEV ? (
-            <button
-              className="product-reset-btn"
-              onClick={() => {
-                store.resetForTesting();
-              }}
-              title={t(lang, "common.devResetTitle")}
-            >
-              {t(lang, "common.devReset")}
-            </button>
-          ) : null}
-
-          {isAuthenticated ? (
-            <Link to="account" className="product-pill product-account-link">
-              <span className="product-pill-label">{t(lang, "auth.account")}</span>
-              <span>{accountLabel}</span>
-            </Link>
-          ) : null}
-
-          {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
-            <button
-              type="button"
-              className="product-reset-btn"
-              onClick={() => {
-                void handleLogout();
-              }}
-            >
-              {t(lang, "auth.logout")}
-            </button>
-          ) : null}
-
-          <div className="product-pill product-pill-lang">
-            <LanguageDropdown
-              value={lang}
-              onChange={(v) => store.setLang(v)}
-              ariaLabel={t(lang, "nav.language")}
-              menuAlign="right"
-            />
-          </div>
-
-          <div className="pl-credits-wrap">
-            <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
-
-            {(() => {
-              const currentPlan = store.state.plan;
-
-              if (currentPlan === "PRO") return null;
-
-              if (currentPlan === "FREE_ANON") {
-                if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
-                  return null;
-                }
-
-                return (
-                  <button
-                    className="pl-credits-cta"
-                    onClick={() => {
-                    openAuthModal("signup");
-                    }}
-                  >
-                    {(() => {
-                      const label = t(lang, "auth.createFreeAccount");
-                      return label === "auth.createFreeAccount" ? t(lang, "auth.signup") : label;
-                    })()}
-                  </button>
-                );
-              }
-
-              return (
-                <button
-                  className="pl-credits-cta"
-                  onClick={() => {
-                    setPlanReason("MANUAL");
-                    setPlanOpen(true);
-                  }}
-                >
-                  {t(lang, "credits.moreCredits")}
-                </button>
-              );
-            })()}
-          </div>
+    <div className="product-header-right product-header-right-desktop">
+      {allowDevPlanOverride ? (
+        <div className="product-pill">
+          <span className="product-pill-label">DEV PLAN</span>
+          <select
+            className="product-select"
+            value={plan}
+            onChange={(e) => store.setPlan(e.target.value as PlanId)}
+          >
+            {PLAN_LABELS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
         </div>
-      </header>
+      ) : null}
+
+      {DEV ? (
+        <button
+          className="product-reset-btn"
+          onClick={() => {
+            store.resetForTesting();
+          }}
+          title={t(lang, "common.devResetTitle")}
+        >
+          {t(lang, "common.devReset")}
+        </button>
+      ) : null}
+
+      {isAuthenticated ? (
+        <Link to="account" className="product-pill product-account-link">
+          <span className="product-pill-label">{t(lang, "auth.account")}</span>
+          <span>{accountLabel}</span>
+        </Link>
+      ) : null}
+
+      {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
+        <button
+          type="button"
+          className="product-reset-btn"
+          onClick={() => {
+            void handleLogout();
+          }}
+        >
+          {t(lang, "auth.logout")}
+        </button>
+      ) : null}
+
+      <div className="product-pill product-pill-lang">
+        <LanguageDropdown
+          value={lang}
+          onChange={(v) => store.setLang(v)}
+          ariaLabel={t(lang, "nav.language")}
+          menuAlign="right"
+        />
+      </div>
+
+      <div className="pl-credits-wrap">
+        {creditsBadge}
+        {renderCreditsCta()}
+      </div>
+    </div>
+
+    <div className="product-header-right product-header-right-mobile">
+      {creditsBadge}
+
+      <button
+        type="button"
+        className="product-mobile-menu-btn"
+        aria-label={mobileMenuLabel}
+        aria-expanded={isMobileHeaderMenuOpen}
+        onClick={() => setIsMobileHeaderMenuOpen((prev) => !prev)}
+      >
+        <span />
+        <span />
+        <span />
+      </button>
+    </div>
+  </div>
+
+  {isMobileHeaderMenuOpen ? (
+    <>
+      <button
+        type="button"
+        className="product-mobile-menu-backdrop"
+        aria-label="Fechar menu"
+        onClick={() => setIsMobileHeaderMenuOpen(false)}
+      />
+
+      <div className="product-mobile-menu" role="dialog" aria-modal="true">
+        <div className="product-mobile-menu-body">{mobileHeaderMenuContent}</div>
+      </div>
+    </>
+  ) : null}
+</header>
+
 
       <main className="product-main">
         <Outlet

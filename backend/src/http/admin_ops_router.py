@@ -26,7 +26,6 @@ def _norm_text(value: str | None) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-
 def _sport_key_country_hint(sport_key: str) -> str | None:
     parts = (sport_key or "").split("_")
     if len(parts) >= 3 and parts[0] == "soccer":
@@ -34,24 +33,66 @@ def _sport_key_country_hint(sport_key: str) -> str | None:
     return None
 
 
-def _extract_competition_and_country(
+def _sport_key_competition_hint(sport_key: str) -> str | None:
+    parts = (sport_key or "").split("_")
+    if len(parts) >= 4 and parts[0] == "soccer":
+        return _norm_text(" ".join(parts[2:]))
+    return None
+
+
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    seen = set()
+    out: list[str] = []
+    for v in values:
+        key = (v or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _extract_competition_candidates_and_country(
     sport_key: str,
     sport_title: str | None,
     sport_group: str | None,
-) -> tuple[str, str | None]:
+) -> tuple[list[str], str | None]:
     title = (sport_title or "").strip()
 
-    if (sport_group or "").lower() == "soccer":
-        if " - " in title:
-            left, right = title.rsplit(" - ", 1)
-            return _norm_text(left), _norm_text(right)
+    if (sport_group or "").lower() != "soccer":
+        base = _norm_text(title or sport_key)
+        return ([base] if base else []), None
 
-        country_hint = _sport_key_country_hint(sport_key)
-        comp = title or sport_key
-        return _norm_text(comp), _norm_text(country_hint)
+    country_norm = _norm_text(_sport_key_country_hint(sport_key))
+    candidates: list[str] = []
 
-    return _norm_text(title or sport_key), None
+    title_norm = _norm_text(title)
+    if title_norm:
+        candidates.append(title_norm)
 
+    if " - " in title:
+        left, right = title.split(" - ", 1)
+        left_norm = _norm_text(left)
+        right_norm = _norm_text(right)
+
+        # Para soccer, assumimos padrão "Country - Competition"
+        if left_norm and not country_norm:
+            country_norm = left_norm
+
+        if right_norm:
+            candidates.append(right_norm)
+
+    if country_norm and title_norm.startswith(country_norm + " "):
+        stripped = title_norm[len(country_norm):].strip()
+        if stripped:
+            candidates.append(stripped)
+
+    sport_key_comp = _sport_key_competition_hint(sport_key)
+    if sport_key_comp:
+        candidates.append(sport_key_comp)
+
+    candidates = _dedupe_keep_order(candidates)
+    return candidates, (country_norm or None)
 
 def _auto_resolve_single_league(cur, sport_key: str) -> dict:
     cur.execute(
@@ -81,7 +122,7 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
             "reason": "already_resolved",
         }
 
-    comp_norm, country_norm = _extract_competition_and_country(
+    competition_candidates, country_norm = _extract_competition_candidates_and_country(
         sport_key=row[0],
         sport_title=row[1],
         sport_group=row[2],
@@ -107,9 +148,9 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         league_name_norm = _norm_text(lg[1])
         country_name_norm = _norm_text(lg[2])
 
-        if comp_norm == league_name_norm and country_norm and country_norm == country_name_norm:
+        if league_name_norm in competition_candidates and country_norm and country_norm == country_name_norm:
             exact_matches.append((league_id, lg[1], lg[2]))
-        elif comp_norm == league_name_norm:
+        elif league_name_norm in competition_candidates:
             name_only_matches.append((league_id, lg[1], lg[2]))
 
     chosen = None
@@ -150,11 +191,13 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
             "ok": False,
             "sport_key": sport_key,
             "reason": "no_match",
-            "competition_norm": comp_norm,
+            "competition_candidates": competition_candidates,
             "country_norm": country_norm,
         }
 
     league_id = int(chosen[0])
+
+    mapping_source = "auto_high_conf" if (confidence or 0) >= 0.95 else "auto_low_conf"
 
     cur.execute(
         """
@@ -162,6 +205,7 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         set
           league_id = %(league_id)s,
           mapping_status = 'approved',
+          mapping_source = %(mapping_source)s,
           confidence = %(confidence)s,
           notes = %(notes)s,
           updated_at_utc = now()
@@ -170,6 +214,7 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         {
             "sport_key": sport_key,
             "league_id": league_id,
+            "mapping_source": mapping_source,
             "confidence": confidence,
             "notes": notes,
         },
@@ -427,19 +472,33 @@ def admin_ops_list_leagues():
             rows = cur.fetchall() or []
 
     for r in rows:
+        league_id = int(r[3] or 0)
+        enabled = bool(r[9])
+        mapping_status = str(r[10] or "")
+
+        if enabled and mapping_status == "approved" and league_id > 0:
+            computed_status = "approved"
+        elif enabled and league_id <= 0:
+            computed_status = "incomplete"
+        elif mapping_status == "pending" or league_id <= 0:
+            computed_status = "pending"
+        else:
+            computed_status = "disabled"
+
         items.append(
             {
                 "sport_key": r[0],
                 "sport_title": r[1],
                 "sport_group": r[2],
-                "league_id": r[3],
+                "league_id": league_id,
                 "season_policy": r[4],
                 "fixed_season": r[5],
                 "regions": r[6],
                 "hours_ahead": r[7],
                 "tol_hours": r[8],
-                "enabled": r[9],
-                "mapping_status": r[10],
+                "enabled": enabled,
+                "mapping_status": mapping_status,
+                "computed_status": computed_status,
                 "confidence": float(r[11]) if r[11] is not None else None,
                 "notes": r[12],
                 "updated_at_utc": r[13].isoformat() if hasattr(r[13], "isoformat") else str(r[13]),
@@ -518,6 +577,7 @@ def admin_ops_toggle_league(
                             "code": "league_id_not_resolved",
                             "sport_key": sport_key,
                             "reason": resolve_out.get("reason"),
+                            "resolver": resolve_out,
                         },
                     )
 

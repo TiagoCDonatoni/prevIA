@@ -13,7 +13,13 @@
   },
   "price": {
     "placeholder": "Pricing soon",
-    "perMonth": "per month"
+    "perMonth": "per month",
+    "perQuarter": "per quarter",
+    "perYear": "per year"
+  },
+  "modal": {
+    "manualTitle": "Choose the right plan",
+    "manualSubtitle": "Compare the options and choose the billing recurrence that fits you best."
   },
 
   "cta": {

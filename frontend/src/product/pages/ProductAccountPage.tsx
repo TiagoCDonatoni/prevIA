@@ -356,7 +356,7 @@ export default function ProductAccountPage() {
             <button
               type="button"
               className="product-secondary"
-              onClick={() => openAuthModal(isAuthenticated ? "reset" : "login")}
+              onClick={() => openAuthModal(isAuthenticated ? "changePassword" : "login")}
             >
               {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
             </button>
