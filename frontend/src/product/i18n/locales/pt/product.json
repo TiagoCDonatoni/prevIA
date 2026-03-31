@@ -40,7 +40,26 @@
   "value_detection_enabled": "Value detection habilitado",
 
   "locked_body": "Disponível em um plano superior.",
-  "locked_cta": "Desbloquear agora"
-
+  "locked_cta": "Desbloquear agora",
+  "filtersTitle": "Filtros",
+  "filtersApply": "Aplicar filtros",
+  "filtersClear": "Limpar filtros",
+  "mobileFiltersButton": "Filtros",
+  "filterCountries": "País",
+  "filterLeagues": "Liga",
+  "filterBooks": "Casas",
+  "filterTeams": "Times",
+  "filterCountriesPlaceholder": "Todos os países",
+  "filterLeaguesPlaceholder": "Todas as ligas",
+  "filterBooksPlaceholder": "Todas as casas",
+  "filterTeamsPlaceholder": "Todos os times",
+  "searchCountryPlaceholder": "Digite um país",
+  "searchLeaguePlaceholder": "Digite uma liga",
+  "searchBookPlaceholder": "Digite uma casa",
+  "searchTeamPlaceholder": "Digite um time",
+  "noCountryResults": "Nenhum país encontrado",
+  "noLeagueResults": "Nenhuma liga encontrada",
+  "noBookResults": "Nenhuma casa encontrada",
+  "noTeamResults": "Nenhum time encontrado"
 }
 

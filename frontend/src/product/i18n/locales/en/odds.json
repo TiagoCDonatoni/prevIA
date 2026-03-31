@@ -33,6 +33,8 @@
   "revealHint": "Click “View analysis” to see probabilities.",
   "filterLeague": "Filter by league",
 
-  "opportunityDetected": "🔥 Opportunity"
+  "opportunityDetected": "🔥 Opportunity",
+  "sortEdge": "Sort by edge",
+  "onlyOpportunities": "🔥 Only opportunities"
 
 }

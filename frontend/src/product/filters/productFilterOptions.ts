@@ -1,4 +1,8 @@
-import type { ProductLeagueItem } from "../../api/contracts";
+import type {
+  ProductLeagueItem,
+  ProductOddsBook,
+  ProductOddsEvent,
+} from "../../api/contracts";
 import type { Lang } from "../i18n";
 import {
   getLeagueCountryCode,
@@ -130,4 +134,88 @@ export function filterLeaguesBySelectedSportKeys(
 
   const active = new Set(selectedSportKeys.map((item) => String(item).trim()));
   return leagues.filter((league) => active.has(league.sport_key));
+}
+
+function safeBookName(book: ProductOddsBook) {
+  const raw = String(book.name ?? book.key ?? "").trim();
+  return raw || String(book.key ?? "").trim() || "Unknown";
+}
+
+export function buildBookOptions(events: ProductOddsEvent[]): FilterOption[] {
+  const byBook = new Map<
+    string,
+    {
+      label: string;
+      count: number;
+    }
+  >();
+
+  for (const event of events) {
+    const books = Array.isArray(event.odds_books) ? event.odds_books : [];
+    for (const book of books) {
+      const key = String(book.key ?? "").trim();
+      if (!key) continue;
+
+      const label = safeBookName(book);
+      const current = byBook.get(key);
+      if (current) {
+        current.count += 1;
+        continue;
+      }
+
+      byBook.set(key, {
+        label,
+        count: 1,
+      });
+    }
+  }
+
+  return Array.from(byBook.entries())
+    .map(([value, entry]) => ({
+      value,
+      label: entry.label,
+      count: entry.count,
+      searchText: normalizeText(`${entry.label} ${value}`),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+}
+
+export function buildTeamOptions(events: ProductOddsEvent[]): FilterOption[] {
+  const byTeam = new Map<
+    string,
+    {
+      label: string;
+      count: number;
+    }
+  >();
+
+  function addTeam(raw: string | null | undefined) {
+    const label = String(raw ?? "").trim();
+    if (!label) return;
+
+    const current = byTeam.get(label);
+    if (current) {
+      current.count += 1;
+      return;
+    }
+
+    byTeam.set(label, {
+      label,
+      count: 1,
+    });
+  }
+
+  for (const event of events) {
+    addTeam(event.home_name);
+    addTeam(event.away_name);
+  }
+
+  return Array.from(byTeam.entries())
+    .map(([value, entry]) => ({
+      value,
+      label: entry.label,
+      count: entry.count,
+      searchText: normalizeText(entry.label),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 }

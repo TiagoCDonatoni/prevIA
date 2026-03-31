@@ -40,6 +40,26 @@
   "value_detection_enabled": "Value detection enabled",
 
   "locked_body": "Available on a higher plan.",
-  "locked_cta": "Unlock now"
+  "locked_cta": "Unlock now",
+  "filtersTitle": "Filters",
+  "filtersApply": "Apply filters",
+  "filtersClear": "Clear filters",
+  "mobileFiltersButton": "Filters",
+  "filterCountries": "Country",
+  "filterLeagues": "League",
+  "filterBooks": "Books",
+  "filterTeams": "Teams",
+  "filterCountriesPlaceholder": "All countries",
+  "filterLeaguesPlaceholder": "All leagues",
+  "filterBooksPlaceholder": "All books",
+  "filterTeamsPlaceholder": "All teams",
+  "searchCountryPlaceholder": "Type a country",
+  "searchLeaguePlaceholder": "Type a league",
+  "searchBookPlaceholder": "Type a book",
+  "searchTeamPlaceholder": "Type a team",
+  "noCountryResults": "No countries found",
+  "noLeagueResults": "No leagues found",
+  "noBookResults": "No books found",
+  "noTeamResults": "No teams found"
 }
 
