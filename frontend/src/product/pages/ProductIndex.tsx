@@ -1610,12 +1610,13 @@ return (
           onChange={setSelectedTeams}
         />
 
-      <div className="pi-inline-filter-selects">
-        {renderWindowDaysSelect()}
-        {renderSortSelect()}
-      </div>
+        <div className="pi-inline-filter-selects">
+          {renderWindowDaysSelect()}
+          {renderSortSelect()}
+        </div>
 
-      {renderOnlyOpportunitiesToggle()}
+        {renderOnlyOpportunitiesToggle()}
+      </div>
     </div>
 
     <div className="pi-topline">
@@ -1811,13 +1812,12 @@ return (
           onChange={setSelectedTeams}
         />
 
-        {renderOnlyOpportunitiesToggle()}
-
         <div className="pi-inline-filter-selects">
           {renderWindowDaysSelect()}
           {renderSortSelect()}
-          {renderOnlyOpportunitiesToggle()}
         </div>
+
+        {renderOnlyOpportunitiesToggle()}
       </div>
     </ProductFiltersSheet>
 
