@@ -364,10 +364,10 @@
   gap: 8px;
   min-width: 0;
   max-width: 100%;
-  padding: 6px 10px;
-  border: 1px solid #e5e7eb;
+  padding: 5px 10px;
+  border: 1px solid #e7edf5;
   border-radius: 999px;
-  background: #f8fafc;
+  background: #fbfcfe;
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
@@ -1646,6 +1646,55 @@
 .pi-select option {
   background-color: #ffffff;
   color: #0f172a;
+}
+
+.pi-simple-filter {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--previa-border);
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  box-sizing: border-box;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.pi-simple-filter:hover {
+  border-color: #c7d2e5;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+}
+
+.pi-simple-filter-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--previa-muted);
+}
+
+.pi-simple-filter-select {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--previa-text);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.pi-simple-filter-select option {
+  color: #0f172a;
+  background: #ffffff;
 }
 
 .pi-cta-sub {
@@ -3344,9 +3393,9 @@
     minmax(140px, 1fr)
     minmax(140px, 1fr)
     minmax(160px, 1.1fr)
-    minmax(150px, 170px)
-    minmax(105px, 120px)
-    minmax(130px, 150px);
+    minmax(105px, 125px)
+    minmax(150px, 185px)
+    minmax(150px, 180px);
 }
 
 @media (max-width: 1280px) {

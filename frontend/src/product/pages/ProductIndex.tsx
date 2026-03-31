@@ -549,16 +549,78 @@ export default function ProductIndex() {
     return (
       <button
         type="button"
-        className={`pi-toggle-chip pi-toggle-switch ${onlyOpportunities ? "is-active" : ""} ${extraClassName}`.trim()}
+        className={`pi-toggle-inline ${onlyOpportunities ? "is-active" : ""} ${extraClassName}`.trim()}
         onClick={() => setOnlyOpportunities((prev) => !prev)}
         role="switch"
         aria-checked={onlyOpportunities}
       >
-        <span className="pi-toggle-switch-copy">{t(lang, "odds.onlyOpportunities")}</span>
+        <span className="pi-toggle-inline-copy">{t(lang, "odds.onlyOpportunities")}</span>
+
         <span className="pi-toggle-switch-track" aria-hidden="true">
           <span className="pi-toggle-switch-thumb" />
         </span>
       </button>
+    );
+  }
+
+  function renderWindowDaysSelect(extraClassName = "") {
+    const label =
+      lang === "en" ? "Window" : lang === "es" ? "Ventana" : "Janela";
+
+    return (
+      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
+        <span className="pi-simple-filter-label">{label}</span>
+        <select
+          className="pi-simple-filter-select"
+          value={windowDays}
+          onChange={(e) => setWindowDays(Number(e.target.value))}
+          aria-label={t(lang, "odds.filterWindow")}
+        >
+          <option value={1}>{t(lang, "odds.windowToday")}</option>
+          <option value={3}>{t(lang, "odds.window3d")}</option>
+          <option value={7}>{t(lang, "odds.window7d")}</option>
+          <option value={30}>{t(lang, "odds.window30d")}</option>
+        </select>
+      </label>
+    );
+  }
+
+  function renderSortSelect(extraClassName = "") {
+    const label =
+      lang === "en" ? "Sort by" : lang === "es" ? "Ordenar por" : "Ordenar por";
+
+    return (
+      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
+        <span className="pi-simple-filter-label">{label}</span>
+        <select
+          className="pi-simple-filter-select"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+          aria-label={t(lang, "odds.sortBy")}
+        >
+          <option value="DATE">
+            {lang === "en"
+              ? "Closest date"
+              : lang === "es"
+              ? "Fecha más próxima"
+              : "Data mais próxima"}
+          </option>
+          <option value="CONFIDENCE">
+            {lang === "en"
+              ? "Highest confidence"
+              : lang === "es"
+              ? "Mayor confianza"
+              : "Maior confiança"}
+          </option>
+          <option value="EDGE">
+            {lang === "en"
+              ? "Highest edge"
+              : lang === "es"
+              ? "Mayor edge"
+              : "Maior edge"}
+          </option>
+        </select>
+      </label>
     );
   }
 
@@ -1548,31 +1610,12 @@ return (
           onChange={setSelectedTeams}
         />
 
-        {renderOnlyOpportunitiesToggle()}
-
-        <select
-          className="pi-select"
-          value={windowDays}
-          onChange={(e) => setWindowDays(Number(e.target.value))}
-          aria-label={t(lang, "odds.filterWindow")}
-        >
-          <option value={1}>{t(lang, "odds.windowToday")}</option>
-          <option value={3}>{t(lang, "odds.window3d")}</option>
-          <option value={7}>{t(lang, "odds.window7d")}</option>
-          <option value={30}>{t(lang, "odds.window30d")}</option>
-        </select>
-
-        <select
-          className="pi-select"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortBy)}
-          aria-label={t(lang, "odds.sortBy")}
-        >
-          <option value="DATE">{t(lang, "odds.sortDate")}</option>
-          <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
-          <option value="EDGE">{t(lang, "odds.sortEdge")}</option>
-        </select>
+      <div className="pi-inline-filter-selects">
+        {renderWindowDaysSelect()}
+        {renderSortSelect()}
       </div>
+
+      {renderOnlyOpportunitiesToggle()}
     </div>
 
     <div className="pi-topline">
@@ -1585,7 +1628,14 @@ return (
             <span className="pi-subsep">•</span>
           </>
         ) : null}
-        {t(lang, "odds.metaCount", { showing: visibleEvents.length, loaded: events.length })}
+        <span>
+          {lang === "en"
+            ? `${visibleEvents.length} matches`
+            : lang === "es"
+            ? `${visibleEvents.length} partidos`
+            : `${visibleEvents.length} jogos`}
+        </span>
+
         {lastLoadedAt ? (
           <>
             <span className="pi-subsep">•</span>
@@ -1682,20 +1732,22 @@ return (
         {onlyOpportunities ? (
           <button
             type="button"
-            className="pi-filter-chip pi-filter-chip-clear"
-            onClick={clearAdvancedFilters}
+            className="pi-filter-chip pi-filter-chip-action"
+            onClick={() => setOnlyOpportunities(false)}
           >
-            <span>{t(lang, "product.filtersClear")}</span>
+            <span>{t(lang, "odds.onlyOpportunities")}</span>
             <span aria-hidden="true">×</span>
           </button>
         ) : null}
 
-        <span className="pi-filter-chip">
-          {t(lang, "product.filtersClear")}
-          <button type="button" onClick={clearAdvancedFilters}>
-            ×
-          </button>
-        </span>
+        <button
+          type="button"
+          className="pi-filter-chip pi-filter-chip-action pi-filter-chip-clear"
+          onClick={clearAdvancedFilters}
+        >
+          <span>{t(lang, "product.filtersClear")}</span>
+          <span aria-hidden="true">×</span>
+        </button>
       </div>
     ) : null}
 
@@ -1762,28 +1814,9 @@ return (
         {renderOnlyOpportunitiesToggle()}
 
         <div className="pi-inline-filter-selects">
-          <select
-            className="pi-select"
-            value={windowDays}
-            onChange={(e) => setWindowDays(Number(e.target.value))}
-            aria-label={t(lang, "odds.filterWindow")}
-          >
-            <option value={1}>{t(lang, "odds.windowToday")}</option>
-            <option value={3}>{t(lang, "odds.window3d")}</option>
-            <option value={7}>{t(lang, "odds.window7d")}</option>
-            <option value={30}>{t(lang, "odds.window30d")}</option>
-          </select>
-
-          <select
-            className="pi-select"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortBy)}
-            aria-label={t(lang, "odds.sortBy")}
-          >
-            <option value="DATE">{t(lang, "odds.sortDate")}</option>
-            <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
-            <option value="EDGE">{t(lang, "odds.sortEdge")}</option>
-          </select>
+          {renderWindowDaysSelect()}
+          {renderSortSelect()}
+          {renderOnlyOpportunitiesToggle()}
         </div>
       </div>
     </ProductFiltersSheet>
