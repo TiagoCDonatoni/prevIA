@@ -480,7 +480,8 @@ export default function ProductIndex() {
     selectedCountryCodes.length > 0 ||
     selectedLeagueSportKeys.length > 0 ||
     selectedBookKeys.length > 0 ||
-    selectedTeams.length > 0;
+    selectedTeams.length > 0 ||
+    onlyOpportunities;
 
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
@@ -542,6 +543,23 @@ export default function ProductIndex() {
     setOnlyOpportunities(false);
     setSortBy("DATE");
     resetWindowDaysFromLeague(league);
+  }
+
+  function renderOnlyOpportunitiesToggle(extraClassName = "") {
+    return (
+      <button
+        type="button"
+        className={`pi-toggle-chip pi-toggle-switch ${onlyOpportunities ? "is-active" : ""} ${extraClassName}`.trim()}
+        onClick={() => setOnlyOpportunities((prev) => !prev)}
+        role="switch"
+        aria-checked={onlyOpportunities}
+      >
+        <span className="pi-toggle-switch-copy">{t(lang, "odds.onlyOpportunities")}</span>
+        <span className="pi-toggle-switch-track" aria-hidden="true">
+          <span className="pi-toggle-switch-thumb" />
+        </span>
+      </button>
+    );
   }
 
   useEffect(() => {
@@ -986,8 +1004,7 @@ export default function ProductIndex() {
 
                   {(() => {
                     const edge = selected.edge_summary?.best_edge;
-                    const hasOpportunity =
-                      typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02;
+                    const hasOpportunity = hasOpportunityEdge(edge);
                     if (!hasOpportunity) return null;
 
                     return (
@@ -1531,6 +1548,8 @@ return (
           onChange={setSelectedTeams}
         />
 
+        {renderOnlyOpportunitiesToggle()}
+
         <select
           className="pi-select"
           value={windowDays}
@@ -1551,6 +1570,7 @@ return (
         >
           <option value="DATE">{t(lang, "odds.sortDate")}</option>
           <option value="CONFIDENCE">{t(lang, "odds.sortConfidence")}</option>
+          <option value="EDGE">{t(lang, "odds.sortEdge")}</option>
         </select>
       </div>
     </div>
@@ -1660,12 +1680,14 @@ return (
         ))}
 
         {onlyOpportunities ? (
-          <span className="pi-filter-chip">
-            {t(lang, "odds.onlyOpportunities")}
-            <button type="button" onClick={() => setOnlyOpportunities(false)}>
-              ×
-            </button>
-          </span>
+          <button
+            type="button"
+            className="pi-filter-chip pi-filter-chip-clear"
+            onClick={clearAdvancedFilters}
+          >
+            <span>{t(lang, "product.filtersClear")}</span>
+            <span aria-hidden="true">×</span>
+          </button>
         ) : null}
 
         <span className="pi-filter-chip">
@@ -1737,14 +1759,7 @@ return (
           onChange={setSelectedTeams}
         />
 
-        <button
-          type="button"
-          className={`pi-toggle-chip ${onlyOpportunities ? "is-active" : ""}`}
-          onClick={() => setOnlyOpportunities((prev) => !prev)}
-          aria-pressed={onlyOpportunities}
-        >
-          {t(lang, "odds.onlyOpportunities")}
-        </button>
+        {renderOnlyOpportunitiesToggle()}
 
         <div className="pi-inline-filter-selects">
           <select
@@ -1802,32 +1817,33 @@ return (
                   </div>
 
                   <div className="pi-row-sub">
-                    <span className="pi-league">
-                      {leagueDisplayName(leaguesBySportKey.get(e.sport_key) ?? league, lang)}
-                    </span>
+                    <div className="pi-row-meta-inline">
+                      <span className="pi-league" title={leagueDisplayName(leaguesBySportKey.get(e.sport_key) ?? league, lang)}>
+                        {leagueDisplayName(leaguesBySportKey.get(e.sport_key) ?? league, lang)}
+                      </span>
 
-                    <span className="pi-subsep">•</span>
+                      <span className="pi-subsep">•</span>
 
-                    <span className="pi-kick">
-                      {fmtKickoff(e.commence_time_utc, lang)}
-                    </span>
+                      <span className="pi-kick">
+                        {fmtKickoff(e.commence_time_utc, lang)}
+                      </span>
 
-                    {e.odds_best ? (
-                      <>
-                        <span className="pi-subsep">•</span>
-                        <span className="pi-odds-mini">
-                          H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A {fmtOdds(e.odds_best.A)}
-                        </span>
-                      </>
-                    ) : null}
+                      {e.odds_best ? (
+                        <>
+                          <span className="pi-subsep">•</span>
+                          <span className="pi-odds-mini">
+                            H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A {fmtOdds(e.odds_best.A)}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
 
                     {hasOpportunity ? (
-                      <>
-                        <span className="pi-subsep">•</span>
+                      <div className="pi-row-actions-inline">
                         <span className="pi-opportunity">
                           {t(lang, "odds.opportunityDetected")}
                         </span>
-                      </>
+                      </div>
                     ) : null}
                   </div>
                 </div>

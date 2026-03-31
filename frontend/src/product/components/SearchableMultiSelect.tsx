@@ -105,9 +105,12 @@ export function SearchableMultiSelect({
       >
         <span className="smx-trigger-copy">
           <span className="smx-trigger-label">{label}</span>
-          <span className={`smx-trigger-summary ${selectedOptions.length ? "is-filled" : ""}`}>
-            {summaryText}
-          </span>
+            <span
+              className={`smx-trigger-summary ${selectedOptions.length ? "is-filled" : ""}`}
+              title={summaryText}
+            >
+              {summaryText}
+            </span>
         </span>
 
         <span className="smx-trigger-actions">
