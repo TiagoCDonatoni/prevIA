@@ -1610,12 +1610,9 @@ return (
           onChange={setSelectedTeams}
         />
 
-        <div className="pi-inline-filter-selects">
-          {renderWindowDaysSelect()}
-          {renderSortSelect()}
-        </div>
-
-        {renderOnlyOpportunitiesToggle()}
+      {renderWindowDaysSelect("pi-filter-window")}
+      {renderSortSelect("pi-filter-sort")}
+      {renderOnlyOpportunitiesToggle("pi-filter-toggle")}
       </div>
     </div>
 

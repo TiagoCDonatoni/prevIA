@@ -3344,6 +3344,21 @@
   transition: color 0.16s ease, opacity 0.16s ease;
 }
 
+.pi-filter-window,
+.pi-filter-sort,
+.pi-filter-toggle {
+  min-width: 0;
+}
+
+.pi-filter-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.pi-toggle-inline {
+  height: 100%;
+}
+
 .pi-toggle-inline-copy {
   min-width: 0;
   line-height: 1.2;
@@ -3393,9 +3408,9 @@
     minmax(140px, 1fr)
     minmax(140px, 1fr)
     minmax(160px, 1.1fr)
-    minmax(105px, 125px)
-    minmax(150px, 185px)
-    minmax(150px, 180px);
+    minmax(120px, 140px)
+    minmax(165px, 210px)
+    minmax(170px, 200px);
 }
 
 @media (max-width: 1280px) {
