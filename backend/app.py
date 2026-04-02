@@ -29,6 +29,7 @@ from src.http.access_router import router as access_router
 # Ops (jobs via botões agora, cron-ready depois)
 from src.http.admin_ops_router import router as admin_ops_router
 
+from src.http.billing_router import router as billing_router
 
 def create_app() -> FastAPI:
     settings = load_settings()
@@ -64,6 +65,7 @@ def create_app() -> FastAPI:
     api.include_router(product_leagues_router)
     api.include_router(product_index_router)
     api.include_router(auth_router)
+    api.include_router(billing_router)
     api.include_router(admin_ops_router)
 
     @api.get("/", response_class=HTMLResponse)

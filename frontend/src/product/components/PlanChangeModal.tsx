@@ -12,12 +12,64 @@ import {
 import { useProductStore } from "../state/productStore";
 
 import { PLAN_CATALOG } from "../planCatalog";
+import {
+  createBillingCheckoutSession,
+  fetchBillingCatalog,
+  type BillingCatalogItem,
+  type BillingCycle,
+} from "../api/billing";
 
 type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED";
-type BillingCycle = "monthly" | "quarterly" | "annual";
 
 const LOW_CREDITS_THRESHOLD = 5;
 const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
+
+type BillingCatalogMap = Partial<
+  Record<
+    PlanId,
+    Partial<
+      Record<
+        BillingCycle,
+        {
+          amount: number | null;
+          currency: string;
+          currencySymbol: string;
+          providerPriceId: string | null;
+        }
+      >
+    >
+  >
+>;
+
+function buildFallbackCatalogEntry(planId: PlanId, cycle: BillingCycle) {
+  const base = PLAN_CATALOG[planId];
+  return {
+    amount: getBillingCyclePrice(base.priceMonthly, cycle),
+    currency: base.currency,
+    currencySymbol: base.currencySymbol,
+    providerPriceId: null,
+  };
+}
+
+function buildBillingCatalogMap(items: BillingCatalogItem[]): BillingCatalogMap {
+  const result: BillingCatalogMap = {};
+
+  for (const item of items) {
+    const planId = String(item.plan_code || "").toUpperCase() as PlanId;
+    const cycle = item.billing_cycle as BillingCycle;
+
+    if (!result[planId]) result[planId] = {};
+
+    result[planId]![cycle] = {
+      amount: typeof item.unit_amount === "number" ? item.unit_amount : null,
+      currency: item.currency_code,
+      currencySymbol: item.currency_symbol || "R$",
+      providerPriceId: item.provider_price_id ?? null,
+    };
+  }
+
+  return result;
+}
 
 function getRecommendedPlanId(currentPlan: PlanId): PlanId | null {
   if (currentPlan === "PRO") return null;
@@ -117,11 +169,48 @@ export function PlanChangeModal(props: {
   const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(null);
   const [selectedCycle, setSelectedCycle] = useState<BillingCycle>("monthly");
 
+  const [billingCatalog, setBillingCatalog] = useState<BillingCatalogMap>({});
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   useEffect(() => {
     if (!props.open) return;
     setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
     setSelectedCycle("monthly");
   }, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan]);
+
+  useEffect(() => {
+    if (!props.open) return;
+
+    if (!PRODUCT_AUTH_ENABLED) {
+      setBillingCatalog({});
+      return;
+    }
+
+    let isMounted = true;
+
+    async function run() {
+      try {
+        setIsCatalogLoading(true);
+        const data = await fetchBillingCatalog();
+        if (!isMounted) return;
+        setBillingCatalog(buildBillingCatalogMap(data.items || []));
+      } catch {
+        if (!isMounted) return;
+        setBillingCatalog({});
+      } finally {
+        if (isMounted) {
+          setIsCatalogLoading(false);
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [props.open]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -162,10 +251,11 @@ export function PlanChangeModal(props: {
   const selectedPlus =
     selectedPlan && selectedLimit != null ? Math.max(0, selectedLimit - currentLimit) : 0;
 
-  const selectedCatalog = selectedPlan ? PLAN_CATALOG[selectedPlan] : null;
-  const selectedPrice = selectedCatalog
-    ? getBillingCyclePrice(selectedCatalog.priceMonthly, selectedCycle)
+  const selectedCatalogEntry = selectedPlan
+    ? billingCatalog[selectedPlan]?.[selectedCycle] ?? buildFallbackCatalogEntry(selectedPlan, selectedCycle)
     : null;
+
+  const selectedPrice = selectedCatalogEntry?.amount ?? null;
 
   return (
     <div
@@ -248,8 +338,9 @@ export function PlanChangeModal(props: {
                   const plus = Math.max(0, limit - currentLimit);
                   const isRecommended = recommendedPlan != null && pid === recommendedPlan;
                   const isSelected = selectedPlan === pid;
-                  const catalog = PLAN_CATALOG[pid];
-                  const cyclePrice = getBillingCyclePrice(catalog.priceMonthly, selectedCycle);
+                  const catalog =
+                    billingCatalog[pid]?.[selectedCycle] ?? buildFallbackCatalogEntry(pid, selectedCycle);
+                  const cyclePrice = catalog.amount;
 
                   return (
                     <button
@@ -337,20 +428,46 @@ export function PlanChangeModal(props: {
               <button
                 type="button"
                 className="product-primary"
-                disabled={!selectedPlan || !canApplyLocalPlanChange}
-                onClick={() => {
+                disabled={
+                  !selectedPlan ||
+                  isSubmitting ||
+                  (PRODUCT_AUTH_ENABLED &&
+                    !PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
+                    isCatalogLoading)
+                }
+                onClick={async () => {
                   if (!selectedPlan) return;
 
                   if (canApplyLocalPlanChange) {
                     store.setPlan(selectedPlan);
+                    props.onClose();
+                    return;
                   }
 
-                  props.onClose();
+                  try {
+                    setIsSubmitting(true);
+
+                    const response = await createBillingCheckoutSession({
+                      plan_code: selectedPlan as Exclude<PlanId, "FREE" | "FREE_ANON">,
+                      billing_cycle: selectedCycle,
+                    });
+
+                    if (response.checkout_url) {
+                      window.location.href = response.checkout_url;
+                      return;
+                    }
+                  } catch (error) {
+                    console.error("billing_checkout_error", error);
+                  } finally {
+                    setIsSubmitting(false);
+                  }
                 }}
               >
-                {canApplyLocalPlanChange
+                {isSubmitting
+                  ? "..."
+                  : canApplyLocalPlanChange
                   ? tr("plans.cta.upgrade")
-                  : tr("plans.price.placeholder")}
+                  : tr("plans.cta.upgrade")}
               </button>
             </div>
           </div>
