@@ -4,11 +4,24 @@ import type {
   ProductOddsEvent,
 } from "../../api/contracts";
 import type { Lang } from "../i18n";
-import {
-  getLeagueCountryCode,
-  getLeagueCountryName,
-  getLeagueDisplayName,
-} from "../i18n/leagueCatalogHelpers";
+import { getCountryNameByCode } from "../i18n/countryCatalog";
+
+function getLeagueDisplayTitle(item: {
+  official_name?: string | null;
+  sport_title?: string | null;
+  sport_key?: string | null;
+}) {
+  return String(item.official_name || item.sport_title || item.sport_key || "").trim();
+}
+
+function getCountryDisplayName(item: {
+  official_country_code?: string | null;
+  country_name?: string | null;
+}, lang: Lang) {
+  const localized = getCountryNameByCode(item.official_country_code, lang);
+  if (localized) return localized;
+  return String(item.country_name || "International").trim();
+}
 
 export type FilterOption = {
   value: string;
@@ -47,19 +60,18 @@ export function buildCountryOptions(
   >();
 
   for (const league of leagues) {
-    const countryCode = String(getLeagueCountryCode(league.sport_key) || "INTL").toUpperCase();
-    const countryName =
-      getLeagueCountryName(league.sport_key, lang) ||
-      (countryCode === "INTL" ? "International" : countryCode);
+    const countryName = getCountryDisplayName(league, lang);
+    const countryCode = String(league.official_country_code ?? "").trim().toUpperCase();
+    const countryKey = countryCode || normalizeText(countryName);
 
-    const current = byCountry.get(countryCode);
+    const current = byCountry.get(countryKey);
 
     if (current) {
       current.count += 1;
       continue;
     }
 
-    byCountry.set(countryCode, {
+    byCountry.set(countryKey, {
       label: countryName,
       count: 1,
       flagCode: toFlagCode(countryCode),
@@ -67,13 +79,13 @@ export function buildCountryOptions(
   }
 
   return Array.from(byCountry.entries())
-    .map(([countryCode, entry]) => ({
-      value: countryCode,
+    .map(([countryKey, entry]) => ({
+      value: countryKey,
       label: entry.label,
-      searchText: normalizeText(`${entry.label} ${countryCode}`),
+      searchText: normalizeText(`${entry.label} ${countryKey}`),
       count: entry.count,
       flagCode: entry.flagCode,
-      meta: { countryCode },
+      meta: { countryKey },
     }))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 }
@@ -90,24 +102,28 @@ export function buildLeagueOptions(
   return leagues
     .filter((league) => {
       if (!activeCountries.size) return true;
-      const countryCode = String(getLeagueCountryCode(league.sport_key) || "INTL").toUpperCase();
-      return activeCountries.has(countryCode);
+      const countryCode = String(league.official_country_code ?? "").trim().toUpperCase();
+      const fallbackKey = normalizeText(getCountryDisplayName(league, lang));
+      return activeCountries.has(countryCode || fallbackKey);
     })
     .map((league) => {
-      const countryCode = String(getLeagueCountryCode(league.sport_key) || "INTL").toUpperCase();
-      const countryName = getLeagueCountryName(league.sport_key, lang) || countryCode;
-      const leagueName = getLeagueDisplayName(league.sport_key, lang);
+      const countryName = getCountryDisplayName(league, lang);
+      const countryCode = String(league.official_country_code ?? "").trim().toUpperCase();
+      const countryKey = countryCode || normalizeText(countryName);
+      const leagueName = getLeagueDisplayTitle(league);
 
       return {
         value: league.sport_key,
         label: leagueName,
         hint: countryName,
         flagCode: toFlagCode(countryCode),
-        searchText: normalizeText(`${leagueName} ${countryName} ${countryCode} ${league.sport_key}`),
+        searchText: normalizeText(
+          `${leagueName} ${countryName} ${league.sport_key} ${countryCode}`
+        ),
         meta: {
           sport_key: league.sport_key,
           league_id: league.league_id,
-          countryCode,
+          countryKey,
         },
       } satisfies FilterOption;
     })
@@ -126,47 +142,29 @@ export function filterOptionsByQuery(options: FilterOption[], query: string) {
   return options.filter((option) => option.searchText.includes(q));
 }
 
-export function filterLeaguesBySelectedSportKeys(
-  leagues: ProductLeagueItem[],
-  selectedSportKeys: string[]
-) {
-  if (!selectedSportKeys.length) return leagues;
-
-  const active = new Set(selectedSportKeys.map((item) => String(item).trim()));
-  return leagues.filter((league) => active.has(league.sport_key));
-}
-
-function safeBookName(book: ProductOddsBook) {
-  const raw = String(book.name ?? book.key ?? "").trim();
-  return raw || String(book.key ?? "").trim() || "Unknown";
-}
-
-export function buildBookOptions(events: ProductOddsEvent[]): FilterOption[] {
-  const byBook = new Map<
-    string,
-    {
-      label: string;
-      count: number;
-    }
-  >();
+export function buildBookOptions(
+  events: ProductOddsEvent[],
+  booksByEventId?: Record<string, ProductOddsBook[]>
+): FilterOption[] {
+  const safeBooksByEventId = booksByEventId ?? {};
+  const byBook = new Map<string, { label: string; count: number }>();
 
   for (const event of events) {
-    const books = Array.isArray(event.odds_books) ? event.odds_books : [];
-    for (const book of books) {
-      const key = String(book.key ?? "").trim();
-      if (!key) continue;
+    const eventId = String(event?.event_id ?? "").trim();
+    if (!eventId) continue;
 
-      const label = safeBookName(book);
-      const current = byBook.get(key);
+    const books = safeBooksByEventId[eventId] ?? [];
+    for (const book of books) {
+      const label = String(book?.name ?? book?.key ?? "").trim();
+      const value = String(book?.key ?? label).trim();
+      if (!label || !value) continue;
+
+      const current = byBook.get(value);
       if (current) {
         current.count += 1;
-        continue;
+      } else {
+        byBook.set(value, { label, count: 1 });
       }
-
-      byBook.set(key, {
-        label,
-        count: 1,
-      });
     }
   }
 
@@ -181,28 +179,21 @@ export function buildBookOptions(events: ProductOddsEvent[]): FilterOption[] {
 }
 
 export function buildTeamOptions(events: ProductOddsEvent[]): FilterOption[] {
-  const byTeam = new Map<
-    string,
-    {
-      label: string;
-      count: number;
-    }
-  >();
+  const byTeam = new Map<string, { label: string; count: number }>();
 
-  function addTeam(raw: string | null | undefined) {
-    const label = String(raw ?? "").trim();
+  function addTeam(name: string | null | undefined) {
+    const label = String(name ?? "").trim();
     if (!label) return;
 
     const current = byTeam.get(label);
     if (current) {
       current.count += 1;
-      return;
+    } else {
+      byTeam.set(label, {
+        label,
+        count: 1,
+      });
     }
-
-    byTeam.set(label, {
-      label,
-      count: 1,
-    });
   }
 
   for (const event of events) {
