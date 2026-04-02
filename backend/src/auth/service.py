@@ -21,6 +21,7 @@ from src.auth.sessions import (
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
 
+from src.billing.service import get_effective_subscription_for_user
 
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
 
@@ -566,6 +567,16 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
         return _build_anonymous_payload()
 
     subscription = _get_or_create_active_subscription(cur, user_id=user_id)
+
+    effective_subscription = get_effective_subscription_for_user(user_id)
+    if effective_subscription:
+        subscription = {
+            "plan_code": _safe_plan_code(effective_subscription.get("plan_code")),
+            "status": str(effective_subscription.get("billing_status") or "inactive"),
+            "provider": str(effective_subscription.get("provider") or "stripe"),
+            "billing_cycle": effective_subscription.get("billing_cycle"),
+        }
+
     entitlements = _get_or_refresh_entitlements(
         cur,
         user_id=user_id,
@@ -602,7 +613,7 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
             "plan_code": subscription["plan_code"],
             "status": subscription["status"],
             "provider": subscription["provider"],
-            "billing_cycle": _resolve_billing_cycle(subscription),
+            "billing_cycle": subscription.get("billing_cycle") or _resolve_billing_cycle(subscription),
         },
         "entitlements": entitlements,
         "usage": {
@@ -932,7 +943,6 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
         conn.commit()
 
     return payload
-
 
 def signup_with_password(
     *,
