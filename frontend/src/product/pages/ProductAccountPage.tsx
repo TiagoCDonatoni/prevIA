@@ -3,6 +3,12 @@ import { Link, useOutletContext } from "react-router-dom";
 
 import { t, type Lang } from "../i18n";
 import { patchAuthProfile } from "../api/auth";
+import {
+  fetchBillingSubscription,
+  postBillingCancelRenewal,
+  postBillingResumeRenewal,
+  type BillingSubscriptionResponse,
+} from "../api/billing";
 import { PLAN_CATALOG } from "../planCatalog";
 import { PLAN_LABELS } from "../entitlements";
 import { useProductStore } from "../state/productStore";
@@ -60,6 +66,11 @@ function mapSubscriptionStatusLabel(uiLang: Lang, raw: string | null | undefined
   if (value === "inactive") return t(uiLang, "auth.subscriptionStatusInactive");
   if (value === "past_due") return t(uiLang, "auth.subscriptionStatusPastDue");
   if (value === "canceled") return t(uiLang, "auth.subscriptionStatusCanceled");
+  if (value === "trialing") return t(uiLang, "auth.subscriptionStatusTrialing");
+  if (value === "paused") return t(uiLang, "auth.subscriptionStatusPaused");
+  if (value === "incomplete") return t(uiLang, "auth.subscriptionStatusIncomplete");
+  if (value === "expired") return t(uiLang, "auth.subscriptionStatusExpired");
+  if (value === "unpaid") return t(uiLang, "auth.subscriptionStatusUnpaid");
   if (!value) return "—";
   return raw || "—";
 }
@@ -68,7 +79,30 @@ function mapProviderLabel(uiLang: Lang, raw: string | null | undefined) {
   const value = String(raw ?? "").trim().toLowerCase();
   if (!value) return t(uiLang, "auth.notAvailableYet");
   if (value === "manual") return t(uiLang, "auth.subscriptionProviderManual");
+  if (value === "stripe") return "prevIA Billing";
   return raw || "—";
+}
+
+function formatDateTime(lang: Lang, raw: string | null | undefined) {
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+
+  try {
+    return new Intl.DateTimeFormat(
+      lang === "pt" ? "pt-BR" : lang === "es" ? "es-ES" : "en-US",
+      {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }
+    ).format(date);
+  } catch {
+    return raw;
+  }
 }
 
 function mapBillingCycleLabel(
@@ -103,6 +137,11 @@ export default function ProductAccountPage() {
   );
   const [isSavingProfile, setIsSavingProfile] = React.useState(false);
   const [profileError, setProfileError] = React.useState<string | null>(null);
+  const [billingState, setBillingState] = React.useState<BillingSubscriptionResponse | null>(null);
+  const [billingError, setBillingError] = React.useState<string | null>(null);
+  const [billingActionMessage, setBillingActionMessage] = React.useState<string | null>(null);
+  const [isBillingLoading, setIsBillingLoading] = React.useState(false);
+  const [isBillingActionLoading, setIsBillingActionLoading] = React.useState(false);
   const snapshotPlan = account.subscription.plan_code;
   const plan =
     snapshotPlan === "FREE_ANON" ||
@@ -154,10 +193,98 @@ export default function ProductAccountPage() {
     account.subscription.billing_cycle
   );
 
+  const billingSubscription = billingState?.subscription ?? null;
+  const billingActions = billingState?.actions ?? {
+    can_checkout: true,
+    can_change_plan: true,
+    can_cancel_renewal: false,
+    can_resume_renewal: false,
+  };
+
+  const displayBillingPlanLabel = mapPlanLabel(billingSubscription?.plan_code ?? plan);
+  const displayBillingStatus = mapSubscriptionStatusLabel(
+    lang,
+    billingSubscription?.billing_status ?? account.subscription.status
+  );
+  const displayBillingProviderLabel = mapProviderLabel(
+    lang,
+    billingSubscription?.provider ?? account.subscription.provider
+  );
+  const displayBillingCycleLabel = mapBillingCycleLabel(
+    lang,
+    (billingSubscription?.billing_cycle as
+      | "monthly"
+      | "quarterly"
+      | "semiannual"
+      | "annual"
+      | null
+      | undefined) ?? account.subscription.billing_cycle
+  );
+
+  const billingAmountLabel = formatMoney(
+    lang,
+    billingSubscription?.unit_amount ?? planCatalog.priceMonthly,
+    ((billingSubscription?.currency_code as "BRL" | "USD" | "EUR" | null) ??
+      planCatalog.currency) as "BRL" | "USD" | "EUR"
+  );
+
+  const billingCurrentPeriodEnd = formatDateTime(lang, billingSubscription?.current_period_end);
+  const billingTrialEnd = formatDateTime(lang, billingSubscription?.trial_end_utc);
+  const billingLastSync = formatDateTime(lang, billingSubscription?.updated_at_utc);
+
+  const loadBilling = React.useCallback(async () => {
+    if (!isAuthenticated) {
+      setBillingState(null);
+      setBillingError(null);
+      return;
+    }
+
+    try {
+      setIsBillingLoading(true);
+      setBillingError(null);
+      const result = await fetchBillingSubscription();
+      setBillingState(result);
+    } catch (error) {
+      console.error("loadBilling failed", error);
+      setBillingError(t(lang, "auth.billingLoadError"));
+    } finally {
+      setIsBillingLoading(false);
+    }
+  }, [isAuthenticated, lang]);
+
   React.useEffect(() => {
     setProfileName(account.full_name ?? "");
     setProfileLang(normalizeEditableLang(account.preferred_lang, store.state.lang as Lang));
   }, [account.full_name, account.preferred_lang, store.state.lang]);
+
+  React.useEffect(() => {
+    void loadBilling();
+  }, [loadBilling]);
+
+  async function handleBillingAction(action: "cancel" | "resume") {
+    try {
+      setIsBillingActionLoading(true);
+      setBillingError(null);
+      setBillingActionMessage(null);
+
+      const result =
+        action === "cancel"
+          ? await postBillingCancelRenewal()
+          : await postBillingResumeRenewal();
+
+      setBillingState(result);
+      setBillingActionMessage(
+        action === "cancel"
+          ? t(lang, "auth.billingActionSuccessCancel")
+          : t(lang, "auth.billingActionSuccessResume")
+      );
+    } catch (error) {
+      console.error("handleBillingAction failed", error);
+      setBillingError(t(lang, "auth.billingActionError"));
+    } finally {
+      setIsBillingActionLoading(false);
+    }
+  }
 
   async function handleSaveProfile() {
     const nextName = profileName.trim();
@@ -239,104 +366,130 @@ export default function ProductAccountPage() {
       <div className="account-grid">
         <article className="account-card">
           <div className="account-card-head">
-            <h2>{t(lang, "auth.accountSectionTitle")}</h2>
-            <p>{t(lang, "auth.accountSectionSubtitle")}</p>
+            <h2>{t(lang, "auth.billingSectionTitle")}</h2>
+            <p>{t(lang, "auth.billingSectionSubtitle")}</p>
           </div>
 
-          {!isEditingProfile ? (
-            <>
-              <dl className="account-meta">
-                <div>
-                  <dt>{t(lang, "auth.fullName")}</dt>
-                  <dd>{displayName}</dd>
-                </div>
-                <div>
-                  <dt>{t(lang, "auth.email")}</dt>
-                  <dd>{displayEmail}</dd>
-                </div>
-                <div>
-                  <dt>{t(lang, "auth.preferredLanguage")}</dt>
-                  <dd>{displayPreferredLang}</dd>
-                </div>
-                <div>
-                  <dt>{t(lang, "auth.accountState")}</dt>
-                  <dd>{displayAccountStatus}</dd>
-                </div>
-              </dl>
+          {billingActionMessage ? (
+            <div className="account-note" style={{ marginBottom: 12 }}>
+              {billingActionMessage}
+            </div>
+          ) : null}
 
-              {isAuthenticated ? (
-                <div className="account-actions-list">
-                  <button
-                    type="button"
-                    className="product-secondary"
-                    onClick={() => {
-                      setProfileError(null);
-                      setProfileName(account.full_name ?? "");
-                      setProfileLang(normalizeEditableLang(account.preferred_lang, lang));
-                      setIsEditingProfile(true);
-                    }}
-                  >
-                    {t(lang, "auth.editProfile")}
-                  </button>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <div className="account-actions-list" style={{ flexDirection: "column", alignItems: "stretch" }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span>{t(lang, "auth.fullName")}</span>
-                  <input
-                    type="text"
-                    className="product-input"
-                    value={profileName}
-                    onChange={(e) => setProfileName(e.target.value)}
-                    maxLength={120}
-                  />
-                </label>
+          {billingError ? (
+            <div className="account-note" style={{ marginBottom: 12, color: "#b42318" }}>
+              {billingError}
+            </div>
+          ) : null}
 
-                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span>{t(lang, "auth.preferredLanguage")}</span>
-                  <select
-                    className="product-select"
-                    value={profileLang}
-                    onChange={(e) => setProfileLang(e.target.value as Lang)}
-                  >
-                    <option value="pt">{t(lang, "auth.languagePortuguese")}</option>
-                    <option value="en">{t(lang, "auth.languageEnglish")}</option>
-                    <option value="es">{t(lang, "auth.languageSpanish")}</option>
-                  </select>
-                </label>
-              </div>
+          <dl className="account-meta">
+            <div>
+              <dt>{t(lang, "auth.currentPlan")}</dt>
+              <dd>{displayBillingPlanLabel}</dd>
+            </div>
 
-              {profileError ? <div className="account-note">{profileError}</div> : null}
+            <div>
+              <dt>{t(lang, "auth.monthlyPrice")}</dt>
+              <dd>
+                {isBillingLoading
+                  ? t(lang, "auth.billingLoading")
+                  : billingAmountLabel ?? t(lang, "auth.notAvailableYet")}
+              </dd>
+            </div>
 
-              <div className="account-actions-list">
-                <button
-                  type="button"
-                  className="product-primary"
-                  onClick={() => void handleSaveProfile()}
-                  disabled={isSavingProfile}
-                >
-                  {isSavingProfile ? t(lang, "auth.saving") : t(lang, "auth.saveChanges")}
-                </button>
+            <div>
+              <dt>{t(lang, "auth.billingStatus")}</dt>
+              <dd>{displayBillingStatus}</dd>
+            </div>
 
-                <button
-                  type="button"
-                  className="product-secondary"
-                  onClick={() => {
-                    setProfileError(null);
-                    setProfileName(account.full_name ?? "");
-                    setProfileLang(normalizeEditableLang(account.preferred_lang, lang));
-                    setIsEditingProfile(false);
-                  }}
-                  disabled={isSavingProfile}
-                >
-                  {t(lang, "auth.cancel")}
-                </button>
-              </div>
-            </>
-          )}
+            <div>
+              <dt>{t(lang, "auth.subscriptionProvider")}</dt>
+              <dd>{displayBillingProviderLabel}</dd>
+            </div>
+
+            <div>
+              <dt>{t(lang, "auth.billingRecurrence")}</dt>
+              <dd>{displayBillingCycleLabel}</dd>
+            </div>
+
+            <div>
+              <dt>{t(lang, "auth.billingAutoRenew")}</dt>
+              <dd>
+                {billingSubscription
+                  ? billingSubscription.cancel_at_period_end
+                    ? t(lang, "auth.billingAutoRenewOff")
+                    : t(lang, "auth.billingAutoRenewOn")
+                  : t(lang, "auth.notAvailableYet")}
+              </dd>
+            </div>
+
+            <div>
+              <dt>
+                {billingSubscription?.trial_end_utc
+                  ? t(lang, "auth.billingTrialEnds")
+                  : t(lang, "auth.billingCurrentPeriodEnd")}
+              </dt>
+              <dd>
+                {(billingSubscription?.trial_end_utc ? billingTrialEnd : billingCurrentPeriodEnd) ??
+                  t(lang, "auth.notAvailableYet")}
+              </dd>
+            </div>
+
+            <div>
+              <dt>{t(lang, "auth.billingLastSync")}</dt>
+              <dd>{billingLastSync ?? t(lang, "auth.notAvailableYet")}</dd>
+            </div>
+          </dl>
+
+          {billingState && !billingState.has_subscription ? (
+            <div className="account-note" style={{ marginTop: 16 }}>
+              {t(lang, "auth.billingNoPaidSubscription")}
+            </div>
+          ) : null}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 16,
+            }}
+          >
+            {billingActions.can_cancel_renewal ? (
+              <button
+                type="button"
+                className="product-secondary"
+                disabled={isBillingActionLoading}
+                onClick={() => void handleBillingAction("cancel")}
+              >
+                {isBillingActionLoading
+                  ? t(lang, "auth.billingActionProcessing")
+                  : t(lang, "auth.billingCancelRenewal")}
+              </button>
+            ) : null}
+
+            {billingActions.can_resume_renewal ? (
+              <button
+                type="button"
+                className="product-primary"
+                disabled={isBillingActionLoading}
+                onClick={() => void handleBillingAction("resume")}
+              >
+                {isBillingActionLoading
+                  ? t(lang, "auth.billingActionProcessing")
+                  : t(lang, "auth.billingResumeRenewal")}
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              className="product-secondary"
+              disabled={isBillingLoading}
+              onClick={() => void loadBilling()}
+            >
+              {t(lang, "auth.billingRefresh")}
+            </button>
+          </div>
         </article>
 
         <article className="account-card">
