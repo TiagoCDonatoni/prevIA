@@ -24,6 +24,10 @@ type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED";
 const LOW_CREDITS_THRESHOLD = 5;
 const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
 
+function resolveDisplayCurrencyFromLang(lang: Lang): "BRL" | "USD" {
+  return lang === "pt" ? "BRL" : "USD";
+}
+
 type BillingCatalogMap = Partial<
   Record<
     PlanId,
@@ -161,6 +165,8 @@ export function PlanChangeModal(props: {
     [lang]
   );
 
+  const displayCurrency = resolveDisplayCurrencyFromLang(lang);
+
   const higherPlans = getHigherPlans(currentPlan);
   const currentLimit = dailyLimitForPlan(currentPlan);
   const recommendedPlan = getRecommendedPlanId(currentPlan);
@@ -192,7 +198,7 @@ export function PlanChangeModal(props: {
     async function run() {
       try {
         setIsCatalogLoading(true);
-        const data = await fetchBillingCatalog();
+        const data = await fetchBillingCatalog(displayCurrency);
         if (!isMounted) return;
         setBillingCatalog(buildBillingCatalogMap(data.items || []));
       } catch {
@@ -210,7 +216,7 @@ export function PlanChangeModal(props: {
     return () => {
       isMounted = false;
     };
-  }, [props.open]);
+  }, [props.open, displayCurrency]);
 
   useEffect(() => {
     if (!props.open) return;
