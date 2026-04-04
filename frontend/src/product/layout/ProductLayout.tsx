@@ -87,6 +87,11 @@ export function ProductLayout() {
 
 const [isMobileHeaderMenuOpen, setIsMobileHeaderMenuOpen] = useState(false);
 
+const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+
+const desktopAccountMenuRef = React.useRef<HTMLDivElement | null>(null);
+const mobileAccountMenuRef = React.useRef<HTMLDivElement | null>(null);
+
 React.useEffect(() => {
   if (!isMobileHeaderMenuOpen) return;
 
@@ -108,16 +113,50 @@ React.useEffect(() => {
 }, [isMobileHeaderMenuOpen]);
 
 React.useEffect(() => {
+  if (!isAccountMenuOpen) return;
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      setIsAccountMenuOpen(false);
+    }
+  };
+
+  const onMouseDown = (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+
+    const clickedDesktopMenu =
+      desktopAccountMenuRef.current?.contains(target) ?? false;
+
+    const clickedMobileMenu =
+      mobileAccountMenuRef.current?.contains(target) ?? false;
+
+    if (!clickedDesktopMenu && !clickedMobileMenu) {
+      setIsAccountMenuOpen(false);
+    }
+  };
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("mousedown", onMouseDown);
+
+  return () => {
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("mousedown", onMouseDown);
+  };
+}, [isAccountMenuOpen]);
+
+React.useEffect(() => {
   const onResize = () => {
     if (window.innerWidth > 760) {
       setIsMobileHeaderMenuOpen(false);
     }
+
+    setIsAccountMenuOpen(false);
   };
 
   window.addEventListener("resize", onResize);
   return () => window.removeEventListener("resize", onResize);
 }, []);
-
 
   const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
     "MANUAL"
@@ -131,12 +170,25 @@ React.useEffect(() => {
       Boolean(store.accountSnapshot?.email) ||
       Boolean(store.state.auth.email));
 
-  const isAuthenticated = Boolean(store.state.auth.is_logged_in) || isDevAutoLoginSession;
+  const isAuthenticated =
+    Boolean(store.state.auth.is_logged_in) || isDevAutoLoginSession;
 
-  const accountLabel =
+  // TODO: migrar esta regra para dev/staff quando existir nível oficial de usuário.
+  const canSeeAccountMenu = allowDevPlanOverride;
+
+  const accountMenuEmail =
     store.accountSnapshot?.email?.trim() ||
     store.state.auth.email?.trim() ||
     "dev@previa.local";
+
+  const accountMenuInitial = (accountMenuEmail.charAt(0) || "D").toUpperCase();
+
+  const accountMenuTriggerLabel =
+    lang === "pt"
+      ? "Abrir menu da conta"
+      : lang === "es"
+        ? "Abrir menú de cuenta"
+        : "Open account menu";
 
   const remaining = store.backendUsage.is_ready
     ? store.backendUsage.remaining ?? store.entitlements.credits.remaining_today
@@ -270,6 +322,26 @@ const renderCreditsCta = (onAfterClick?: () => void) => {
   );
 };
 
+const accountMenuDropdown = isAccountMenuOpen ? (
+  <div
+    className="product-account-menu-dropdown"
+    role="menu"
+    aria-label={t(lang, "auth.account")}
+  >
+    <Link
+      to="account"
+      role="menuitem"
+      className="product-account-menu-item"
+      onClick={() => {
+        setIsAccountMenuOpen(false);
+        setIsMobileHeaderMenuOpen(false);
+      }}
+    >
+      {t(lang, "auth.account")}
+    </Link>
+  </div>
+) : null;
+
 const mobileHeaderMenuContent = (
   <>
     {allowDevPlanOverride ? (
@@ -302,17 +374,6 @@ const mobileHeaderMenuContent = (
       </button>
     ) : null}
 
-    {isAuthenticated ? (
-      <Link
-        to="account"
-        className="product-pill product-account-link"
-        onClick={() => setIsMobileHeaderMenuOpen(false)}
-      >
-        <span className="product-pill-label">{t(lang, "auth.account")}</span>
-        <span>{accountLabel}</span>
-      </Link>
-    ) : null}
-
     {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
       <button
         type="button"
@@ -343,108 +404,143 @@ const mobileHeaderMenuContent = (
   return (
     <div className="product-shell">
 
-<header className={`product-header ${isMobileHeaderMenuOpen ? "is-mobile-menu-open" : ""}`}>
-  <div className="product-header-bar">
-    <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
-      <BrandLogo />
-    </Link>
+      <header className={`product-header ${isMobileHeaderMenuOpen ? "is-mobile-menu-open" : ""}`}>
+        <div className="product-header-bar">
+          <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
+            <BrandLogo />
+          </Link>
 
-    <div className="product-header-right product-header-right-desktop">
-      {allowDevPlanOverride ? (
-        <div className="product-pill">
-          <span className="product-pill-label">DEV PLAN</span>
-          <select
-            className="product-select"
-            value={plan}
-            onChange={(e) => store.setPlan(e.target.value as PlanId)}
-          >
-            {PLAN_LABELS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+          <div className="product-header-right product-header-right-desktop">
+            {allowDevPlanOverride ? (
+              <div className="product-pill">
+                <span className="product-pill-label">DEV PLAN</span>
+                <select
+                  className="product-select"
+                  value={plan}
+                  onChange={(e) => store.setPlan(e.target.value as PlanId)}
+                >
+                  {PLAN_LABELS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {DEV ? (
+              <button
+                className="product-reset-btn"
+                onClick={() => {
+                  store.resetForTesting();
+                }}
+                title={t(lang, "common.devResetTitle")}
+              >
+                {t(lang, "common.devReset")}
+              </button>
+            ) : null}
+
+            {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
+              <button
+                type="button"
+                className="product-reset-btn"
+                onClick={() => {
+                  void handleLogout();
+                }}
+              >
+                {t(lang, "auth.logout")}
+              </button>
+            ) : null}
+
+            <div className="product-pill product-pill-lang">
+              <LanguageDropdown
+                value={lang}
+                onChange={(v) => store.setLang(v)}
+                ariaLabel={t(lang, "nav.language")}
+                menuAlign="right"
+              />
+            </div>
+
+            <div className="pl-credits-wrap">
+              {creditsBadge}
+              {renderCreditsCta()}
+            </div>
+
+            {canSeeAccountMenu ? (
+              <div className="product-account-menu" ref={desktopAccountMenuRef}>
+                <button
+                  type="button"
+                  className="product-account-avatar-btn"
+                  aria-label={accountMenuTriggerLabel}
+                  aria-haspopup="menu"
+                  aria-expanded={isAccountMenuOpen}
+                  onClick={() => {
+                    setIsAccountMenuOpen((prev) => !prev);
+                  }}
+                >
+                  <span className="product-account-avatar">{accountMenuInitial}</span>
+                </button>
+
+                {accountMenuDropdown}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="product-header-right product-header-right-mobile">
+            {creditsBadge}
+
+            <button
+              type="button"
+              className="product-mobile-menu-btn"
+              aria-label={mobileMenuLabel}
+              aria-expanded={isMobileHeaderMenuOpen}
+              onClick={() => {
+                setIsAccountMenuOpen(false);
+                setIsMobileHeaderMenuOpen((prev) => !prev);
+              }}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
+
+            {canSeeAccountMenu ? (
+              <div className="product-account-menu" ref={mobileAccountMenuRef}>
+                <button
+                  type="button"
+                  className="product-account-avatar-btn"
+                  aria-label={accountMenuTriggerLabel}
+                  aria-haspopup="menu"
+                  aria-expanded={isAccountMenuOpen}
+                  onClick={() => {
+                    setIsMobileHeaderMenuOpen(false);
+                    setIsAccountMenuOpen((prev) => !prev);
+                  }}
+                >
+                  <span className="product-account-avatar">{accountMenuInitial}</span>
+                </button>
+
+                {accountMenuDropdown}
+              </div>
+            ) : null}
+          </div>
         </div>
-      ) : null}
 
-      {DEV ? (
-        <button
-          className="product-reset-btn"
-          onClick={() => {
-            store.resetForTesting();
-          }}
-          title={t(lang, "common.devResetTitle")}
-        >
-          {t(lang, "common.devReset")}
-        </button>
-      ) : null}
+        {isMobileHeaderMenuOpen ? (
+          <>
+            <button
+              type="button"
+              className="product-mobile-menu-backdrop"
+              aria-label="Fechar menu"
+              onClick={() => setIsMobileHeaderMenuOpen(false)}
+            />
 
-      {isAuthenticated ? (
-        <Link to="account" className="product-pill product-account-link">
-          <span className="product-pill-label">{t(lang, "auth.account")}</span>
-          <span>{accountLabel}</span>
-        </Link>
-      ) : null}
-
-      {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
-        <button
-          type="button"
-          className="product-reset-btn"
-          onClick={() => {
-            void handleLogout();
-          }}
-        >
-          {t(lang, "auth.logout")}
-        </button>
-      ) : null}
-
-      <div className="product-pill product-pill-lang">
-        <LanguageDropdown
-          value={lang}
-          onChange={(v) => store.setLang(v)}
-          ariaLabel={t(lang, "nav.language")}
-          menuAlign="right"
-        />
-      </div>
-
-      <div className="pl-credits-wrap">
-        {creditsBadge}
-        {renderCreditsCta()}
-      </div>
-    </div>
-
-    <div className="product-header-right product-header-right-mobile">
-      {creditsBadge}
-
-      <button
-        type="button"
-        className="product-mobile-menu-btn"
-        aria-label={mobileMenuLabel}
-        aria-expanded={isMobileHeaderMenuOpen}
-        onClick={() => setIsMobileHeaderMenuOpen((prev) => !prev)}
-      >
-        <span />
-        <span />
-        <span />
-      </button>
-    </div>
-  </div>
-
-  {isMobileHeaderMenuOpen ? (
-    <>
-      <button
-        type="button"
-        className="product-mobile-menu-backdrop"
-        aria-label="Fechar menu"
-        onClick={() => setIsMobileHeaderMenuOpen(false)}
-      />
-
-      <div className="product-mobile-menu" role="dialog" aria-modal="true">
-        <div className="product-mobile-menu-body">{mobileHeaderMenuContent}</div>
-      </div>
-    </>
-  ) : null}
-</header>
+            <div className="product-mobile-menu" role="dialog" aria-modal="true">
+              <div className="product-mobile-menu-body">{mobileHeaderMenuContent}</div>
+            </div>
+          </>
+        ) : null}
+      </header>
 
 
       <main className="product-main">
