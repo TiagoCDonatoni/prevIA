@@ -698,6 +698,128 @@ def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_
 
     sync_subscription_from_stripe_event(
         {
+            "id": f"manual_subscription_update_{provider_subscription_id}_{'resume' if not cancel_at_period_end else 'cancel'}",
+            "type": "customer.subscription.updated",
+            "data": {"object": dict(subscription)},
+        }
+    )
+
+    summary = get_billing_subscription_summary_for_user(user_id)
+
+    return {
+        "ok": True,
+        "action": "resume_renewal" if not cancel_at_period_end else "cancel_renewal",
+        "message": "renewal_resumed" if not cancel_at_period_end else "renewal_canceled",
+        **summary,
+    }
+
+
+def cancel_subscription_renewal_for_user(user_id: int) -> Dict[str, Any]:
+    return _update_subscription_cancel_at_period_end(
+        user_id=user_id,
+        cancel_at_period_end=True,
+    )
+
+
+def resume_subscription_renewal_for_user(user_id: int) -> Dict[str, Any]:
+    return _update_subscription_cancel_at_period_end(
+        user_id=user_id,
+        cancel_at_period_end=False,
+    )
+
+def get_billing_subscription_summary_for_user(user_id: int) -> Dict[str, Any]:
+    effective = get_effective_subscription_for_user(user_id)
+
+    if effective is None:
+        return {
+            "ok": True,
+            "has_subscription": False,
+            "subscription": None,
+            "actions": {
+                "can_checkout": True,
+                "can_change_plan": True,
+                "can_cancel_renewal": False,
+                "can_resume_renewal": False,
+            },
+        }
+
+    unit_amount_cents: Optional[int] = None
+    price_version: Optional[str] = None
+
+    plan_price_id = effective.get("plan_price_id")
+    if plan_price_id is not None:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT unit_amount_cents, price_version
+                    FROM billing.plan_prices
+                    WHERE plan_price_id = %(plan_price_id)s
+                    LIMIT 1
+                    """,
+                    {"plan_price_id": int(plan_price_id)},
+                )
+                price_row = cur.fetchone()
+            conn.commit()
+
+        if price_row is not None:
+            unit_amount_cents = int(price_row[0]) if price_row[0] is not None else None
+            price_version = str(price_row[1]) if price_row[1] is not None else None
+
+    provider = str(effective.get("provider") or "").strip().lower()
+    billing_status = str(effective.get("billing_status") or "").strip().lower()
+    provider_subscription_id = effective.get("provider_subscription_id")
+    cancel_at_period_end = bool(effective.get("cancel_at_period_end"))
+
+    can_manage_stripe_subscription = (
+        provider == "stripe"
+        and bool(provider_subscription_id)
+        and billing_status not in {"canceled", "expired"}
+    )
+
+    return {
+        "ok": True,
+        "has_subscription": True,
+        "subscription": {
+            **effective,
+            "unit_amount_cents": unit_amount_cents,
+            "unit_amount": (unit_amount_cents / 100.0) if unit_amount_cents is not None else None,
+            "currency_symbol": _currency_symbol(str(effective.get("currency_code") or "BRL")),
+            "price_version": price_version,
+        },
+        "actions": {
+            "can_checkout": True,
+            "can_change_plan": True,
+            "can_cancel_renewal": can_manage_stripe_subscription and not cancel_at_period_end,
+            "can_resume_renewal": can_manage_stripe_subscription and cancel_at_period_end,
+        },
+    }
+
+
+def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_end: bool) -> Dict[str, Any]:
+    settings = load_settings()
+
+    if not settings.stripe_secret_key:
+        raise RuntimeError("stripe_not_configured")
+
+    effective = get_effective_subscription_for_user(user_id)
+    if effective is None:
+        raise ValueError("subscription_not_found")
+
+    provider = str(effective.get("provider") or "").strip().lower()
+    provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
+
+    if provider != "stripe" or not provider_subscription_id:
+        raise ValueError("subscription_not_manageable")
+
+    stripe.api_key = settings.stripe_secret_key
+    subscription = stripe.Subscription.modify(
+        provider_subscription_id,
+        cancel_at_period_end=cancel_at_period_end,
+    )
+
+    sync_subscription_from_stripe_event(
+        {
             "type": "customer.subscription.updated",
             "data": {"object": dict(subscription)},
         }

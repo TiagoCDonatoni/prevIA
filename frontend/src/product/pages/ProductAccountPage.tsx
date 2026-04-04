@@ -327,7 +327,7 @@ export default function ProductAccountPage() {
         </div>
 
         <div className="account-hero-actions">
-          <Link to="/" className="product-secondary">
+          <Link to="/app" className="product-secondary">
             {t(lang, "auth.backToApp")}
           </Link>
 
@@ -363,7 +363,86 @@ export default function ProductAccountPage() {
         </div>
       ) : null}
 
-      <div className="account-grid">
+      <div className="account-grid">        
+
+        <article className="account-card">
+          <div className="account-card-head">
+            <h2>{t(lang, "auth.securitySectionTitle")}</h2>
+            <p>{t(lang, "auth.securitySectionSubtitle")}</p>
+          </div>
+
+          <dl className="account-meta">
+            <div>
+              <dt>{t(lang, "auth.emailVerification")}</dt>
+              <dd>{displayEmailVerified}</dd>
+            </div>
+          </dl>
+
+          <div className="account-actions-list">
+            <button
+              type="button"
+              className="product-secondary"
+              onClick={() => openAuthModal(isAuthenticated ? "changePassword" : "login")}
+            >
+              {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
+            </button>
+
+            {!isAuthenticated ? (
+              <button
+                type="button"
+                className="product-primary"
+                onClick={() => openAuthModal("signup")}
+              >
+                {t(lang, "auth.signup")}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="account-note">
+            {isAuthenticated
+              ? t(lang, "auth.securityHintAuthenticated")
+              : t(lang, "auth.securityHintGuest")}
+          </div>
+        </article>
+
+        <article className="account-card">
+          <div className="account-card-head">
+            <h2>{t(lang, "auth.planUsageSectionTitle")}</h2>
+            <p>{t(lang, "auth.planUsageSectionSubtitle")}</p>
+          </div>
+
+          <dl className="account-meta">
+            <div>
+              <dt>{t(lang, "auth.currentPlan")}</dt>
+              <dd>{displayPlanLabel}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.subscriptionStatus")}</dt>
+              <dd>{displaySubscriptionStatus}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.subscriptionProvider")}</dt>
+              <dd>{displaySubscriptionProvider}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.creditsUsedToday")}</dt>
+              <dd>{usedToday}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.creditsRemainingToday")}</dt>
+              <dd>{remaining}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.dailyLimit")}</dt>
+              <dd>{dailyLimit}</dd>
+            </div>
+            <div>
+              <dt>{t(lang, "auth.revealedCountToday")}</dt>
+              <dd>{revealedToday}</dd>
+            </div>
+          </dl>
+        </article>
+
         <article className="account-card">
           <div className="account-card-head">
             <h2>{t(lang, "auth.billingSectionTitle")}</h2>
@@ -490,114 +569,6 @@ export default function ProductAccountPage() {
               {t(lang, "auth.billingRefresh")}
             </button>
           </div>
-        </article>
-
-        <article className="account-card">
-          <div className="account-card-head">
-            <h2>{t(lang, "auth.securitySectionTitle")}</h2>
-            <p>{t(lang, "auth.securitySectionSubtitle")}</p>
-          </div>
-
-          <dl className="account-meta">
-            <div>
-              <dt>{t(lang, "auth.emailVerification")}</dt>
-              <dd>{displayEmailVerified}</dd>
-            </div>
-          </dl>
-
-          <div className="account-actions-list">
-            <button
-              type="button"
-              className="product-secondary"
-              onClick={() => openAuthModal(isAuthenticated ? "changePassword" : "login")}
-            >
-              {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
-            </button>
-
-            {!isAuthenticated ? (
-              <button
-                type="button"
-                className="product-primary"
-                onClick={() => openAuthModal("signup")}
-              >
-                {t(lang, "auth.signup")}
-              </button>
-            ) : null}
-          </div>
-
-          <div className="account-note">
-            {isAuthenticated
-              ? t(lang, "auth.securityHintAuthenticated")
-              : t(lang, "auth.securityHintGuest")}
-          </div>
-        </article>
-
-        <article className="account-card">
-          <div className="account-card-head">
-            <h2>{t(lang, "auth.planUsageSectionTitle")}</h2>
-            <p>{t(lang, "auth.planUsageSectionSubtitle")}</p>
-          </div>
-
-          <dl className="account-meta">
-            <div>
-              <dt>{t(lang, "auth.currentPlan")}</dt>
-              <dd>{displayPlanLabel}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.subscriptionStatus")}</dt>
-              <dd>{displaySubscriptionStatus}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.subscriptionProvider")}</dt>
-              <dd>{displaySubscriptionProvider}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.creditsUsedToday")}</dt>
-              <dd>{usedToday}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.creditsRemainingToday")}</dt>
-              <dd>{remaining}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.dailyLimit")}</dt>
-              <dd>{dailyLimit}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.revealedCountToday")}</dt>
-              <dd>{revealedToday}</dd>
-            </div>
-          </dl>
-        </article>
-
-        <article className="account-card">
-          <div className="account-card-head">
-            <h2>{t(lang, "auth.billingSectionTitle")}</h2>
-            <p>{t(lang, "auth.billingSectionSubtitle")}</p>
-          </div>
-
-          <dl className="account-meta">
-            <div>
-              <dt>{t(lang, "auth.monthlyPrice")}</dt>
-              <dd>{monthlyPrice ?? t(lang, "auth.notAvailableYet")}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.billingStatus")}</dt>
-              <dd>{displaySubscriptionStatus}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.subscriptionProvider")}</dt>
-              <dd>{displaySubscriptionProvider}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.billingRecurrence")}</dt>
-              <dd>{displayBillingCycle}</dd>
-            </div>
-            <div>
-              <dt>{t(lang, "auth.billingSummary")}</dt>
-              <dd>{t(lang, "auth.billingPlaceholder")}</dd>
-            </div>
-          </dl>
         </article>
       </div>
     </section>
