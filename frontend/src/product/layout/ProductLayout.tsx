@@ -124,8 +124,19 @@ React.useEffect(() => {
   );
 
   const allowDevPlanOverride = DEV && PRODUCT_DEV_AUTO_LOGIN_ENABLED;
-  const isAuthenticated = Boolean(store.state.auth.is_logged_in);
-  const accountLabel = store.state.auth.email ?? t(lang, "auth.account");
+
+  const isDevAutoLoginSession =
+    PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
+    (store.bootstrap?.auth_mode === "dev_auto_login" ||
+      Boolean(store.accountSnapshot?.email) ||
+      Boolean(store.state.auth.email));
+
+  const isAuthenticated = Boolean(store.state.auth.is_logged_in) || isDevAutoLoginSession;
+
+  const accountLabel =
+    store.accountSnapshot?.email?.trim() ||
+    store.state.auth.email?.trim() ||
+    "dev@previa.local";
 
   const remaining = store.backendUsage.is_ready
     ? store.backendUsage.remaining ?? store.entitlements.credits.remaining_today
