@@ -235,10 +235,21 @@ def create_checkout_session_for_user(
 
     if not settings.stripe_secret_key:
         raise RuntimeError("stripe_not_configured")
+    if not settings.stripe_publishable_key:
+        raise RuntimeError("stripe_publishable_key_not_configured")
 
     plan_code = _normalize_plan_code(plan_code)
     billing_cycle = _normalize_billing_cycle(billing_cycle)
     currency_code = _normalize_currency_code(currency_code)
+
+    effective = get_effective_subscription_for_user(user_id)
+    if effective is not None:
+        provider = str(effective.get("provider") or "").strip().lower()
+        provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
+        billing_status = str(effective.get("billing_status") or "").strip().lower()
+
+        if provider == "stripe" and provider_subscription_id and billing_status not in {"canceled", "expired"}:
+            raise ValueError("subscription_change_must_use_account_billing")
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -270,6 +281,7 @@ def create_checkout_session_for_user(
                 FROM billing.plan_prices
                 WHERE plan_code = %(plan_code)s
                   AND billing_cycle = %(billing_cycle)s
+                  AND currency_code = %(currency_code)s
                   AND active = TRUE
                 ORDER BY sort_order ASC, plan_price_id ASC
                 LIMIT 1
@@ -277,14 +289,16 @@ def create_checkout_session_for_user(
                 {
                     "plan_code": plan_code,
                     "billing_cycle": billing_cycle,
+                    "currency_code": currency_code,
                 },
             )
             price_row = cur.fetchone()
             if price_row is None:
-                raise ValueError("plan_price_not_found")
+                raise ValueError("plan_price_not_found_for_currency")
 
             plan_price_id = int(price_row[0])
             price_code = str(price_row[1])
+            executable_currency_code = str(price_row[2] or "BRL").upper()
             provider_product_id = price_row[4]
             provider_price_id = price_row[5]
 
@@ -310,24 +324,35 @@ def create_checkout_session_for_user(
 
     stripe.api_key = settings.stripe_secret_key
 
+    default_return_url = (
+        f"{settings.frontend_allowed_origins[0]}/account?billing=updated"
+        if settings.frontend_allowed_origins
+        else "http://localhost:5173/account?billing=updated"
+    )
+    return_url = (
+        settings.stripe_portal_return_url
+        or settings.stripe_checkout_success_url
+        or default_return_url
+    )
+
     session_params: Dict[str, Any] = {
         "mode": "subscription",
-        "currency": currency_code.lower(),
+        "ui_mode": "custom",
+        "payment_method_types": ["card"],
         "line_items": [
             {
                 "price": provider_price_id,
                 "quantity": 1,
             }
         ],
-        "success_url": settings.stripe_checkout_success_url,
-        "cancel_url": settings.stripe_checkout_cancel_url,
+        "return_url": return_url,
         "client_reference_id": str(user_id),
         "allow_promotion_codes": True,
         "metadata": {
             "user_id": str(user_id),
             "plan_code": plan_code,
             "billing_cycle": billing_cycle,
-            "currency_code": currency_code,
+            "currency_code": executable_currency_code,
             "plan_price_id": str(plan_price_id),
             "price_code": price_code,
         },
@@ -336,7 +361,7 @@ def create_checkout_session_for_user(
                 "user_id": str(user_id),
                 "plan_code": plan_code,
                 "billing_cycle": billing_cycle,
-                "currency_code": currency_code,
+                "currency_code": executable_currency_code,
                 "plan_price_id": str(plan_price_id),
                 "price_code": price_code,
             }
@@ -347,23 +372,29 @@ def create_checkout_session_for_user(
         session_params["customer"] = provider_customer_id
     else:
         session_params["customer_email"] = email
-        if full_name:
-            session_params["customer_creation"] = "always"
 
-    session = stripe.checkout.Session.create(**session_params)
+    try:
+        session = stripe.checkout.Session.create(**session_params)
+    except stripe.error.StripeError as exc:
+        raise RuntimeError("stripe_checkout_session_create_failed") from exc
+
+    client_secret = getattr(session, "client_secret", None)
+    if not client_secret:
+        raise RuntimeError("stripe_checkout_client_secret_not_available")
 
     return {
         "ok": True,
-        "checkout_url": session.url,
+        "ui_mode": "custom",
         "session_id": session.id,
+        "checkout_client_secret": client_secret,
+        "publishable_key": settings.stripe_publishable_key,
         "price_code": price_code,
         "plan_code": plan_code,
         "billing_cycle": billing_cycle,
-        "currency_code": currency_code,
+        "currency_code": executable_currency_code,
         "provider_product_id": provider_product_id,
         "provider_price_id": provider_price_id,
     }
-
 
 def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]:
     event_id = str(event.get("id") or "")

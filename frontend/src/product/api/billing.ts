@@ -28,12 +28,17 @@ export type BillingCatalogResponse = {
 
 export type BillingCheckoutSessionResponse = {
   ok: boolean;
-  checkout_url: string;
+  ui_mode?: "custom" | "hosted" | string;
+  checkout_url?: string | null;
+  checkout_client_secret?: string | null;
+  publishable_key?: string | null;
   session_id: string;
   price_code: string;
   plan_code: string;
   billing_cycle: BillingCycle;
   currency_code?: "BRL" | "USD" | string;
+  provider_product_id?: string | null;
+  provider_price_id?: string | null;
 };
 
 export type BillingSubscriptionData = {

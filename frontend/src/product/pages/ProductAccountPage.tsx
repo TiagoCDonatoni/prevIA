@@ -166,7 +166,6 @@ export default function ProductAccountPage() {
     ? store.backendUsage.revealed_count
     : Object.keys(store.state.credits.revealed_today ?? {}).length;
 
-  const monthlyPrice = formatMoney(lang, planCatalog.priceMonthly, planCatalog.currency);
   const displayName = account.full_name?.trim() || "—";
   const displayEmail = account.email ?? store.state.auth.email ?? "—";
   const displayPreferredLang = mapLanguageLabel(
@@ -187,10 +186,6 @@ export default function ProductAccountPage() {
   const displaySubscriptionProvider = mapProviderLabel(
     lang,
     account.subscription.provider
-  );
-  const displayBillingCycle = mapBillingCycleLabel(
-    lang,
-    account.subscription.billing_cycle
   );
 
   const billingSubscription = billingState?.subscription ?? null;
@@ -260,6 +255,17 @@ export default function ProductAccountPage() {
   React.useEffect(() => {
     void loadBilling();
   }, [loadBilling]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("billing") !== "updated") return;
+
+    setBillingActionMessage(t(lang, "auth.billingCheckoutSuccess"));
+    url.searchParams.delete("billing");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [lang]);
 
   async function handleBillingAction(action: "cancel" | "resume") {
     try {
