@@ -813,13 +813,18 @@ def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_
         raise ValueError("subscription_not_manageable")
 
     stripe.api_key = settings.stripe_secret_key
-    subscription = stripe.Subscription.modify(
-        provider_subscription_id,
-        cancel_at_period_end=cancel_at_period_end,
-    )
+
+    try:
+        subscription = stripe.Subscription.modify(
+            provider_subscription_id,
+            cancel_at_period_end=cancel_at_period_end,
+        )
+    except stripe.error.StripeError as exc:
+        raise RuntimeError("stripe_subscription_update_failed") from exc
 
     sync_subscription_from_stripe_event(
         {
+            "id": f"manual_subscription_update_{provider_subscription_id}_{'resume' if not cancel_at_period_end else 'cancel'}",
             "type": "customer.subscription.updated",
             "data": {"object": dict(subscription)},
         }
