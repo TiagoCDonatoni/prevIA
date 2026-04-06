@@ -183,6 +183,9 @@ React.useEffect(() => {
 
   const canSeeAccountMenu = isAuthenticated && isAccountMenuEligiblePlan;
 
+  const canShowLogoutAction =
+    isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+
   const accountMenuEmail =
     store.accountSnapshot?.email?.trim() ||
     store.state.auth.email?.trim() ||
