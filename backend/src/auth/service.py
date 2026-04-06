@@ -179,11 +179,24 @@ def _verify_google_credential(raw_credential: str) -> Dict[str, Any]:
     if not allowed_client_ids:
         raise ValueError("google auth not configured")
 
-    idinfo = google_id_token.verify_oauth2_token(
-        credential,
-        google_requests.Request(),
-        audience=None,
-    )
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            audience=None,
+            clock_skew_in_seconds=5,
+        )
+    except ValueError as exc:
+        message = str(exc) or "invalid google credential"
+        lowered = message.lower()
+
+        if "token used too early" in lowered:
+            raise ValueError("google token clock skew") from exc
+
+        if "token expired" in lowered or "expired" in lowered:
+            raise ValueError("google token expired") from exc
+
+        raise ValueError(message) from exc
 
     aud = str(idinfo.get("aud") or "").strip()
     if aud not in allowed_client_ids:
@@ -1204,11 +1217,29 @@ def login_with_google_credential(
     try:
         google_profile = _verify_google_credential(credential)
     except ValueError as exc:
+        raw_message = str(exc) or "invalid google credential"
+
+        if raw_message == "google token clock skew":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_CLOCK_SKEW",
+                "message": "google token rejected due to small clock skew",
+            }
+
+        if raw_message == "google token expired":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_EXPIRED",
+                "message": "google token expired",
+            }
+
         return {
             "ok": False,
             "status_code": 400,
             "code": "INVALID_GOOGLE_CREDENTIAL",
-            "message": str(exc) or "invalid google credential",
+            "message": raw_message,
         }
     except Exception:
         return {
