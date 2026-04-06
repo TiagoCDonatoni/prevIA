@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom"; 
 
 import { IS_DEV, PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
 import { fetchAccessUsage } from "../api/access";
@@ -78,6 +78,8 @@ export function ProductLayout() {
   const footer = PRODUCT_FOOTER_COPY[lang];
   const plan = store.state.plan;
   const DEV = IS_DEV;
+
+  const navigate = useNavigate();
 
   const [authOpen, setAuthOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<
@@ -173,8 +175,13 @@ React.useEffect(() => {
   const isAuthenticated =
     Boolean(store.state.auth.is_logged_in) || isDevAutoLoginSession;
 
-  // TODO: migrar esta regra para dev/staff quando existir nível oficial de usuário.
-  const canSeeAccountMenu = allowDevPlanOverride;
+  const isAccountMenuEligiblePlan =
+    plan === "FREE" ||
+    plan === "BASIC" ||
+    plan === "LIGHT" ||
+    plan === "PRO";
+
+  const canSeeAccountMenu = isAuthenticated && isAccountMenuEligiblePlan;
 
   const accountMenuEmail =
     store.accountSnapshot?.email?.trim() ||
@@ -258,6 +265,10 @@ React.useEffect(() => {
 
       setAuthOpen(false);
       setPlanOpen(false);
+      setIsAccountMenuOpen(false);
+      setIsMobileHeaderMenuOpen(false);
+
+      navigate(`/${lang}`, { replace: true });
     } catch (err) {
       console.error("product logout failed", err);
     }
@@ -337,8 +348,21 @@ const accountMenuDropdown = isAccountMenuOpen ? (
         setIsMobileHeaderMenuOpen(false);
       }}
     >
-      {t(lang, "auth.account")}
+      {t(lang, "auth.accountSettings")}
     </Link>
+
+    {canShowLogoutAction ? (
+      <button
+        type="button"
+        role="menuitem"
+        className="product-account-menu-item"
+        onClick={() => {
+          void handleLogout();
+        }}
+      >
+        {t(lang, "auth.logout")}
+      </button>
+    ) : null}
   </div>
 ) : null;
 
@@ -371,19 +395,6 @@ const mobileHeaderMenuContent = (
         title={t(lang, "common.devResetTitle")}
       >
         {t(lang, "common.devReset")}
-      </button>
-    ) : null}
-
-    {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
-      <button
-        type="button"
-        className="product-reset-btn"
-        onClick={() => {
-          setIsMobileHeaderMenuOpen(false);
-          void handleLogout();
-        }}
-      >
-        {t(lang, "auth.logout")}
       </button>
     ) : null}
 
@@ -437,18 +448,6 @@ const mobileHeaderMenuContent = (
                 title={t(lang, "common.devResetTitle")}
               >
                 {t(lang, "common.devReset")}
-              </button>
-            ) : null}
-
-            {isAuthenticated && PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED ? (
-              <button
-                type="button"
-                className="product-reset-btn"
-                onClick={() => {
-                  void handleLogout();
-                }}
-              >
-                {t(lang, "auth.logout")}
               </button>
             ) : null}
 
