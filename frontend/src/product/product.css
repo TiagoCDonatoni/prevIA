@@ -224,6 +224,35 @@
   color: #64748b;
 }
 
+.product-footer-socials {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.product-footer-social-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #dbe5ff;
+  background: #ffffff;
+  color: var(--previa-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.product-footer-social-pill:hover {
+  background: var(--previa-blue-soft-2);
+  border-color: #bfd0ff;
+  color: var(--previa-blue-hover);
+}
+
 /* BOTÃO DEV — remover depois */
 .product-reset-btn {
   border: 1px dashed #e5e7eb;
