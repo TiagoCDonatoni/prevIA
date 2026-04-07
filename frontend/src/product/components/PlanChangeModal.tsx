@@ -133,6 +133,20 @@ function getBillingCyclePriceSuffixKey(cycle: BillingCycle) {
   return "plans.price.perMonth";
 }
 
+function getPlanPricePlaceholderText(
+  lang: Lang,
+  planId: PlanId,
+  fallback: string
+) {
+  if (planId === "FREE" || planId === "FREE_ANON") {
+    if (lang === "pt") return "Gratuito";
+    if (lang === "es") return "Gratis";
+    return "Free";
+  }
+
+  return fallback;
+}
+
 function getModalTitle(
   tr: (k: string, vars?: Record<string, any>) => string,
   reason: Reason
@@ -162,8 +176,8 @@ export function PlanChangeModal(props: {
   const lang = (rawLang === "ptbr" || rawLang === "pt-br" ? "pt" : rawLang) as Lang;
 
   const currentPlan = store.state.plan as PlanId;
-  const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED;
-  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+  const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED;
+  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED;
 
   const tr = useMemo(
     () => (k: string, vars?: Record<string, any>) => t(lang, k, vars),
@@ -346,7 +360,7 @@ export function PlanChangeModal(props: {
               }}
               onCancel={props.onClose}
               onSuccess={() => {
-                window.location.assign("/account?billing=updated");
+                window.location.assign("/app/account?billing=updated");
               }}
             />
           ) : showPlans ? (
@@ -515,7 +529,7 @@ export function PlanChangeModal(props: {
                             </>
                           ) : (
                             <span className="product-plan-price-placeholder">
-                              {tr("plans.price.placeholder")}
+                              {getPlanPricePlaceholderText(lang, pid, tr("plans.price.placeholder"))}
                             </span>
                           )}
                         </div>
@@ -575,6 +589,10 @@ export function PlanChangeModal(props: {
                         currency_code: selectedCurrency,
                       });
 
+                      if (response.session_id && typeof window !== "undefined") {
+                        window.sessionStorage.setItem("billing_last_checkout_session_id", response.session_id);
+                      }
+
                       if (response.checkout_client_secret && response.publishable_key) {
                         setCheckoutSession(response);
                         return;
@@ -584,11 +602,12 @@ export function PlanChangeModal(props: {
                     } catch (error) {
                       console.error("billing_checkout_error", error);
 
-                      if (
-                        error instanceof BillingRequestError &&
-                        error.code === "subscription_change_must_use_account_billing"
-                      ) {
-                        setSubmitError(t(lang, "auth.billingPlanChangeAccountNote"));
+                      if (error instanceof BillingRequestError) {
+                        if (error.code === "subscription_change_must_use_account_billing") {
+                          setSubmitError(t(lang, "auth.billingPlanChangeAccountNote"));
+                        } else {
+                          setSubmitError(error.message || error.code || t(lang, "auth.billingCheckoutCreateError"));
+                        }
                       } else {
                         setSubmitError(t(lang, "auth.billingCheckoutCreateError"));
                       }
