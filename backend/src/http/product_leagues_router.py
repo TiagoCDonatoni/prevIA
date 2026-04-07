@@ -12,7 +12,8 @@ def product_leagues():
     sql = """
       select
         m.sport_key,
-        c.sport_title,
+        coalesce(nullif(btrim(m.official_name), ''), c.sport_title) as sport_title,
+        m.official_name,
         c.sport_group,
         m.league_id,
         m.season_policy,
@@ -23,7 +24,7 @@ def product_leagues():
       from odds.odds_league_map m
       join odds.odds_sport_catalog c on c.sport_key = m.sport_key
       where m.enabled = true and m.mapping_status = 'approved'
-      order by c.sport_group nulls last, c.sport_title
+      order by c.sport_group nulls last, coalesce(nullif(btrim(m.official_name), ''), c.sport_title)
     """
 
     items = []
@@ -36,14 +37,15 @@ def product_leagues():
         items.append(
             {
                 "sport_key": r[0],
-                "sport_title": r[1],
-                "sport_group": r[2],
-                "league_id": r[3],
-                "season_policy": r[4],
-                "fixed_season": r[5],
-                "regions": r[6],
-                "hours_ahead": r[7],
-                "tol_hours": r[8],
+                "sport_title": r[1],      # mantém compatibilidade com o frontend atual
+                "official_name": r[2],    # novo campo explícito
+                "sport_group": r[3],
+                "league_id": r[4],
+                "season_policy": r[5],
+                "fixed_season": r[6],
+                "regions": r[7],
+                "hours_ahead": r[8],
+                "tol_hours": r[9],
             }
         )
 

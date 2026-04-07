@@ -40,5 +40,25 @@
   "value_detection_enabled": "Detección de valor habilitada",
 
   "locked_body": "Disponible en un plan superior.",
-  "locked_cta": "Desbloquear ahora"
+  "locked_cta": "Desbloquear ahora",
+  "filtersTitle": "Filtros",
+  "filtersApply": "Aplicar filtros",
+  "filtersClear": "Limpiar filtros",
+  "mobileFiltersButton": "Filtros",
+  "filterCountries": "País",
+  "filterLeagues": "Liga",
+  "filterBooks": "Casas",
+  "filterTeams": "Equipos",
+  "filterCountriesPlaceholder": "Todos los países",
+  "filterLeaguesPlaceholder": "Todas las ligas",
+  "filterBooksPlaceholder": "Todas las casas",
+  "filterTeamsPlaceholder": "Todos los equipos",
+  "searchCountryPlaceholder": "Escribe un país",
+  "searchLeaguePlaceholder": "Escribe una liga",
+  "searchBookPlaceholder": "Escribe una casa",
+  "searchTeamPlaceholder": "Escribe un equipo",
+  "noCountryResults": "No se encontraron países",
+  "noLeagueResults": "No se encontraron ligas",
+  "noBookResults": "No se encontraron casas",
+  "noTeamResults": "No se encontraron equipos"
 }

@@ -12,10 +12,72 @@ import {
 import { useProductStore } from "../state/productStore";
 
 import { PLAN_CATALOG } from "../planCatalog";
+import { BillingCheckoutInline } from "./BillingCheckoutInline";
+import {
+  BillingRequestError,
+  createBillingCheckoutSession,
+  fetchBillingCatalog,
+  type BillingCatalogItem,
+  type BillingCheckoutSessionResponse,
+  type BillingCycle,
+} from "../api/billing";
 
 type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED";
 
 const LOW_CREDITS_THRESHOLD = 5;
+const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
+type DisplayCurrency = "BRL" | "USD";
+
+function resolveDisplayCurrencyFromLang(lang: Lang): DisplayCurrency {
+  return lang === "pt" ? "BRL" : "USD";
+}
+
+type BillingCatalogMap = Partial<
+  Record<
+    PlanId,
+    Partial<
+      Record<
+        BillingCycle,
+        {
+          amount: number | null;
+          currency: string;
+          currencySymbol: string;
+          providerPriceId: string | null;
+        }
+      >
+    >
+  >
+>;
+
+function buildFallbackCatalogEntry(planId: PlanId, cycle: BillingCycle) {
+  const base = PLAN_CATALOG[planId];
+  return {
+    amount: getBillingCyclePrice(base.priceMonthly, cycle),
+    currency: base.currency,
+    currencySymbol: base.currencySymbol,
+    providerPriceId: null,
+  };
+}
+
+function buildBillingCatalogMap(items: BillingCatalogItem[]): BillingCatalogMap {
+  const result: BillingCatalogMap = {};
+
+  for (const item of items) {
+    const planId = String(item.plan_code || "").toUpperCase() as PlanId;
+    const cycle = item.billing_cycle as BillingCycle;
+
+    if (!result[planId]) result[planId] = {};
+
+    result[planId]![cycle] = {
+      amount: typeof item.unit_amount === "number" ? item.unit_amount : null,
+      currency: item.currency_code,
+      currencySymbol: item.currency_symbol || "R$",
+      providerPriceId: item.provider_price_id ?? null,
+    };
+  }
+
+  return result;
+}
 
 function getRecommendedPlanId(currentPlan: PlanId): PlanId | null {
   if (currentPlan === "PRO") return null;
@@ -52,6 +114,44 @@ function getPlanBadgeKey(planId: PlanId) {
   return "plans.pro.badge";
 }
 
+function getBillingCycleLabelKey(cycle: BillingCycle) {
+  if (cycle === "quarterly") return "auth.billingCycleQuarterly";
+  if (cycle === "annual") return "auth.billingCycleAnnual";
+  return "auth.billingCycleMonthly";
+}
+
+function getBillingCyclePrice(monthlyPrice: number | null, cycle: BillingCycle): number | null {
+  if (monthlyPrice == null) return null;
+  if (cycle === "quarterly") return monthlyPrice * 3;
+  if (cycle === "annual") return monthlyPrice * 12;
+  return monthlyPrice;
+}
+
+function getBillingCyclePriceSuffixKey(cycle: BillingCycle) {
+  if (cycle === "quarterly") return "plans.price.perQuarter";
+  if (cycle === "annual") return "plans.price.perYear";
+  return "plans.price.perMonth";
+}
+
+function getModalTitle(
+  tr: (k: string, vars?: Record<string, any>) => string,
+  reason: Reason
+) {
+  if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsTitle");
+  if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureTitle");
+  return tr("plans.modal.manualTitle");
+}
+
+function getModalSubtitle(
+  tr: (k: string, vars?: Record<string, any>) => string,
+  reason: Reason,
+  vars: { delta: number; total: number }
+) {
+  if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsBody", vars);
+  if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureBody", vars);
+  return tr("plans.modal.manualSubtitle");
+}
+
 export function PlanChangeModal(props: {
   open: boolean;
   reason: Reason;
@@ -63,11 +163,15 @@ export function PlanChangeModal(props: {
 
   const currentPlan = store.state.plan as PlanId;
   const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED;
 
   const tr = useMemo(
     () => (k: string, vars?: Record<string, any>) => t(lang, k, vars),
     [lang]
   );
+
+  const defaultDisplayCurrency = resolveDisplayCurrencyFromLang(lang);
+  const effectiveDefaultCurrency: DisplayCurrency = checkoutCurrencyLocked ? "BRL" : defaultDisplayCurrency;
 
   const higherPlans = getHigherPlans(currentPlan);
   const currentLimit = dailyLimitForPlan(currentPlan);
@@ -75,11 +179,57 @@ export function PlanChangeModal(props: {
   const fallbackPlan = (higherPlans[0] ?? null) as PlanId | null;
 
   const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(null);
+  const [selectedCycle, setSelectedCycle] = useState<BillingCycle>("monthly");
+  const [selectedCurrency, setSelectedCurrency] =
+    useState<DisplayCurrency>(effectiveDefaultCurrency);
+
+  const [billingCatalog, setBillingCatalog] = useState<BillingCatalogMap>({});
+  const [checkoutSession, setCheckoutSession] = useState<BillingCheckoutSessionResponse | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!props.open) return;
     setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
-  }, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan]);
+    setSelectedCycle("monthly");
+    setSelectedCurrency(effectiveDefaultCurrency);
+    setCheckoutSession(null);
+    setSubmitError(null);
+  }, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan, effectiveDefaultCurrency]);
+
+  useEffect(() => {
+    if (!props.open) return;
+
+    if (!PRODUCT_AUTH_ENABLED) {
+      setBillingCatalog({});
+      return;
+    }
+
+    let isMounted = true;
+
+    async function run() {
+      try {
+        setIsCatalogLoading(true);
+        const data = await fetchBillingCatalog(selectedCurrency);
+        if (!isMounted) return;
+        setBillingCatalog(buildBillingCatalogMap(data.items || []));
+      } catch {
+        if (!isMounted) return;
+        setBillingCatalog({});
+      } finally {
+        if (isMounted) {
+          setIsCatalogLoading(false);
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [props.open, selectedCurrency]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -104,38 +254,37 @@ export function PlanChangeModal(props: {
 
   if (!props.open) return null;
 
-  const nextPlanForCopy = getNextPlan(currentPlan);
-  const nextLimit = nextPlanForCopy ? dailyLimitForPlan(nextPlanForCopy) : null;
-  const delta = nextLimit != null ? Math.max(0, nextLimit - currentLimit) : 0;
+  const nextPlanForCopy = recommendedPlan ?? fallbackPlan ?? getNextPlan(currentPlan);
+  const nextLimit = nextPlanForCopy ? dailyLimitForPlan(nextPlanForCopy) : currentLimit;
+  const delta = Math.max(0, nextLimit - currentLimit);
 
-  const title =
-    props.reason === "NO_CREDITS"
-      ? tr("credits.modalNoCreditsTitle")
-      : props.reason === "FEATURE_LOCKED"
-      ? tr("credits.modalFeatureTitle")
-      : tr("plans.cta.seePlans");
-
-  const subtitle =
-    props.reason === "NO_CREDITS"
-      ? tr("credits.modalNoCreditsBody", {
-          delta,
-          total: nextLimit ?? currentLimit,
-        })
-      : props.reason === "FEATURE_LOCKED"
-      ? tr("credits.modalFeatureBody", {
-          delta,
-          total: nextLimit ?? currentLimit,
-        })
-      : tr("credits.counter", {
-          remaining: store.entitlements.credits.remaining_today,
-          limit: store.entitlements.credits.daily_limit,
-        });
+  const title = getModalTitle(tr, props.reason);
+  const subtitle = getModalSubtitle(tr, props.reason, {
+    delta,
+    total: nextLimit,
+  });
 
   const showPlans = higherPlans.length > 0;
 
   const selectedLimit = selectedPlan ? dailyLimitForPlan(selectedPlan) : null;
   const selectedPlus =
     selectedPlan && selectedLimit != null ? Math.max(0, selectedLimit - currentLimit) : 0;
+
+  const selectedCatalogEntry = selectedPlan
+    ? billingCatalog[selectedPlan]?.[selectedCycle] ?? buildFallbackCatalogEntry(selectedPlan, selectedCycle)
+    : null;
+
+  const selectedPrice = selectedCatalogEntry?.amount ?? null;
+
+  const selectedPriceLabel =
+    selectedPrice != null
+      ? `${selectedCatalogEntry?.currencySymbol ?? "R$"}${selectedPrice.toFixed(2)}`
+      : tr("auth.notAvailableYet");
+
+  const checkoutPlanId = (
+    (selectedPlan ??
+      ((checkoutSession?.plan_code as PlanId | undefined) ?? currentPlan)) as PlanId
+  );
 
   return (
     <div
@@ -169,8 +318,6 @@ export function PlanChangeModal(props: {
                   {currentLimit} {tr("plans.units.creditsPerDay")}
                 </div>
               </div>
-
-              <div className="product-plan-context-copy">{subtitle}</div>
             </div>
           </div>
 
@@ -185,131 +332,276 @@ export function PlanChangeModal(props: {
         </div>
 
         <div className="product-modal-body">
+          {checkoutSession ? (
+            <BillingCheckoutInline
+              lang={lang}
+              publishableKey={checkoutSession.publishable_key ?? ""}
+              clientSecret={checkoutSession.checkout_client_secret ?? ""}
+              planLabel={tr(getPlanNameKey(checkoutPlanId))}
+              priceLabel={selectedPriceLabel}
+              cycleLabel={tr(getBillingCycleLabelKey(selectedCycle))}
+              onBack={() => {
+                setCheckoutSession(null);
+                setSubmitError(null);
+              }}
+              onCancel={props.onClose}
+              onSuccess={() => {
+                window.location.assign("/account?billing=updated");
+              }}
+            />
+          ) : showPlans ? (
+            <>
+              <div className="product-plan-cycle-bar">
+                <div className="product-plan-cycle-label">{tr("auth.billingRecurrence")}</div>
 
-          {showPlans ? (
-            <div className={`product-plan-grid ${higherPlans.length >= 4 ? "is-balanced" : ""}`}>
-              {higherPlans.map((pid) => {
-                const limit = dailyLimitForPlan(pid);
-                const plus = Math.max(0, limit - currentLimit);
-                const isRecommended = recommendedPlan != null && pid === recommendedPlan;
-                const isSelected = selectedPlan === pid;
-
-                return (
-                  <button
-                    key={pid}
-                    type="button"
-                    className={`product-plan-card ${isRecommended ? "is-recommended" : ""} ${
-                      isSelected ? "is-selected" : ""
-                    }`}
-                    onClick={() => setSelectedPlan(pid)}
-                    aria-pressed={isSelected}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div
+                    className="product-plan-cycle-options"
+                    role="radiogroup"
+                    aria-label={tr("auth.billingRecurrence")}
                   >
-                    <div className="product-plan-card-check">{isSelected ? "✓" : ""}</div>
+                    {BILLING_CYCLES.map((cycle) => {
+                      const isActive = selectedCycle === cycle;
 
-                    <div className="product-plan-card-top">
-                      <div className="product-plan-card-badges">
-                        <span className="product-plan-chip product-plan-chip-muted">
-                          {tr(getPlanBadgeKey(pid))}
-                        </span>
+                      return (
+                        <button
+                          key={cycle}
+                          type="button"
+                          role="radio"
+                          aria-checked={isActive}
+                          className={`product-plan-cycle-option ${isActive ? "is-active" : ""}`}
+                          onClick={() => setSelectedCycle(cycle)}
+                        >
+                          {tr(getBillingCycleLabelKey(cycle))}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                        {isRecommended ? (
-                          <span className="product-plan-chip product-plan-chip-recommended">
-                            {tr("plans.badge.recommended")}
-                          </span>
-                        ) : null}
-                      </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div
+                      role="group"
+                      aria-label="Currency"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: 4,
+                        border: "1px solid rgba(46, 83, 214, 0.16)",
+                        borderRadius: 999,
+                        background: "rgba(255,255,255,0.72)",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCurrency("BRL")}
+                        aria-pressed={selectedCurrency === "BRL"}
+                        style={{
+                          border: "none",
+                          background: selectedCurrency === "BRL" ? "rgba(46, 83, 214, 0.12)" : "transparent",
+                          color: "#1f3b8f",
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        R$
+                      </button>
 
-                      <div className="product-plan-card-title">{tr(getPlanNameKey(pid))}</div>
-                      <div className="product-plan-card-desc">{tr(getPlanDescKey(pid))}</div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCurrency("USD")}
+                        disabled={checkoutCurrencyLocked}
+                        aria-pressed={selectedCurrency === "USD"}
+                        style={{
+                          border: "none",
+                          background: selectedCurrency === "USD" ? "rgba(46, 83, 214, 0.12)" : "transparent",
+                          color: "#1f3b8f",
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontWeight: 700,
+                          cursor: checkoutCurrencyLocked ? "not-allowed" : "pointer",
+                          opacity: checkoutCurrencyLocked ? 0.48 : 1,
+                        }}
+                      >
+                        US$
+                      </button>
                     </div>
 
-                    <div className="product-plan-feature-list">
-                      <div className="product-plan-feature-item">
-                        <span className="product-plan-feature-dot">•</span>
-                        <span>
-                          <strong>{limit}</strong> {tr("plans.units.creditsPerDay")}
-                        </span>
+                    {checkoutCurrencyLocked ? (
+                      <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right" }}>
+                        {tr("auth.billingCheckoutCurrencyLocked")}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              <div className={`product-plan-grid ${higherPlans.length >= 4 ? "is-balanced" : ""}`}>
+                {higherPlans.map((pid) => {
+                  const limit = dailyLimitForPlan(pid);
+                  const plus = Math.max(0, limit - currentLimit);
+                  const isRecommended = recommendedPlan != null && pid === recommendedPlan;
+                  const isSelected = selectedPlan === pid;
+                  const catalog =
+                    billingCatalog[pid]?.[selectedCycle] ?? buildFallbackCatalogEntry(pid, selectedCycle);
+                  const cyclePrice = catalog.amount;
+
+                  return (
+                    <button
+                      key={pid}
+                      type="button"
+                      className={`product-plan-card ${isRecommended ? "is-recommended" : ""} ${
+                        isSelected ? "is-selected" : ""
+                      }`}
+                      onClick={() => setSelectedPlan(pid)}
+                      aria-pressed={isSelected}
+                    >
+                      <div className="product-plan-card-check">{isSelected ? "✓" : ""}</div>
+
+                      <div className="product-plan-card-top">
+                        <div className="product-plan-card-badges">
+                          <span className="product-plan-chip product-plan-chip-muted">
+                            {tr(getPlanBadgeKey(pid))}
+                          </span>
+
+                          {isRecommended ? (
+                            <span className="product-plan-chip product-plan-chip-recommended">
+                              {tr("plans.badge.recommended")}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="product-plan-card-title">{tr(getPlanNameKey(pid))}</div>
+                        <div className="product-plan-card-desc">{tr(getPlanDescKey(pid))}</div>
                       </div>
 
-                      {plus > 0 ? (
+                      <div className="product-plan-feature-list">
                         <div className="product-plan-feature-item">
                           <span className="product-plan-feature-dot">•</span>
-                          <span>{tr("plans.copy.moreCredits", { plus })}</span>
-                        </div>
-                      ) : null}
-
-                      <div className="product-plan-feature-item">
-                        <span className="product-plan-feature-dot">•</span>
-                        <span>{tr("plans.copy.lessInterruptions")}</span>
-                      </div>
-                    </div>
-
-                    <div className="product-plan-price-block">
-                      <div className="product-plan-price-value">
-                        {PLAN_CATALOG[pid].priceMonthly != null ? (
-                          <>
-                            {PLAN_CATALOG[pid].currencySymbol}
-                            {PLAN_CATALOG[pid].priceMonthly!.toFixed(2)}
-                          </>
-                        ) : (
-                          <span className="product-plan-price-placeholder">
-                            {tr("plans.price.placeholder")}
+                          <span>
+                            <strong>{limit}</strong> {tr("plans.units.creditsPerDay")}
                           </span>
-                        )}
+                        </div>
+
+                        {plus > 0 ? (
+                          <div className="product-plan-feature-item">
+                            <span className="product-plan-feature-dot">•</span>
+                            <span>{tr("plans.copy.moreCredits", { plus })}</span>
+                          </div>
+                        ) : null}
+
+                        <div className="product-plan-feature-item">
+                          <span className="product-plan-feature-dot">•</span>
+                          <span>{tr("plans.copy.lessInterruptions")}</span>
+                        </div>
                       </div>
 
-                      <div className="product-plan-price-sub">{tr("plans.price.perMonth")}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+                      <div className="product-plan-price-block">
+                        <div className="product-plan-price-value">
+                          {cyclePrice != null ? (
+                            <>
+                              {catalog.currencySymbol}
+                              {cyclePrice.toFixed(2)}
+                            </>
+                          ) : (
+                            <span className="product-plan-price-placeholder">
+                              {tr("plans.price.placeholder")}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="product-plan-price-sub">
+                          {tr(getBillingCyclePriceSuffixKey(selectedCycle))}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
           ) : (
             <div className="product-plan-empty-card">{tr("common.notNow")}</div>
           )}
 
-          <div className="product-plan-footer">
-            <div className="product-plan-selection-summary">
-              {selectedPlan && selectedLimit != null ? (
-                <>
-                  <strong>{tr(getPlanNameKey(selectedPlan))}</strong>
-                  <span>
-                    {selectedLimit} {tr("plans.units.creditsPerDay")}
-                  </span>
-                  {selectedPlus > 0 ? (
-                    <span>{tr("plans.copy.moreCredits", { plus: selectedPlus })}</span>
-                  ) : null}
-                </>
-              ) : (
-                <span>{tr("common.notNow")}</span>
-              )}
-            </div>
+          {!checkoutSession ? (
+            <div className="product-plan-footer">
+              {submitError ? (
+                <div className="product-plan-empty-card" style={{ marginBottom: 12 }}>
+                  {submitError}
+                </div>
+              ) : null}
 
-            <div className="product-plan-actions">
-              <button type="button" className="product-secondary" onClick={props.onClose}>
-                {tr("common.notNow")}
-              </button>
+              <div className="product-plan-actions">
+                <button type="button" className="product-secondary" onClick={props.onClose}>
+                  {tr("common.notNow")}
+                </button>
 
-              <button
-                type="button"
-                className="product-primary"
-                disabled={!selectedPlan || !canApplyLocalPlanChange}
-                onClick={() => {
-                  if (!selectedPlan) return;
-
-                  if (canApplyLocalPlanChange) {
-                    store.setPlan(selectedPlan);
+                <button
+                  type="button"
+                  className="product-primary"
+                  disabled={
+                    !selectedPlan ||
+                    isSubmitting ||
+                    (PRODUCT_AUTH_ENABLED &&
+                      !PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
+                      isCatalogLoading)
                   }
+                  onClick={async () => {
+                    if (!selectedPlan) return;
 
-                  props.onClose();
-                }}
-              >
-                {canApplyLocalPlanChange
-                  ? tr("plans.cta.upgrade")
-                  : tr("plans.price.placeholder")}
-              </button>
+                    if (canApplyLocalPlanChange) {
+                      store.setPlan(selectedPlan);
+                      props.onClose();
+                      return;
+                    }
+
+                    try {
+                      setIsSubmitting(true);
+                      setSubmitError(null);
+
+                      const response = await createBillingCheckoutSession({
+                        plan_code: selectedPlan as Exclude<PlanId, "FREE" | "FREE_ANON">,
+                        billing_cycle: selectedCycle,
+                        currency_code: selectedCurrency,
+                      });
+
+                      if (response.checkout_client_secret && response.publishable_key) {
+                        setCheckoutSession(response);
+                        return;
+                      }
+
+                      throw new Error("billing_checkout_client_secret_missing");
+                    } catch (error) {
+                      console.error("billing_checkout_error", error);
+
+                      if (
+                        error instanceof BillingRequestError &&
+                        error.code === "subscription_change_must_use_account_billing"
+                      ) {
+                        setSubmitError(t(lang, "auth.billingPlanChangeAccountNote"));
+                      } else {
+                        setSubmitError(t(lang, "auth.billingCheckoutCreateError"));
+                      }
+                    } finally {
+                      setIsSubmitting(false);
+                    }
+                  }}
+                >
+                  {isSubmitting ? "..." : tr("plans.cta.upgrade")}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>

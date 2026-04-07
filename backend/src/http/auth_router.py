@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Request, Response
 from fastapi.responses import JSONResponse
 
 from src.auth.service import (
+    change_password_authenticated,
     forgot_password,
     get_auth_me_payload,
     login_with_google_credential,
@@ -139,6 +140,29 @@ def auth_password_reset(
                 "ok": False,
                 "code": result.get("code") or "PASSWORD_RESET_FAILED",
                 "message": result.get("message") or "password reset failed",
+            },
+        )
+
+    return result
+
+@router.post("/password/change")
+def auth_password_change(
+    request: Request,
+    payload: dict = Body(...),
+):
+    result = change_password_authenticated(
+        request=request,
+        current_password=str(payload.get("current_password") or ""),
+        new_password=str(payload.get("new_password") or ""),
+    )
+
+    if not result.get("ok"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "ok": False,
+                "code": result.get("code") or "PASSWORD_CHANGE_FAILED",
+                "message": result.get("message") or "password change failed",
             },
         )
 

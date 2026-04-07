@@ -1,9 +1,27 @@
 {
-  "freeAnon": { "name": "Free", "badge": "Sem login" },
-  "free": { "name": "Free+", "badge": "Com login" },
-  "basic": { "name": "Basic", "badge": "Mais créditos" },
-  "light": { "name": "Light", "badge": "Mais contexto" },
-  "pro": { "name": "Pro", "badge": "Avançado" },
+  "freeAnon": { "name": "Free", "badge": "Sem login", "desc": "Teste rápido sem conta" },
+  "free": { "name": "Free+", "badge": "Com login", "desc": "Comece e teste o produto" },
+  "basic": { "name": "Basic", "badge": "Mais créditos", "desc": "Uso leve e consistência" },
+  "light": { "name": "Light", "badge": "Mais contexto", "desc": "Acompanhar vários jogos com folga" },
+  "pro": { "name": "Pro", "badge": "Avançado", "desc": "Volume alto e máxima consistência" },
+
+  "badge": { "recommended": "Recomendado" },
+  "units": { "creditsPerDay": "créditos/dia" },
+  "copy": {
+    "moreCredits": "+{plus}/dia vs atual",
+    "lessInterruptions": "Menos interrupções por limite"
+  },
+  "price": {
+    "placeholder": "Preço em breve",
+    "perMonth": "por mês",
+    "perQuarter": "por trimestre",
+    "perYear": "por ano"
+  },
+  "modal": {
+    "manualTitle": "Escolha o plano ideal",
+    "manualSubtitle": "Compare as opções e escolha a recorrência que faz mais sentido para você."
+  },
+
   "cta": {
     "createAccount": "Criar conta",
     "seePlans": "Ver planos",

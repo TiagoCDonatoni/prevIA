@@ -13,7 +13,13 @@
   },
   "price": {
     "placeholder": "Precio pronto",
-    "perMonth": "por mes"
+    "perMonth": "por mes",
+    "perQuarter": "por trimestre",
+    "perYear": "por año"
+  },
+  "modal": {
+    "manualTitle": "Elige el plan ideal",
+    "manualSubtitle": "Compara las opciones y elige la recurrencia que mejor encaja contigo."
   },
 
   "cta": {

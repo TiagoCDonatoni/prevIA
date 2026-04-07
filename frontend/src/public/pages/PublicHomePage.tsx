@@ -10,7 +10,10 @@ import previewMainImg from "../assets/previews/landing-main.png";
 import previewMarketImg from "../assets/previews/landing-market.png";
 import previewAnalyticsImg from "../assets/previews/landing-analytics.png";
 import { PublicFreeAnonEmbed } from "../../product/components/PublicFreeAnonEmbed";
-import { ENABLE_PUBLIC_FREE_ANON_EMBED } from "../../config";
+import {
+  ENABLE_PUBLIC_FREE_ANON_EMBED,
+  ENABLE_PUBLIC_PRODUCT_LAYER,
+} from "../../config";
 
 import { usePublicSeo } from "../lib/publicSeo";
 
@@ -95,16 +98,16 @@ export function PublicHomePage() {
         </div>
       </section>
 
-      {ENABLE_PUBLIC_FREE_ANON_EMBED ? (
-        <div id="teste-gratis">
-          <PublicFreeAnonEmbed
-            lang={currentLang}
-            eyebrow={copy.home.freeAnonEmbed.eyebrow}
-            title={copy.home.freeAnonEmbed.title}
-            body={copy.home.freeAnonEmbed.body}
-          />
-        </div>
-      ) : null}
+        {ENABLE_PUBLIC_PRODUCT_LAYER && ENABLE_PUBLIC_FREE_ANON_EMBED ? (
+          <div id="teste-gratis">
+            <PublicFreeAnonEmbed
+              lang={currentLang}
+              eyebrow={copy.home.freeAnonEmbed.eyebrow}
+              title={copy.home.freeAnonEmbed.title}
+              body={copy.home.freeAnonEmbed.body}
+            />
+          </div>
+        ) : null}
 
       <section className="landing-section">
         <div className="landing-section-head compact">
@@ -123,43 +126,43 @@ export function PublicHomePage() {
         </div>
       </section>
 
-      <section className="landing-section">
-        <div className="landing-section-head compact">
-          <div className="public-eyebrow">{copy.home.preview.eyebrow}</div>
-          <h2 className="landing-section-title">{copy.home.preview.title}</h2>
-          <p className="landing-section-body">{copy.home.preview.body}</p>
-        </div>
+        <section className="landing-section">
+          <div className="landing-section-head compact">
+            <div className="public-eyebrow">{copy.home.preview.eyebrow}</div>
+            <h2 className="landing-section-title">{copy.home.preview.title}</h2>
+            <p className="landing-section-body">{copy.home.preview.body}</p>
+          </div>
 
-        <div className="landing-preview-grid">
-          {copy.home.preview.items.map((item, index) => {
-            const imageSrc = PREVIEW_IMAGES[index];
+          <div className="landing-preview-grid">
+            {copy.home.preview.items.map((item, index) => {
+              const imageSrc = PREVIEW_IMAGES[index];
 
-            return (
-              <article key={item.title} className="landing-preview-card">
-                <div className="landing-preview-frame">
-                  <div className="landing-preview-media">
-                    {imageSrc ? (
-                      <img
-                        src={imageSrc}
-                        alt={item.title}
-                        className="landing-preview-image"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="landing-preview-placeholder">{item.badge}</div>
-                    )}
+              return (
+                <article key={item.title} className="landing-preview-card">
+                  <div className="landing-preview-frame">
+                    <div className="landing-preview-media">
+                      {imageSrc ? (
+                        <img
+                          src={imageSrc}
+                          alt={item.title}
+                          className="landing-preview-image"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="landing-preview-placeholder">{item.badge}</div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div className="landing-preview-kicker">{item.badge}</div>
-                <h3 className="landing-card-title">{item.title}</h3>
-                <p className="landing-card-body">{item.body}</p>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-
+                  <div className="landing-preview-kicker">{item.badge}</div>
+                  <h3 className="landing-card-title">{item.title}</h3>
+                  <p className="landing-card-body">{item.body}</p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+        
       <section className="landing-section">
         <div className="landing-section-head compact">
           <div className="public-eyebrow">{copy.home.howItWorks.eyebrow}</div>

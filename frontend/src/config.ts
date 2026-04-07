@@ -35,3 +35,6 @@ export const ENABLE_ADMIN_APP =
 
 export const ENABLE_PUBLIC_FREE_ANON_EMBED =
   envFlag(import.meta.env.VITE_ENABLE_PUBLIC_FREE_ANON_EMBED, false);
+
+export const ENABLE_PUBLIC_PRODUCT_LAYER =
+  envFlag(import.meta.env.VITE_ENABLE_PUBLIC_PRODUCT_LAYER, false);

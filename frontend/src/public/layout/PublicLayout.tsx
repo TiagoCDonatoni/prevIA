@@ -8,6 +8,7 @@ import "../public.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { ProductAuthModal } from "../../product/auth/ProductAuthModal";
+import { ENABLE_PUBLIC_PRODUCT_LAYER } from "../../config";
 
 const PUBLIC_FOOTER_COPY = {
   pt: {
@@ -144,12 +145,15 @@ export function PublicLayout() {
             <BrandLogo />
           </NavLink>
             <nav className="public-nav" aria-label="Public navigation">
-              <Link
-                to={`/${currentLang}#teste-gratis`}
-                className="public-nav-link public-nav-link-highlight"
-              >
-                {copy.nav.testFree}
-              </Link>
+              {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+                <Link
+                  to={`/${currentLang}#teste-gratis`}
+                  className="public-mobile-nav-link active"
+                  onClick={() => setIsMobileMenuOpen(false)}
+                >
+                  {copy.nav.testFree}
+                </Link>
+              ) : null}
 
               {navItems.map((item) => (
                 <NavLink
@@ -189,23 +193,25 @@ export function PublicLayout() {
                 <span className="public-menu-btn-bar" />
               </button>
 
-            <div className="public-header-auth">
-              <button
-                type="button"
-                className="public-btn public-btn-secondary public-header-auth-btn"
-                onClick={() => openAuthModal("login")}
-              >
-                {copy.nav.login}
-              </button>
+            {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+              <div className="public-header-auth">
+                <button
+                  type="button"
+                  className="public-btn public-btn-secondary public-header-auth-btn"
+                  onClick={() => openAuthModal("login")}
+                >
+                  {copy.nav.login}
+                </button>
 
-              <button
-                type="button"
-                className="public-btn public-btn-primary public-header-auth-btn"
-                onClick={() => openAuthModal("signup")}
-              >
-                {copy.nav.createAccount}
-              </button>
-            </div>
+                <button
+                  type="button"
+                  className="public-btn public-btn-primary public-header-auth-btn"
+                  onClick={() => openAuthModal("signup")}
+                >
+                  {copy.nav.createAccount}
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -251,23 +257,25 @@ export function PublicLayout() {
                 {footer.links.contact}
               </Link>
 
-              <div className="public-mobile-nav-auth">
-                <button
-                  type="button"
-                  className="public-mobile-nav-link public-mobile-nav-link-secondary"
-                  onClick={() => openAuthModal("login")}
-                >
-                  {copy.nav.login}
-                </button>
+              {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+                <div className="public-mobile-nav-auth">
+                  <button
+                    type="button"
+                    className="public-mobile-nav-link public-mobile-nav-link-secondary"
+                    onClick={() => openAuthModal("login")}
+                  >
+                    {copy.nav.login}
+                  </button>
 
-                <button
-                  type="button"
-                  className="public-mobile-nav-link public-mobile-nav-link-primary"
-                  onClick={() => openAuthModal("signup")}
-                >
-                  {copy.nav.createAccount}
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    className="public-mobile-nav-link public-mobile-nav-link-primary"
+                    onClick={() => openAuthModal("signup")}
+                  >
+                    {copy.nav.createAccount}
+                  </button>
+                </div>
+              ) : null}
             </nav>
           </div>
         </>
@@ -334,16 +342,18 @@ export function PublicLayout() {
           </div>
         </div>
       </footer>
-      <ProductAuthModal
-        open={authOpen}
-        lang={currentLang as Lang}
-        initialMode={authInitialMode}
-        onClose={() => setAuthOpen(false)}
-        onAuthSuccess={async () => {
-          setAuthOpen(false);
-          navigate("/app");
-        }}
-      />
+      {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+        <ProductAuthModal
+          open={authOpen}
+          lang={currentLang as Lang}
+          initialMode={authInitialMode}
+          onClose={() => setAuthOpen(false)}
+          onAuthSuccess={async () => {
+            setAuthOpen(false);
+            navigate("/app");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

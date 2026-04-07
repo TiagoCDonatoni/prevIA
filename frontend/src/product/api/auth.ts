@@ -75,6 +75,14 @@ export type AuthResetPasswordResponse = {
   };
 };
 
+export type AuthChangePasswordResponse = {
+  ok: true;
+  message: string;
+  meta?: {
+    generated_at_utc?: string;
+  };
+};
+
 export type AuthGoogleLoginResponse = AuthMeResponse;
 
 export type PatchAuthProfilePayload = {
@@ -203,6 +211,16 @@ export async function postAuthResetPassword(payload: {
   new_password: string;
 }): Promise<AuthResetPasswordResponse> {
   return requestJson<AuthResetPasswordResponse, typeof payload>("/auth/password/reset", payload);
+}
+
+export async function postAuthChangePassword(payload: {
+  current_password: string;
+  new_password: string;
+}): Promise<AuthChangePasswordResponse> {
+  return requestJson<AuthChangePasswordResponse, typeof payload>(
+    "/auth/password/change",
+    payload
+  );
 }
 
 export async function postAuthGoogleLogin(payload: {

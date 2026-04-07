@@ -21,6 +21,7 @@ from src.auth.sessions import (
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
 
+from src.billing.service import get_effective_subscription_for_user
 
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
 
@@ -178,11 +179,24 @@ def _verify_google_credential(raw_credential: str) -> Dict[str, Any]:
     if not allowed_client_ids:
         raise ValueError("google auth not configured")
 
-    idinfo = google_id_token.verify_oauth2_token(
-        credential,
-        google_requests.Request(),
-        audience=None,
-    )
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            audience=None,
+            clock_skew_in_seconds=5,
+        )
+    except ValueError as exc:
+        message = str(exc) or "invalid google credential"
+        lowered = message.lower()
+
+        if "token used too early" in lowered:
+            raise ValueError("google token clock skew") from exc
+
+        if "token expired" in lowered or "expired" in lowered:
+            raise ValueError("google token expired") from exc
+
+        raise ValueError(message) from exc
 
     aud = str(idinfo.get("aud") or "").strip()
     if aud not in allowed_client_ids:
@@ -566,6 +580,16 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
         return _build_anonymous_payload()
 
     subscription = _get_or_create_active_subscription(cur, user_id=user_id)
+
+    effective_subscription = get_effective_subscription_for_user(user_id)
+    if effective_subscription:
+        subscription = {
+            "plan_code": _safe_plan_code(effective_subscription.get("plan_code")),
+            "status": str(effective_subscription.get("billing_status") or "inactive"),
+            "provider": str(effective_subscription.get("provider") or "stripe"),
+            "billing_cycle": effective_subscription.get("billing_cycle"),
+        }
+
     entitlements = _get_or_refresh_entitlements(
         cur,
         user_id=user_id,
@@ -602,7 +626,7 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
             "plan_code": subscription["plan_code"],
             "status": subscription["status"],
             "provider": subscription["provider"],
-            "billing_cycle": _resolve_billing_cycle(subscription),
+            "billing_cycle": subscription.get("billing_cycle") or _resolve_billing_cycle(subscription),
         },
         "entitlements": entitlements,
         "usage": {
@@ -933,7 +957,6 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
 
     return payload
 
-
 def signup_with_password(
     *,
     request: Request,
@@ -1186,7 +1209,6 @@ def logout_with_session_token(raw_session_token: str | None) -> None:
             )
         conn.commit()
 
-
 def login_with_google_credential(
     *,
     request: Request,
@@ -1195,11 +1217,29 @@ def login_with_google_credential(
     try:
         google_profile = _verify_google_credential(credential)
     except ValueError as exc:
+        raw_message = str(exc) or "invalid google credential"
+
+        if raw_message == "google token clock skew":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_CLOCK_SKEW",
+                "message": "google token rejected due to small clock skew",
+            }
+
+        if raw_message == "google token expired":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_EXPIRED",
+                "message": "google token expired",
+            }
+
         return {
             "ok": False,
             "status_code": 400,
             "code": "INVALID_GOOGLE_CREDENTIAL",
-            "message": str(exc) or "invalid google credential",
+            "message": raw_message,
         }
     except Exception:
         return {
@@ -1213,27 +1253,6 @@ def login_with_google_credential(
         request=request,
         google_profile=google_profile,
     )
-
-def forgot_password(
-    *,
-    request: Request,
-    email: str,
-) -> Dict[str, Any]:
-
-    session_token_hash = make_session_token_hash(token)
-
-    with pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE auth.sessions
-                SET revoked_at_utc = NOW()
-                WHERE session_token_hash = %(session_token_hash)s
-                  AND revoked_at_utc IS NULL
-                """,
-                {"session_token_hash": session_token_hash},
-            )
-        conn.commit()
 
 def forgot_password(
     *,
@@ -1340,6 +1359,169 @@ def forgot_password(
 
     return response
 
+def change_password_authenticated(
+    *,
+    request: Request,
+    current_password: str,
+    new_password: str,
+) -> Dict[str, Any]:
+    raw_session_token = read_product_session_cookie(request)
+    if not raw_session_token:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "AUTH_REQUIRED",
+            "message": "auth required",
+        }
+
+    current_password_value = str(current_password or "")
+    new_password_value = str(new_password or "")
+
+    if not current_password_value:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "INVALID_CURRENT_PASSWORD",
+            "message": "invalid current password",
+        }
+
+    if current_password_value == new_password_value:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "PASSWORD_SAME_AS_CURRENT",
+            "message": "new password matches current password",
+        }
+
+    try:
+        validate_password_policy(new_password_value)
+    except ValueError:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "weak password",
+        }
+
+    current_session_token_hash = make_session_token_hash(raw_session_token)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            user_id = _resolve_session_user_id(cur, raw_session_token=raw_session_token)
+            if user_id is None:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "auth required",
+                }
+
+            cur.execute(
+                """
+                SELECT
+                    u.status,
+                    i.identity_id,
+                    i.password_hash
+                FROM app.users u
+                LEFT JOIN app.user_identities i
+                  ON i.user_id = u.user_id
+                 AND i.provider = 'password'
+                WHERE u.user_id = %(user_id)s
+                ORDER BY i.is_primary DESC NULLS LAST, i.identity_id DESC NULLS LAST
+                LIMIT 1
+                """,
+                {"user_id": user_id},
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "auth required",
+                }
+
+            user_status = str(row[0] or "")
+            identity_id = int(row[1]) if row[1] is not None else None
+            stored_hash = row[2]
+
+            if user_status in {"blocked", "deleted"}:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 403,
+                    "code": "ACCOUNT_BLOCKED",
+                    "message": "account blocked",
+                }
+
+            if identity_id is None or not stored_hash:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 400,
+                    "code": "PASSWORD_AUTH_NOT_AVAILABLE",
+                    "message": "password auth not available",
+                }
+
+            if not verify_password(current_password_value, stored_hash):
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status_code": 400,
+                    "code": "INVALID_CURRENT_PASSWORD",
+                    "message": "invalid current password",
+                }
+
+            next_password_hash = hash_password(new_password_value)
+
+            cur.execute(
+                """
+                UPDATE app.user_identities
+                SET password_hash = %(password_hash)s,
+                    updated_at_utc = NOW()
+                WHERE identity_id = %(identity_id)s
+                """,
+                {
+                    "identity_id": identity_id,
+                    "password_hash": next_password_hash,
+                },
+            )
+
+            cur.execute(
+                """
+                UPDATE app.users
+                SET updated_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                """,
+                {"user_id": user_id},
+            )
+
+            cur.execute(
+                """
+                UPDATE auth.sessions
+                SET revoked_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                  AND session_token_hash <> %(current_session_token_hash)s
+                  AND revoked_at_utc IS NULL
+                """,
+                {
+                    "user_id": user_id,
+                    "current_session_token_hash": current_session_token_hash,
+                },
+            )
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "message": "password changed successfully",
+        "meta": {
+            "generated_at_utc": utc_now_iso(),
+        },
+    }
 
 def reset_password_with_token(
     *,

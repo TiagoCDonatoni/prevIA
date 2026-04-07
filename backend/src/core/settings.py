@@ -85,6 +85,13 @@ class Settings:
     product_password_reset_debug_token_enabled: bool
     product_google_client_ids: List[str]
 
+    stripe_secret_key: str
+    stripe_publishable_key: str
+    stripe_webhook_secret: str
+    stripe_checkout_success_url: str
+    stripe_checkout_cancel_url: str
+    stripe_portal_return_url: str
+
     sports_config: Dict[str, Any]
 
     apifootball_endpoints: Dict[str, Any]
@@ -152,6 +159,13 @@ def load_settings() -> Settings:
         if item.strip()
     ]
 
+    stripe_secret_key = _env_str("STRIPE_SECRET_KEY")
+    stripe_publishable_key = _env_str("STRIPE_PUBLISHABLE_KEY")
+    stripe_webhook_secret = _env_str("STRIPE_WEBHOOK_SECRET")
+    stripe_checkout_success_url = _env_str("STRIPE_CHECKOUT_SUCCESS_URL")
+    stripe_checkout_cancel_url = _env_str("STRIPE_CHECKOUT_CANCEL_URL")
+    stripe_portal_return_url = _env_str("STRIPE_PORTAL_RETURN_URL")
+
     sports_config = _read_json(CONFIG_DIR / "sports.json")
     apifootball_endpoints = _read_json(CONFIG_DIR / "endpoints.apifootball.json")
     theodds_endpoints = _read_json(CONFIG_DIR / "endpoints.theodds.json")
@@ -181,6 +195,12 @@ def load_settings() -> Settings:
         product_password_reset_ttl_minutes=product_password_reset_ttl_minutes,
         product_password_reset_debug_token_enabled=product_password_reset_debug_token_enabled,
         product_google_client_ids=product_google_client_ids,
+        stripe_secret_key=stripe_secret_key,
+        stripe_publishable_key=stripe_publishable_key,
+        stripe_webhook_secret=stripe_webhook_secret,
+        stripe_checkout_success_url=stripe_checkout_success_url,
+        stripe_checkout_cancel_url=stripe_checkout_cancel_url,
+        stripe_portal_return_url=stripe_portal_return_url,
         sports_config=sports_config,
         apifootball_endpoints=apifootball_endpoints,
         theodds_endpoints=theodds_endpoints,
