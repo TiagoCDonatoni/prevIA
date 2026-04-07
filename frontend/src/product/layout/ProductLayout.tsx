@@ -287,54 +287,65 @@ React.useEffect(() => {
     []
   );
 
+  const mobileMenuLabel =
+    lang === "pt" ? "Abrir menu" : lang === "es" ? "Abrir menú" : "Open menu";
 
+  const creditsBadge = (
+    <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
+  );
 
-const mobileMenuLabel =
-  lang === "pt" ? "Abrir menu" : lang === "es" ? "Abrir menú" : "Open menu";
+  const renderHeaderActions = (onAfterClick?: () => void) => {
+    if (!isAuthenticated) {
+      if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
+        return null;
+      }
 
-const creditsBadge = (
-  <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
-);
+      return (
+        <div className="product-auth-cta-group">
+          <button
+            type="button"
+            className="product-auth-login-btn"
+            onClick={() => {
+              onAfterClick?.();
+              openAuthModal("login");
+            }}
+          >
+            {t(lang, "auth.login")}
+          </button>
 
-const renderCreditsCta = (onAfterClick?: () => void) => {
-  const currentPlan = store.state.plan;
-
-  if (currentPlan === "PRO") return null;
-
-  if (currentPlan === "FREE_ANON") {
-    if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
-      return null;
+          <button
+            type="button"
+            className="pl-credits-cta"
+            onClick={() => {
+              onAfterClick?.();
+              openAuthModal("signup");
+            }}
+          >
+            {(() => {
+              const label = t(lang, "auth.createFreeAccount");
+              return label === "auth.createFreeAccount" ? t(lang, "auth.signup") : label;
+            })()}
+          </button>
+        </div>
+      );
     }
+
+    if (plan === "PRO") return null;
 
     return (
       <button
+        type="button"
         className="pl-credits-cta"
         onClick={() => {
           onAfterClick?.();
-          openAuthModal("signup");
+          setPlanReason("MANUAL");
+          setPlanOpen(true);
         }}
       >
-        {(() => {
-          const label = t(lang, "auth.createFreeAccount");
-          return label === "auth.createFreeAccount" ? t(lang, "auth.signup") : label;
-        })()}
+        {t(lang, "credits.moreCredits")}
       </button>
     );
-  }
-
-  return (
-    <button
-      className="pl-credits-cta"
-      onClick={() => {
-        onAfterClick?.();
-        setPlanReason("MANUAL");
-        setPlanOpen(true);
-      }}
-    >
-      {t(lang, "credits.moreCredits")}
-    </button>
-  );
-};
+  };
 
 const accountMenuDropdown = isAccountMenuOpen ? (
   <div
@@ -410,7 +421,7 @@ const mobileHeaderMenuContent = (
       />
     </div>
 
-    {renderCreditsCta(() => setIsMobileHeaderMenuOpen(false))}
+    {renderHeaderActions(() => setIsMobileHeaderMenuOpen(false))}
   </>
 );
 
@@ -465,7 +476,7 @@ const mobileHeaderMenuContent = (
 
             <div className="pl-credits-wrap">
               {creditsBadge}
-              {renderCreditsCta()}
+              {renderHeaderActions()}
             </div>
 
             {canSeeAccountMenu ? (
