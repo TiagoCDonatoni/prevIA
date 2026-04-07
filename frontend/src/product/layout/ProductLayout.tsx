@@ -17,6 +17,59 @@ import BrandLogo from "../../shared/BrandLogo";
 
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
+  type FooterSocialId = "instagram" | "x" | "tiktok";
+
+  type FooterSocialItem = {
+    id: FooterSocialId;
+    label: string;
+    href: string;
+    enabled: boolean;
+  };
+
+  function FooterSocialIcon({ id }: { id: FooterSocialId }) {
+    if (id === "instagram") {
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          className="product-footer-social-icon"
+        >
+          <rect x="3" y="3" width="18" height="18" rx="5" ry="5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="17.2" cy="6.8" r="1.2" fill="currentColor" />
+        </svg>
+      );
+    }
+
+    if (id === "x") {
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          className="product-footer-social-icon"
+        >
+          <path
+            d="M4.5 4h4.1l4.1 5.7L17.5 4H20l-6.2 7 6.7 9h-4.1l-4.5-6.2L6.6 20H4.1l6.6-7.5L4.5 4z"
+            fill="currentColor"
+          />
+        </svg>
+      );
+    }
+
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        className="product-footer-social-icon"
+      >
+        <path
+          d="M15.8 3.7c1.2 1.2 2.7 1.9 4.4 2v3.2c-1.5-.1-3-.5-4.4-1.3v5.9c0 4-3.2 7.2-7.2 7.2S1.4 17.5 1.4 13.5s3.2-7.2 7.2-7.2c.3 0 .6 0 .9.1v3.3a4.1 4.1 0 0 0-.9-.1 3.9 3.9 0 1 0 3.9 3.9V2.1h3.3v1.6z"
+          fill="currentColor"
+        />
+      </svg>
+    );
+  }
+
  const PRODUCT_FOOTER_COPY = {
   pt: {
     body:
@@ -30,7 +83,26 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
       about: "Sobre",
       contact: "Contato",
     },
-    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    social: [
+    {
+      id: "instagram",
+      label: "Instagram",
+      href: "https://instagram.com/previa_pt",
+      enabled: true,
+    },
+    {
+      id: "x",
+      label: "X",
+      href: "",
+      enabled: false,
+    },
+    {
+      id: "tiktok",
+      label: "TikTok",
+      href: "",
+      enabled: false,
+    },
+  ] as FooterSocialItem[],
     madeIn: "Feito no Brasil @prevIA {year}",
   },
   en: {
@@ -45,7 +117,26 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
       about: "About",
       contact: "Contact",
     },
-    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    social: [
+      {
+        id: "instagram",
+        label: "Instagram",
+        href: "https://instagram.com/previa_en",
+        enabled: true,
+      },
+      {
+        id: "x",
+        label: "X",
+        href: "",
+        enabled: false,
+      },
+      {
+        id: "tiktok",
+        label: "TikTok",
+        href: "",
+        enabled: false,
+      },
+    ] as FooterSocialItem[],
     madeIn: "Built in Brazil @prevIA {year}",
   },
   es: {
@@ -60,7 +151,26 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
       about: "Sobre",
       contact: "Contacto",
     },
-    social: ["X · @prevIA", "Instagram · @prevIA", "TikTok · @prevIA"],
+    social: [
+      {
+        id: "instagram",
+        label: "Instagram",
+        href: "https://instagram.com/previa_en",
+        enabled: true,
+      },
+      {
+        id: "x",
+        label: "X",
+        href: "",
+        enabled: false,
+      },
+      {
+        id: "tiktok",
+        label: "TikTok",
+        href: "",
+        enabled: false,
+      },
+    ] as FooterSocialItem[],
     madeIn: "Hecho en Brasil @prevIA {year}",
   },
 } as const;
@@ -607,11 +717,22 @@ const mobileHeaderMenuContent = (
               <div className="product-footer-title">{footer.socialTitle}</div>
 
               <div className="product-footer-socials">
-                {footer.social.map((item) => (
-                  <span key={item} className="product-footer-social-pill">
-                    {item}
-                  </span>
-                ))}
+                {footer.social
+                  .filter((item) => item.enabled)
+                  .map((item) => (
+                    <a
+                      key={item.id}
+                      href={item.href}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="product-footer-social-link"
+                      aria-label={item.label}
+                      title={item.label}
+                    >
+                      <FooterSocialIcon id={item.id} />
+                      <span>{item.label}</span>
+                    </a>
+                  ))}
               </div>
             </div>
           </div>

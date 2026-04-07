@@ -224,6 +224,35 @@
   color: #64748b;
 }
 
+.product-footer-socials {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.product-footer-social-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #dbe5ff;
+  background: #ffffff;
+  color: var(--previa-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.product-footer-social-pill:hover {
+  background: var(--previa-blue-soft-2);
+  border-color: #bfd0ff;
+  color: var(--previa-blue-hover);
+}
+
 /* BOTÃO DEV — remover depois */
 .product-reset-btn {
   border: 1px dashed #e5e7eb;
@@ -2799,8 +2828,41 @@
 
 .product-footer-socials {
   display: flex;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
-  gap: 10px;
+}
+
+.product-footer-social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #334155;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+.product-footer-social-link:hover {
+  color: #0f172a;
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.product-footer-social-link:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.25);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.product-footer-social-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: block;
+  color: currentColor;
 }
 
 .product-footer-social-pill {
@@ -2820,6 +2882,41 @@
   margin-top: 22px;
   padding-top: 16px;
   border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.product-footer-social-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #dbe5ff;
+  background: #ffffff;
+  color: var(--previa-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.product-footer-social-pill:hover {
+  background: var(--previa-blue-soft-2);
+  border-color: #bfd0ff;
+  color: var(--previa-blue-hover);
+  transform: translateY(-1px);
+}
+
+.product-footer-social-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: block;
 }
 
 @media (max-width: 980px) {
