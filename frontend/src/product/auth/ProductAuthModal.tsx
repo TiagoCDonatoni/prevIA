@@ -172,34 +172,97 @@ export function ProductAuthModal(props: {
     }
   }
 
+  const googleLocale =
+    lang === "pt" ? "pt-BR" : lang === "es" ? "es-419" : "en";
+
+  const googleScriptHl =
+    lang === "pt" ? "pt-BR" : lang === "es" ? "es-419" : "en";
+
+  function loadGoogleIdentityScript(hl: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const scriptSrc = `https://accounts.google.com/gsi/client?hl=${encodeURIComponent(hl)}`;
+      const existingScript = document.querySelector<HTMLScriptElement>(
+        'script[data-google-gsi="true"]'
+      );
+
+      if (existingScript?.src === scriptSrc && window.google?.accounts?.id) {
+        resolve();
+        return;
+      }
+
+      if (existingScript) {
+        existingScript.remove();
+      }
+
+      const script = document.createElement("script");
+      script.src = scriptSrc;
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleGsi = "true";
+
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Failed to load Google Identity script"));
+
+      document.body.appendChild(script);
+    });
+  }
+
   useEffect(() => {
     if (!open || !authEnabled) return;
     if (!googleAuthEnabled || !googleClientId) return;
     if (mode !== "login" && mode !== "signup") return;
     if (!googleButtonRef.current) return;
-    if (!window.google?.accounts?.id) return;
 
-    googleButtonRef.current.innerHTML = "";
+    let cancelled = false;
 
-    window.google.accounts.id.initialize({
-      client_id: googleClientId,
-      callback: (response) => {
-        void handleGoogleCredential(String(response.credential || ""));
-      },
-      auto_select: false,
-      cancel_on_tap_outside: true,
-      use_fedcm_for_prompt: true,
-    });
+    async function renderGoogleButton() {
+      try {
+        await loadGoogleIdentityScript(googleScriptHl);
 
-    window.google.accounts.id.renderButton(googleButtonRef.current, {
-      theme: "outline",
-      size: "large",
-      text: mode === "signup" ? "signup_with" : "signin_with",
-      shape: "rectangular",
-      logo_alignment: "left",
-      width: 320,
-    });
-  }, [open, authEnabled, googleAuthEnabled, googleClientId, mode]);
+        if (cancelled) return;
+        if (!googleButtonRef.current) return;
+        if (!window.google?.accounts?.id) return;
+
+        googleButtonRef.current.innerHTML = "";
+
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            void handleGoogleCredential(String(response.credential || ""));
+          },
+          auto_select: false,
+          cancel_on_tap_outside: true,
+          use_fedcm_for_prompt: true,
+        });
+
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          theme: "outline",
+          size: "large",
+          text: mode === "signup" ? "signup_with" : "signin_with",
+          locale: googleLocale,
+          shape: "rectangular",
+          logo_alignment: "left",
+          width: 320,
+        });
+      } catch (err) {
+        console.error("google identity script load failed", err);
+      }
+    }
+
+    void renderGoogleButton();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    authEnabled,
+    googleAuthEnabled,
+    googleClientId,
+    mode,
+    googleLocale,
+    googleScriptHl,
+  ]);
 
   if (!open || !authEnabled) return null;
 
