@@ -18,13 +18,12 @@ from src.auth.sessions import (
     make_session_token_hash,
     read_product_session_cookie,
 )
+from src.billing.service import get_effective_subscription_for_user
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
-
-from src.billing.service import get_effective_subscription_for_user
+from src.internal_access.service import resolve_user_access_context
 
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
-
 
 def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
@@ -82,6 +81,17 @@ def _build_anonymous_payload() -> Dict[str, Any]:
         "entitlements": build_entitlements_for_plan("FREE"),
         "usage": {
             "credits_used_today": 0,
+        },
+        "access": {
+            "is_internal": False,
+            "billing_runtime": "live",
+            "role_keys": [],
+            "capabilities": [],
+            "admin_access": False,
+            "product_internal_access": False,
+            "allow_plan_override": False,
+            "product_plan_code": None,
+            "domain_rule": None,
         },
         "meta": {
             "generated_at_utc": utc_now_iso(),
@@ -560,6 +570,11 @@ def _get_or_refresh_entitlements(cur, *, user_id: int, plan_code: str) -> Dict[s
 
     return _refresh_entitlements_snapshot(cur, user_id=user_id, plan_code=plan_code)
 
+def _resolve_effective_product_plan_code(*, subscription_plan_code: str, access_context: Dict[str, Any]) -> str:
+    product_plan_code = _safe_plan_code(access_context.get("product_plan_code"))
+    if product_plan_code != "FREE":
+        return product_plan_code
+    return _safe_plan_code(subscription_plan_code)
 
 def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[str, Any]:
     cur.execute(
@@ -579,9 +594,8 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
     if str(user_row[4]) == "deleted":
         return _build_anonymous_payload()
 
-    subscription = _get_or_create_active_subscription(cur, user_id=user_id)
-
     effective_subscription = get_effective_subscription_for_user(user_id)
+
     if effective_subscription:
         subscription = {
             "plan_code": _safe_plan_code(effective_subscription.get("plan_code")),
@@ -589,11 +603,25 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
             "provider": str(effective_subscription.get("provider") or "stripe"),
             "billing_cycle": effective_subscription.get("billing_cycle"),
         }
+    else:
+        subscription = _get_or_create_active_subscription(cur, user_id=user_id)
+
+    access_context = resolve_user_access_context(
+        cur,
+        user_id=user_id,
+        email=str(user_row[1]),
+        email_verified=bool(user_row[5]),
+        auth_mode=auth_mode,
+    )
+    product_plan_code = _resolve_effective_product_plan_code(
+        subscription_plan_code=subscription["plan_code"],
+        access_context=access_context,
+    )
 
     entitlements = _get_or_refresh_entitlements(
         cur,
         user_id=user_id,
-        plan_code=subscription["plan_code"],
+        plan_code=product_plan_code,
     )
 
     date_key = _today_date_key()
@@ -631,6 +659,10 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
         "entitlements": entitlements,
         "usage": {
             "credits_used_today": credits_used_today,
+        },
+        "access": {
+            **access_context,
+            "product_plan_code": product_plan_code,
         },
         "meta": {
             "generated_at_utc": utc_now_iso(),
@@ -932,9 +964,34 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 "provider": "manual",
                 "billing_cycle": "monthly" if actor["plan_code"] != "FREE" else None,
             },
-            "entitlements": actor["entitlements"],
+            "entitlements": build_entitlements_for_plan("PRO"),
             "usage": {
                 "credits_used_today": 0,
+            },
+            "access": {
+                "is_internal": True,
+                "billing_runtime": "sandbox",
+                "role_keys": ["staff_admin"],
+                "capabilities": [
+                    "admin.access",
+                    "admin.audit.read",
+                    "admin.users.basic_write",
+                    "admin.users.credits.write",
+                    "admin.users.plan.write",
+                    "admin.users.read",
+                    "admin.users.roles.write",
+                    "billing.runtime.sandbox",
+                    "product.internal.access",
+                    "product.internal.plan_override",
+                ],
+                "admin_access": True,
+                "product_internal_access": True,
+                "allow_plan_override": True,
+                "product_plan_code": "PRO",
+                "domain_rule": {
+                    "domain": "dev-auto-login",
+                    "source": "dev_auto_login_bridge",
+                },
             },
             "meta": {
                 "generated_at_utc": utc_now_iso(),
