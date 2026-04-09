@@ -197,7 +197,7 @@ const PUBLIC_FOOTER_COPY = {
 export function PublicLayout() {
   const { lang } = useParams<{ lang: string }>();
   const location = useLocation();
-  const navigate = useNavigate();]
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   React.useLayoutEffect(() => {
