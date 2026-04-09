@@ -435,7 +435,10 @@ export type ProductOddsEventsResponse = {
 export type ProductLeagueItem = {
   sport_key: string;
   sport_title: string;
+  official_name?: string | null;
+  official_country_code?: string | null;
   sport_group: string | null;
+  country_name?: string | null;
   league_id: number;
   season_policy: "current" | "fixed";
   fixed_season: number | null;
@@ -580,4 +583,122 @@ export type AdminOpsJobResponse = {
   elapsed_sec: number;
   counters: Record<string, any>;
   error: string | null;
+};
+
+export type AdminUserSummary = {
+  user_id: number;
+  email: string;
+  full_name: string | null;
+  preferred_lang: string | null;
+  status: string;
+  email_verified: boolean;
+  created_at_utc: string | null;
+  last_login_at_utc: string | null;
+  subscription: {
+    plan_code: string;
+    provider: string | null;
+    status: string | null;
+    current_period_end_utc: string | null;
+  };
+  usage_today: {
+    base_daily_limit: number;
+    extra_credits: number;
+    daily_limit: number;
+    credits_used: number;
+    revealed_count: number;
+    remaining: number;
+  };
+  role_keys: string[];
+  is_internal: boolean;
+  billing_runtime: string;
+};
+
+export type AdminUsersListResponse = {
+  ok: boolean;
+  items: AdminUserSummary[];
+  count: number;
+  limit: number;
+  offset: number;
+};
+
+export type AdminCreateUserResponse = {
+  ok: boolean;
+  user: {
+    user_id: number;
+    email: string;
+    full_name: string | null;
+    status: string;
+  };
+  subscription: {
+    plan_code: string;
+  };
+};
+
+export type AdminAssignedRole = {
+  role_key: string;
+  is_active: boolean;
+  grant_source: string;
+  notes: string | null;
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+};
+
+export type AdminUserDetailResponse = {
+  ok: boolean;
+  user: {
+    user_id: number;
+    email: string;
+    full_name: string | null;
+    preferred_lang: string | null;
+    status: string;
+    email_verified: boolean;
+    created_at_utc: string | null;
+    last_login_at_utc: string | null;
+  };
+  subscription: {
+    subscription_id: number | null;
+    plan_code: string;
+    provider: string | null;
+    status: string | null;
+    billing_cycle: string | null;
+    current_period_start_utc: string | null;
+    current_period_end_utc: string | null;
+    cancel_at_period_end: boolean;
+    updated_at_utc: string | null;
+  };
+  usage_today: {
+    date_key: string;
+    base_daily_limit: number;
+    extra_credits: number;
+    daily_limit: number;
+    credits_used: number;
+    revealed_count: number;
+    remaining: number;
+  };
+  assigned_roles: AdminAssignedRole[];
+  effective_access: {
+    is_internal: boolean;
+    billing_runtime: string;
+    role_keys: string[];
+    capabilities: string[];
+    admin_access: boolean;
+    product_internal_access: boolean;
+    allow_plan_override: boolean;
+    product_plan_code: string | null;
+    domain_rule?: {
+      domain?: string | null;
+      source?: string | null;
+    } | null;
+  };
+  recent_subscription_events: Array<{
+    event_type: string;
+    payload_json: Record<string, unknown> | null;
+    created_at_utc: string | null;
+  }>;
+  recent_admin_audit: Array<{
+    action_key: string;
+    actor_email: string | null;
+    meta_json: Record<string, unknown> | null;
+    created_at_utc: string | null;
+  }>;
 };
