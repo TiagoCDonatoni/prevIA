@@ -2089,21 +2089,41 @@
 
 .public-footer-socials {
   display: flex;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
-  gap: 10px;
 }
 
-.public-footer-social-pill {
+.public-footer-social-link {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid #dbe3ee;
-  background: rgba(255, 255, 255, 0.86);
+  gap: 8px;
   color: #334155;
-  font-size: 12px;
-  font-weight: 700;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+.public-footer-social-link:hover {
+  color: #0f172a;
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.public-footer-social-link:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.25);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.public-footer-social-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: block;
+  color: currentColor;
 }
 
 .public-footer-bottom {
@@ -2491,10 +2511,15 @@
     line-height: 1.7;
   }
 
-  .public-footer-social-pill {
-    min-height: 32px;
-    padding: 0 10px;
-    font-size: 11px;
+  .public-footer-social-link {
+    font-size: 12px;
+    gap: 6px;
+  }
+
+  .public-footer-social-icon {
+    width: 13px;
+    height: 13px;
+    flex: 0 0 13px;
   }
 
   .public-footer-bottom {

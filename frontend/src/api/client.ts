@@ -25,6 +25,9 @@ import type {
   TeamResolutionApproveResponse,
   AdminOddsTotalsResponse,
   AdminOddsBttsResponse,
+  AdminCreateUserResponse,
+  AdminUserDetailResponse,
+  AdminUsersListResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -97,11 +100,16 @@ const MOCK_RUNS: RunRow[] = [
 ];
 
 async function fetchJson<T = any>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, {
+    ...init,
+    credentials: "include",
+  });
+
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}${txt ? ` | ${txt}` : ""}`);
   }
+
   return (await res.json()) as T;
 }
 
@@ -137,7 +145,10 @@ export async function searchTeams(q: string, limit = 20) {
   url.searchParams.set("q", qq);
   url.searchParams.set("limit", String(limit));
 
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`GET /admin/teams failed: ${res.status} ${txt}`);
@@ -195,7 +206,10 @@ export async function getTeamSummary(teamId: number, lastN = 20, season?: number
   url.searchParams.set("last_n", String(lastN));
   if (season) url.searchParams.set("season", String(season));
 
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`GET /admin/team/summary failed: ${res.status} ${txt}`);
@@ -208,7 +222,10 @@ export async function listTeams(limit = 300, offset = 0): Promise<TeamLite[]> {
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
 
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`GET /admin/teams/list failed: ${res.status} ${txt}`);
@@ -226,7 +243,10 @@ export async function getMetricsOverview(): Promise<{
   kickoff_max_utc: string | null;
 }> {
   const url = new URL("/admin/metrics/overview", API_BASE_URL);
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as any;
 }
@@ -453,7 +473,10 @@ export async function listTeamsByLeagueSeason(leagueId: number, season: number, 
   url.searchParams.set("season", String(season));
   url.searchParams.set("limit", String(limit));
 
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`GET /admin/teams/by-league-season failed: ${res.status} ${txt}`);
@@ -503,17 +526,18 @@ export async function adminOpsListLeagues(): Promise<{
   ok: boolean;
   items: Array<{
     sport_key: string;
+    official_name: string | null;
+    official_country_code: string | null;
     sport_title: string | null;
     sport_group: string | null;
-    league_id: number;
-    season_policy: "current" | "fixed";
+    league_id: number | null;
+    season_policy: string | null;
     fixed_season: number | null;
     regions: string | null;
     hours_ahead: number | null;
     tol_hours: number | null;
     enabled: boolean;
-    computed_status: "approved" | "incomplete" | "pending" | "disabled";
-    mapping_status: string | null;
+    mapping_status: string;
     confidence: number | null;
     notes: string | null;
     updated_at_utc: string | null;
@@ -567,5 +591,163 @@ export async function adminOpsAutoResolveLeagues(params?: {
   return fetchJson(url.toString(), {
     method: "POST",
     headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsApproveLeagueMap(params: {
+  sport_key: string;
+  league_id: number;
+  official_name: string;
+  official_country_code?: string | null;
+  regions?: string;
+  hours_ahead?: number;
+  tol_hours?: number;
+  season_policy?: "current" | "fixed";
+  fixed_season?: number | null;
+  enabled?: boolean;
+}): Promise<{
+  ok: boolean;
+  sport_key: string;
+  league_id: number;
+  official_name: string;
+  official_country_code: string | null;
+  mapping_status: string;
+  enabled: boolean;
+}> {
+  const url = new URL("/admin/ops/odds/league_map/approve", API_BASE_URL);
+  url.searchParams.set("sport_key", params.sport_key);
+  url.searchParams.set("league_id", String(params.league_id));
+  url.searchParams.set("official_name", params.official_name);
+
+  if (params.official_country_code != null) {
+    url.searchParams.set("official_country_code", params.official_country_code);
+  }
+
+  url.searchParams.set("regions", params.regions ?? "eu");
+  url.searchParams.set("hours_ahead", String(params.hours_ahead ?? 720));
+  url.searchParams.set("tol_hours", String(params.tol_hours ?? 6));
+  url.searchParams.set("season_policy", params.season_policy ?? "current");
+
+  if (params.fixed_season != null) {
+    url.searchParams.set("fixed_season", String(params.fixed_season));
+  }
+
+  url.searchParams.set("enabled", String(params.enabled ?? true));
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminListUsers(params?: {
+  q?: string;
+  user_status?: string | null;
+  plan_code?: string | null;
+  role_key?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<AdminUsersListResponse> {
+  const url = new URL("/admin/users", API_BASE_URL);
+
+  if (params?.q) url.searchParams.set("q", params.q);
+  if (params?.user_status) url.searchParams.set("user_status", params.user_status);
+  if (params?.plan_code) url.searchParams.set("plan_code", params.plan_code);
+  if (params?.role_key) url.searchParams.set("role_key", params.role_key);
+  if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+  if (params?.offset != null) url.searchParams.set("offset", String(params.offset));
+
+  return fetchJson<AdminUsersListResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminCreateUser(body: {
+  email: string;
+  password: string;
+  full_name?: string | null;
+  reason: string;
+}): Promise<AdminCreateUserResponse> {
+  const url = new URL("/admin/users", API_BASE_URL);
+
+  return fetchJson<AdminCreateUserResponse>(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminGetUserDetail(userId: number): Promise<AdminUserDetailResponse> {
+  const url = new URL(`/admin/users/${userId}`, API_BASE_URL);
+
+  return fetchJson<AdminUserDetailResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminSetUserStatus(
+  userId: number,
+  body: { status: string; reason?: string | null }
+): Promise<{ ok: boolean; user_id: number; status: string }> {
+  const url = new URL(`/admin/users/${userId}/status`, API_BASE_URL);
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminSetUserPlan(
+  userId: number,
+  body: { plan_code: string; reason?: string | null }
+): Promise<{ ok: boolean; user_id: number; plan_code: string }> {
+  const url = new URL(`/admin/users/${userId}/plan`, API_BASE_URL);
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminUpsertUserRole(
+  userId: number,
+  body: { role_key: string; is_active: boolean; reason: string; notes?: string | null }
+): Promise<{ ok: boolean; user_id: number; role_key: string; is_active: boolean }> {
+  const url = new URL(`/admin/users/${userId}/roles/upsert`, API_BASE_URL);
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminGrantUserCredits(
+  userId: number,
+  body: { credits: number; reason?: string | null }
+): Promise<{ ok: boolean; user_id: number; date_key: string; granted_credits: number }> {
+  const url = new URL(`/admin/users/${userId}/credits/grant`, API_BASE_URL);
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 }

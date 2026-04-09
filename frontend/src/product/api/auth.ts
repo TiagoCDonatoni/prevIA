@@ -1,6 +1,55 @@
 import { API_BASE_URL } from "../../config";
 import type { PlanId } from "../entitlements";
 
+const PRODUCT_PLAN_OVERRIDE_SESSION_KEY = "previa_product_plan_override_v1";
+
+export function readProductPlanOverride(): Exclude<PlanId, "FREE_ANON"> | null {
+  try {
+    const raw = sessionStorage.getItem(PRODUCT_PLAN_OVERRIDE_SESSION_KEY);
+    return raw ? normalizeBackendPlanCode(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeProductPlanOverride(plan: Exclude<PlanId, "FREE_ANON"> | null) {
+  try {
+    if (!plan) {
+      sessionStorage.removeItem(PRODUCT_PLAN_OVERRIDE_SESSION_KEY);
+      return;
+    }
+
+    sessionStorage.setItem(
+      PRODUCT_PLAN_OVERRIDE_SESSION_KEY,
+      normalizeBackendPlanCode(plan)
+    );
+  } catch {}
+}
+
+export function clearProductPlanOverride() {
+  writeProductPlanOverride(null);
+}
+
+export function buildProductRuntimeHeaders(): Record<string, string> {
+  const planOverride = readProductPlanOverride();
+  return planOverride ? { "X-Product-Plan-Override": planOverride } : {};
+}
+
+export type AuthAccessResponse = {
+  is_internal: boolean;
+  billing_runtime: "live" | "sandbox" | string;
+  role_keys: string[];
+  capabilities: string[];
+  admin_access: boolean;
+  product_internal_access: boolean;
+  allow_plan_override: boolean;
+  product_plan_code: Exclude<PlanId, "FREE_ANON"> | null;
+  domain_rule?: {
+    domain?: string | null;
+    source?: string | null;
+  } | null;
+};
+
 export type AuthMeResponse = {
   ok: boolean;
   auth_mode: "anonymous" | "dev_auto_login" | "session" | string;
@@ -44,6 +93,7 @@ export type AuthMeResponse = {
   usage?: {
     credits_used_today?: number;
   };
+  access?: AuthAccessResponse;
   meta?: {
     generated_at_utc?: string;
   };
@@ -131,6 +181,7 @@ async function requestJson<TResponse, TBody extends Record<string, any> | undefi
     credentials: "include",
     headers: {
       Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -180,6 +231,7 @@ export async function postAuthLogout(): Promise<{ ok: boolean }> {
     credentials: "include",
     headers: {
       Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
     },
   });
 
@@ -238,6 +290,7 @@ export async function patchAuthProfile(
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...buildProductRuntimeHeaders(),
     },
     body: JSON.stringify(payload),
   });

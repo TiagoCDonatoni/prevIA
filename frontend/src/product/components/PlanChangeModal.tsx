@@ -22,7 +22,9 @@ import {
   type BillingCycle,
 } from "../api/billing";
 
-type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED";
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
+
+type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED" | "POST_SIGNUP";
 
 const LOW_CREDITS_THRESHOLD = 5;
 const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
@@ -133,10 +135,25 @@ function getBillingCyclePriceSuffixKey(cycle: BillingCycle) {
   return "plans.price.perMonth";
 }
 
+function getPlanPricePlaceholderText(
+  lang: Lang,
+  planId: PlanId,
+  fallback: string
+) {
+  if (planId === "FREE" || planId === "FREE_ANON") {
+    if (lang === "pt") return "Gratuito";
+    if (lang === "es") return "Gratis";
+    return "Free";
+  }
+
+  return fallback;
+}
+
 function getModalTitle(
   tr: (k: string, vars?: Record<string, any>) => string,
   reason: Reason
 ) {
+  if (reason === "POST_SIGNUP") return tr("plans.modal.postSignupTitle");
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsTitle");
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureTitle");
   return tr("plans.modal.manualTitle");
@@ -147,6 +164,9 @@ function getModalSubtitle(
   reason: Reason,
   vars: { delta: number; total: number }
 ) {
+  if (reason === "POST_SIGNUP") {
+    return tr("plans.modal.postSignupSubtitle");
+  }
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsBody", vars);
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureBody", vars);
   return tr("plans.modal.manualSubtitle");
@@ -162,8 +182,8 @@ export function PlanChangeModal(props: {
   const lang = (rawLang === "ptbr" || rawLang === "pt-br" ? "pt" : rawLang) as Lang;
 
   const currentPlan = store.state.plan as PlanId;
-  const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED;
-  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED && !PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+  const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED;
+  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED;
 
   const tr = useMemo(
     () => (k: string, vars?: Record<string, any>) => t(lang, k, vars),
@@ -188,15 +208,30 @@ export function PlanChangeModal(props: {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openedAtMs, setOpenedAtMs] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!props.open) return;
-    setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
-    setSelectedCycle("monthly");
-    setSelectedCurrency(effectiveDefaultCurrency);
-    setCheckoutSession(null);
-    setSubmitError(null);
-  }, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan, effectiveDefaultCurrency]);
+useEffect(() => {
+  if (!props.open) return;
+
+  const openedAt = Date.now();
+
+  setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
+  setSelectedCycle("monthly");
+  setSelectedCurrency(effectiveDefaultCurrency);
+  setCheckoutSession(null);
+  setSubmitError(null);
+  setOpenedAtMs(openedAt);
+
+  if (props.reason === "POST_SIGNUP") {
+    trackProductTelemetry("post_signup_plan_offer_shown", {
+      current_plan: currentPlan,
+      recommended_plan: recommendedPlan,
+      fallback_plan: fallbackPlan,
+      billing_cycle: "monthly",
+      currency_code: effectiveDefaultCurrency,
+    });
+  }
+}, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan, effectiveDefaultCurrency]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -240,7 +275,7 @@ export function PlanChangeModal(props: {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        props.onClose();
+        handleRequestClose();
       }
     };
 
@@ -264,6 +299,8 @@ export function PlanChangeModal(props: {
     total: nextLimit,
   });
 
+  const isPostSignupOffer = props.reason === "POST_SIGNUP";
+
   const showPlans = higherPlans.length > 0;
 
   const selectedLimit = selectedPlan ? dailyLimitForPlan(selectedPlan) : null;
@@ -275,6 +312,17 @@ export function PlanChangeModal(props: {
     : null;
 
   const selectedPrice = selectedCatalogEntry?.amount ?? null;
+  const canDismissModal = !isPostSignupOffer;
+
+  function handleRequestClose() {
+    if (!canDismissModal) return;
+    props.onClose();
+  }
+
+  function openDurationMs() {
+    if (openedAtMs == null) return 0;
+    return Math.max(0, Date.now() - openedAtMs);
+  }
 
   const selectedPriceLabel =
     selectedPrice != null
@@ -292,7 +340,7 @@ export function PlanChangeModal(props: {
       role="dialog"
       aria-modal="true"
       onClick={() => {
-        props.onClose();
+        handleRequestClose();
       }}
     >
       <div
@@ -321,14 +369,16 @@ export function PlanChangeModal(props: {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="product-modal-close"
-            onClick={props.onClose}
-            aria-label={tr("common.close")}
-          >
-            ×
-          </button>
+          {canDismissModal ? (
+            <button
+              type="button"
+              className="product-modal-close"
+              onClick={handleRequestClose}
+              aria-label={tr("common.close")}
+            >
+              ×
+            </button>
+          ) : null}
         </div>
 
         <div className="product-modal-body">
@@ -346,7 +396,7 @@ export function PlanChangeModal(props: {
               }}
               onCancel={props.onClose}
               onSuccess={() => {
-                window.location.assign("/account?billing=updated");
+                window.location.assign("/app/account?billing=updated");
               }}
             />
           ) : showPlans ? (
@@ -463,7 +513,18 @@ export function PlanChangeModal(props: {
                       className={`product-plan-card ${isRecommended ? "is-recommended" : ""} ${
                         isSelected ? "is-selected" : ""
                       }`}
-                      onClick={() => setSelectedPlan(pid)}
+                      onClick={() => {
+                        setSelectedPlan(pid);
+
+                        if (isPostSignupOffer) {
+                          trackProductTelemetry("post_signup_plan_selected", {
+                            selected_plan: pid,
+                            billing_cycle: selectedCycle,
+                            currency_code: selectedCurrency,
+                            duration_ms: openDurationMs(),
+                          });
+                        }
+                      }}
                       aria-pressed={isSelected}
                     >
                       <div className="product-plan-card-check">{isSelected ? "✓" : ""}</div>
@@ -515,7 +576,7 @@ export function PlanChangeModal(props: {
                             </>
                           ) : (
                             <span className="product-plan-price-placeholder">
-                              {tr("plans.price.placeholder")}
+                              {getPlanPricePlaceholderText(lang, pid, tr("plans.price.placeholder"))}
                             </span>
                           )}
                         </div>
@@ -530,7 +591,9 @@ export function PlanChangeModal(props: {
               </div>
             </>
           ) : (
-            <div className="product-plan-empty-card">{tr("common.notNow")}</div>
+            <div className="product-plan-empty-card">
+              {isPostSignupOffer ? tr("plans.modal.postSignupEmpty") : tr("common.notNow")}
+            </div>
           )}
 
           {!checkoutSession ? (
@@ -542,8 +605,23 @@ export function PlanChangeModal(props: {
               ) : null}
 
               <div className="product-plan-actions">
-                <button type="button" className="product-secondary" onClick={props.onClose}>
-                  {tr("common.notNow")}
+                <button
+                  type="button"
+                  className="product-secondary"
+                  onClick={() => {
+                    if (isPostSignupOffer) {
+                      trackProductTelemetry("post_signup_continue_free_clicked", {
+                        selected_plan: selectedPlan,
+                        billing_cycle: selectedCycle,
+                        currency_code: selectedCurrency,
+                        duration_ms: openDurationMs(),
+                      });
+                    }
+
+                    props.onClose();
+                  }}
+                >
+                  {isPostSignupOffer ? tr("plans.modal.postSignupContinue") : tr("common.notNow")}
                 </button>
 
                 <button
@@ -569,11 +647,23 @@ export function PlanChangeModal(props: {
                       setIsSubmitting(true);
                       setSubmitError(null);
 
+                      if (isPostSignupOffer) {
+                        trackProductTelemetry("post_signup_checkout_started", {
+                          selected_plan: selectedPlan,
+                          billing_cycle: selectedCycle,
+                          currency_code: selectedCurrency,
+                          duration_ms: openDurationMs(),
+                        });
+                      }
                       const response = await createBillingCheckoutSession({
                         plan_code: selectedPlan as Exclude<PlanId, "FREE" | "FREE_ANON">,
                         billing_cycle: selectedCycle,
                         currency_code: selectedCurrency,
                       });
+
+                      if (response.session_id && typeof window !== "undefined") {
+                        window.sessionStorage.setItem("billing_last_checkout_session_id", response.session_id);
+                      }
 
                       if (response.checkout_client_secret && response.publishable_key) {
                         setCheckoutSession(response);
@@ -584,11 +674,12 @@ export function PlanChangeModal(props: {
                     } catch (error) {
                       console.error("billing_checkout_error", error);
 
-                      if (
-                        error instanceof BillingRequestError &&
-                        error.code === "subscription_change_must_use_account_billing"
-                      ) {
-                        setSubmitError(t(lang, "auth.billingPlanChangeAccountNote"));
+                      if (error instanceof BillingRequestError) {
+                        if (error.code === "subscription_change_must_use_account_billing") {
+                          setSubmitError(t(lang, "auth.billingPlanChangeAccountNote"));
+                        } else {
+                          setSubmitError(error.message || error.code || t(lang, "auth.billingCheckoutCreateError"));
+                        }
                       } else {
                         setSubmitError(t(lang, "auth.billingCheckoutCreateError"));
                       }

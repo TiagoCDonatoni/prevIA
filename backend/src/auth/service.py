@@ -18,13 +18,15 @@ from src.auth.sessions import (
     make_session_token_hash,
     read_product_session_cookie,
 )
+from src.billing.service import get_effective_subscription_for_user
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
-
-from src.billing.service import get_effective_subscription_for_user
+from src.internal_access.service import (
+    resolve_runtime_product_plan_code,
+    resolve_user_access_context,
+)
 
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
-
 
 def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
@@ -82,6 +84,17 @@ def _build_anonymous_payload() -> Dict[str, Any]:
         "entitlements": build_entitlements_for_plan("FREE"),
         "usage": {
             "credits_used_today": 0,
+        },
+        "access": {
+            "is_internal": False,
+            "billing_runtime": "live",
+            "role_keys": [],
+            "capabilities": [],
+            "admin_access": False,
+            "product_internal_access": False,
+            "allow_plan_override": False,
+            "product_plan_code": None,
+            "domain_rule": None,
         },
         "meta": {
             "generated_at_utc": utc_now_iso(),
@@ -409,7 +422,7 @@ def _login_or_signup_with_google(
             _refresh_entitlements_snapshot(cur, user_id=user_id, plan_code=subscription["plan_code"])
 
             raw_session_token = _insert_session(cur, user_id=user_id, request=request)
-            payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="google")
+            payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="google", request=request)
 
         conn.commit()
 
@@ -560,8 +573,30 @@ def _get_or_refresh_entitlements(cur, *, user_id: int, plan_code: str) -> Dict[s
 
     return _refresh_entitlements_snapshot(cur, user_id=user_id, plan_code=plan_code)
 
+def _resolve_effective_product_plan_code(
+    *,
+    subscription_plan_code: str,
+    access_context: Dict[str, Any],
+    request: Request | None = None,
+) -> str:
+    product_plan_code = _safe_plan_code(access_context.get("product_plan_code"))
+    fallback_plan_code = (
+        product_plan_code if product_plan_code != "FREE" else _safe_plan_code(subscription_plan_code)
+    )
 
-def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[str, Any]:
+    return resolve_runtime_product_plan_code(
+        request=request,
+        access_context=access_context,
+        fallback_plan_code=fallback_plan_code,
+    )
+
+def _build_authenticated_payload(
+    cur,
+    *,
+    user_id: int,
+    auth_mode: str,
+    request: Request | None = None,
+) -> Dict[str, Any]:
     cur.execute(
         """
         SELECT user_id, email, full_name, preferred_lang, status, email_verified
@@ -579,9 +614,8 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
     if str(user_row[4]) == "deleted":
         return _build_anonymous_payload()
 
-    subscription = _get_or_create_active_subscription(cur, user_id=user_id)
-
     effective_subscription = get_effective_subscription_for_user(user_id)
+
     if effective_subscription:
         subscription = {
             "plan_code": _safe_plan_code(effective_subscription.get("plan_code")),
@@ -589,11 +623,26 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
             "provider": str(effective_subscription.get("provider") or "stripe"),
             "billing_cycle": effective_subscription.get("billing_cycle"),
         }
+    else:
+        subscription = _get_or_create_active_subscription(cur, user_id=user_id)
+
+    access_context = resolve_user_access_context(
+        cur,
+        user_id=user_id,
+        email=str(user_row[1]),
+        email_verified=bool(user_row[5]),
+        auth_mode=auth_mode,
+    )
+    product_plan_code = _resolve_effective_product_plan_code(
+        subscription_plan_code=subscription["plan_code"],
+        access_context=access_context,
+        request=request,
+    )
 
     entitlements = _get_or_refresh_entitlements(
         cur,
         user_id=user_id,
-        plan_code=subscription["plan_code"],
+        plan_code=product_plan_code,
     )
 
     date_key = _today_date_key()
@@ -632,6 +681,10 @@ def _build_authenticated_payload(cur, *, user_id: int, auth_mode: str) -> Dict[s
         "usage": {
             "credits_used_today": credits_used_today,
         },
+        "access": {
+            **access_context,
+            "product_plan_code": product_plan_code,
+        },
         "meta": {
             "generated_at_utc": utc_now_iso(),
         },
@@ -643,6 +696,16 @@ def _insert_session(cur, *, user_id: int, request: Request) -> str:
     session_token_hash = make_session_token_hash(raw_session_token)
     expires_at_utc = build_session_expires_at()
     fingerprints = build_request_fingerprints(request)
+
+    cur.execute(
+        """
+        UPDATE auth.sessions
+        SET revoked_at_utc = NOW()
+        WHERE user_id = %(user_id)s
+          AND revoked_at_utc IS NULL
+        """,
+        {"user_id": user_id},
+    )
 
     cur.execute(
         """
@@ -914,6 +977,40 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 )
             conn.commit()
 
+        dev_plan_code = str(actor["plan_code"])
+
+        dev_access_context = {
+            "is_internal": True,
+            "billing_runtime": "sandbox",
+            "role_keys": ["staff_admin"],
+            "capabilities": [
+                "admin.access",
+                "admin.audit.read",
+                "admin.users.basic_write",
+                "admin.users.credits.write",
+                "admin.users.plan.write",
+                "admin.users.read",
+                "admin.users.roles.write",
+                "billing.runtime.sandbox",
+                "product.internal.access",
+                "product.internal.plan_override",
+            ],
+            "admin_access": True,
+            "product_internal_access": True,
+            "allow_plan_override": True,
+            "product_plan_code": None,
+            "domain_rule": {
+                "domain": "dev-auto-login",
+                "source": "dev_auto_login_bridge",
+            },
+        }
+
+        dev_plan_code = resolve_runtime_product_plan_code(
+            request=request,
+            access_context=dev_access_context,
+            fallback_plan_code=actor["plan_code"],
+        )
+
         return {
             "ok": True,
             "auth_mode": "dev_auto_login",
@@ -932,9 +1029,13 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 "provider": "manual",
                 "billing_cycle": "monthly" if actor["plan_code"] != "FREE" else None,
             },
-            "entitlements": actor["entitlements"],
+            "entitlements": build_entitlements_for_plan(dev_plan_code),
             "usage": {
                 "credits_used_today": 0,
+            },
+            "access": {
+                **dev_access_context,
+                "product_plan_code": dev_plan_code,
             },
             "meta": {
                 "generated_at_utc": utc_now_iso(),
@@ -952,7 +1053,7 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 conn.commit()
                 return _build_anonymous_payload()
 
-            payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="session")
+            payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="session", request=request)
         conn.commit()
 
     return payload

@@ -19,7 +19,11 @@
   },
   "modal": {
     "manualTitle": "Choose the right plan",
-    "manualSubtitle": "Compare the options and choose the billing recurrence that fits you best."
+    "manualSubtitle": "Compare the options and choose the billing recurrence that fits you best.",
+    "postSignupTitle": "Your Free+ account is already active",
+    "postSignupSubtitle": "You can enter the app now, but these plans unlock more depth, credits, and features.",
+    "postSignupContinue": "Continue with Free+",
+    "postSignupEmpty": "Your Free+ account is ready to use."
   },
 
   "cta": {

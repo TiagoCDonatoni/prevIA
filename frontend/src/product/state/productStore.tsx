@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
+import { normalizeBackendPlanCode, type AuthAccessResponse } from "../api/auth";
 import type { Lang } from "../i18n";
 import { warmI18n } from "../i18n";
 import { postAccessReveal } from "../api/access";
@@ -56,12 +57,28 @@ export type BackendUsageState = {
   is_ready: boolean;
 };
 
+export type ProductAccessContext = {
+  is_internal: boolean;
+  billing_runtime: "live" | "sandbox" | string;
+  role_keys: string[];
+  capabilities: string[];
+  admin_access: boolean;
+  product_internal_access: boolean;
+  allow_plan_override: boolean;
+  product_plan_code: Exclude<PlanId, "FREE_ANON"> | null;
+  domain_rule: {
+    domain?: string | null;
+    source?: string | null;
+  } | null;
+};
+
 export type ProductStore = {
   state: ProductPersistedState;
   entitlements: Entitlements;
   bootstrap: BootstrapMeta;
   backendUsage: BackendUsageState;
   accountSnapshot: AccountSnapshot;
+  accessContext: ProductAccessContext;
 
   promoteCurrentSessionToDeviceAnonShadow: () => void;
   consumeDeviceAnonShadowCredit: () => void;
@@ -90,6 +107,7 @@ export type ProductStore = {
     subscription_status?: string | null;
     subscription_provider?: string | null;
     subscription_billing_cycle?: "monthly" | "quarterly" | "semiannual" | "annual" | null;
+    access_context?: AuthAccessResponse | null;
   }) => void;
 
   applyBackendUsage: (payload: {
@@ -100,6 +118,8 @@ export type ProductStore = {
     remaining: number;
     revealed_fixture_keys: string[];
   }) => void;
+
+  clearBackendUsage: () => void;
 
   revealViaBackend: (
     fixtureKey: string
@@ -191,6 +211,18 @@ const DEFAULT_ACCOUNT_SNAPSHOT: AccountSnapshot = {
   },
 };
 
+const DEFAULT_ACCESS_CONTEXT: ProductAccessContext = {
+  is_internal: false,
+  billing_runtime: "live",
+  role_keys: [],
+  capabilities: [],
+  admin_access: false,
+  product_internal_access: false,
+  allow_plan_override: false,
+  product_plan_code: null,
+  domain_rule: null,
+};
+
 const DEFAULT_BACKEND_USAGE: BackendUsageState = {
   source: "local",
   date_key: null,
@@ -218,6 +250,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
   });
   const [backendUsage, setBackendUsage] = useState<BackendUsageState>(DEFAULT_BACKEND_USAGE);
   const [accountSnapshot, setAccountSnapshot] = useState<AccountSnapshot>(DEFAULT_ACCOUNT_SNAPSHOT);
+  const [accessContext, setAccessContext] = useState<ProductAccessContext>(DEFAULT_ACCESS_CONTEXT);
   const [resetNonce, setResetNonce] = useState(0);
   const [i18nNonce, setI18nNonce] = useState(0);
 
@@ -327,6 +360,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       subscription_status?: string | null;
       subscription_provider?: string | null;
       subscription_billing_cycle?: "monthly" | "quarterly" | "semiannual" | "annual" | null;
+      access_context?: AuthAccessResponse | null;
     }) => {
       persistWith((prev) => {
         if (payload.is_authenticated) {
@@ -335,9 +369,12 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
               ? normalizeLang(payload.preferred_lang)
               : prev.lang;
 
+          const runtimePlanRaw = payload.access_context?.product_plan_code ?? payload.plan;
+          const runtimePlan = normalizeBackendPlanCode(runtimePlanRaw);
+
           return {
             ...prev,
-            plan: payload.plan,
+            plan: runtimePlan,
             lang: nextLang,
             auth: {
               is_logged_in: true,
@@ -367,6 +404,24 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       setBackendUsage(DEFAULT_BACKEND_USAGE);
 
       if (payload.is_authenticated) {
+        setAccessContext({
+          is_internal: Boolean(payload.access_context?.is_internal),
+          billing_runtime: payload.access_context?.billing_runtime ?? "live",
+          role_keys: Array.isArray(payload.access_context?.role_keys)
+            ? payload.access_context?.role_keys ?? []
+            : [],
+          capabilities: Array.isArray(payload.access_context?.capabilities)
+            ? payload.access_context?.capabilities ?? []
+            : [],
+          admin_access: Boolean(payload.access_context?.admin_access),
+          product_internal_access: Boolean(payload.access_context?.product_internal_access),
+          allow_plan_override: Boolean(payload.access_context?.allow_plan_override),
+          product_plan_code: payload.access_context?.product_plan_code
+            ? normalizeBackendPlanCode(payload.access_context.product_plan_code)
+            : null,
+          domain_rule: payload.access_context?.domain_rule ?? null,
+        });
+
         setAccountSnapshot({
           user_id: payload.user_id ?? null,
           email: payload.email ?? null,
@@ -383,6 +438,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         });
       } else {
         setAccountSnapshot(DEFAULT_ACCOUNT_SNAPSHOT);
+        setAccessContext(DEFAULT_ACCESS_CONTEXT);
       }
 
       setBootstrap({
@@ -464,6 +520,19 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
     []
   );
 
+  const clearBackendUsage = useCallback(() => {
+    setBackendUsage({
+      source: "local",
+      date_key: null,
+      credits_used: 0,
+      revealed_count: 0,
+      daily_limit: null,
+      remaining: null,
+      revealed_fixture_keys: [],
+      is_ready: false,
+    });
+  }, []);
+
   const revealViaBackend = useCallback(
     async (
       fixtureKey: string
@@ -473,14 +542,15 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
 
         if (response.ok === false) {
           if (response.code === "NO_CREDITS") {
-            if (response.usage) {
+            const usage = response.usage;
+            if (usage) {
               setBackendUsage((prev) => ({
                 ...prev,
                 source: "backend",
-                daily_limit: response.usage.daily_limit ?? prev.daily_limit,
-                credits_used: response.usage.credits_used ?? prev.credits_used,
-                revealed_count: response.usage.revealed_count ?? prev.revealed_count,
-                remaining: response.usage.remaining ?? prev.remaining,
+                daily_limit: usage.daily_limit ?? prev.daily_limit,
+                credits_used: usage.credits_used ?? prev.credits_used,
+                revealed_count: usage.revealed_count ?? prev.revealed_count,
+                remaining: usage.remaining ?? prev.remaining,
                 is_ready: true,
               }));
             }
@@ -605,23 +675,8 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       is_ready: false,
     });
 
-    setBootstrap({
-      source: "local",
-      is_ready: false,
-      auth_mode: null,
-      user_id: null,
-      full_name: null,
-      preferred_lang: null,
-      user_status: null,
-      email_verified: null,
-      subscription_status: null,
-      subscription_provider: null,
-    });
-
-    setAccountSnapshot(DEFAULT_ACCOUNT_SNAPSHOT);
-
     setResetNonce((n) => n + 1);
-  }, []);
+  }, [resetDeviceAnonShadow]);
 
   const value: ProductStore = useMemo(
     () => ({
@@ -630,6 +685,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       bootstrap,
       backendUsage,
       accountSnapshot,
+      accessContext,
       promoteCurrentSessionToDeviceAnonShadow,
       consumeDeviceAnonShadowCredit,
       resetDeviceAnonShadow,
@@ -646,6 +702,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       resetForTesting,
       resetNonce,
       i18nNonce,
+      clearBackendUsage,
     }),
     [
       state,
@@ -653,6 +710,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       bootstrap,
       backendUsage,
       accountSnapshot,
+      accessContext,
       promoteCurrentSessionToDeviceAnonShadow,
       consumeDeviceAnonShadowCredit,
       resetDeviceAnonShadow,
@@ -669,6 +727,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       resetForTesting,
       resetNonce,
       i18nNonce,
+      clearBackendUsage,
     ]
   );
 

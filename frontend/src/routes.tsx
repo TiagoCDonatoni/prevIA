@@ -11,12 +11,15 @@ import { GlossaryHubPage } from "./public/pages/GlossaryHubPage";
 import { GlossaryTermPage } from "./public/pages/GlossaryTermPage";
 import { PublicAboutPage } from "./public/pages/PublicAboutPage";
 import { PublicContactPage } from "./public/pages/PublicContactPage";
+import { PublicAnalyticsTracker } from "./public/PublicAnalyticsTracker";
 
 import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP } from "./config";
 
 export function AppRoutes() {
   return (
     <BrowserRouter>
+      <PublicAnalyticsTracker />
+
       <Routes>
         {/* Root curto: manda para PT por padrão */}
         <Route path="/" element={<Navigate to="/pt" replace />} />
