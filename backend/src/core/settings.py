@@ -76,6 +76,7 @@ class Settings:
     product_dev_auto_login_plan: str
     admin_dev_bypass_enabled: bool
     admin_dev_actor_email: str
+    internal_staff_admin_emails: List[str]
 
     product_session_cookie_name: str
     product_session_ttl_days: int
@@ -136,6 +137,11 @@ def load_settings() -> Settings:
 
     admin_dev_bypass_enabled = _env_bool("ADMIN_DEV_BYPASS_ENABLED", default=True)
     admin_dev_actor_email = _env_str("ADMIN_DEV_ACTOR_EMAIL", "dev-admin@previa.local")
+    internal_staff_admin_emails = [
+        item.strip().lower()
+        for item in _env_csv("INTERNAL_STAFF_ADMIN_EMAILS", default=[])
+        if item.strip()
+    ]
 
     default_cookie_secure = app_env in {"prod", "production"}
     product_session_cookie_name = _env_str("PRODUCT_SESSION_COOKIE_NAME", "previa_product_session")
@@ -188,6 +194,7 @@ def load_settings() -> Settings:
         product_dev_auto_login_plan=product_dev_auto_login_plan,
         admin_dev_bypass_enabled=admin_dev_bypass_enabled,
         admin_dev_actor_email=admin_dev_actor_email,
+        internal_staff_admin_emails=internal_staff_admin_emails,
         product_session_cookie_name=product_session_cookie_name,
         product_session_ttl_days=product_session_ttl_days,
         product_session_cookie_secure=product_session_cookie_secure,
