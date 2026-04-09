@@ -1,3 +1,31 @@
+.product-internal-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(11, 47, 138, 0.14);
+  background: linear-gradient(90deg, rgba(11, 47, 138, 0.08), rgba(11, 47, 138, 0.03));
+}
+
+.product-internal-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--previa-text);
+}
+
+.product-internal-banner-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(11, 47, 138, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
 /* Produto: visual clean, isolado do admin */
 
 :root {

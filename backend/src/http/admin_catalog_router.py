@@ -1,9 +1,14 @@
 from __future__ import annotations
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from src.ops.job_runner import run_job
 from src.ops.jobs.odds_catalog_sync import sync_odds_sport_catalog
+from src.internal_access.guards import require_admin_access
 
-router = APIRouter(prefix="/admin/odds/catalog", tags=["admin_odds_catalog"])
+router = APIRouter(
+    prefix="/admin/odds/catalog",
+    tags=["admin_odds_catalog"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 @router.post("/sync")
 def admin_sync_odds_catalog():

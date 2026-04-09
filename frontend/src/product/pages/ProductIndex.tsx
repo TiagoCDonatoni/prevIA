@@ -16,6 +16,8 @@ import type { PlanId } from "../entitlements";
 
 import { SearchableMultiSelect } from "../components/SearchableMultiSelect";
 import { ProductFiltersSheet } from "../components/ProductFiltersSheet";
+import { SearchableSingleSelect } from "../components/SearchableSingleSelect";
+
 import {
   buildBookOptions,
   buildCountryOptions,
@@ -361,6 +363,10 @@ function hasOpportunityEdge(edge: number | null | undefined) {
 
 function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
   if (!league) return "";
+
+  const officialName = String(league.official_name ?? "").trim();
+  if (officialName) return officialName;
+
   return (
     getLeagueDisplayName(league.sport_key, lang as "pt" | "en" | "es") ||
     league.sport_title ||
@@ -568,20 +574,33 @@ export default function ProductIndex() {
       lang === "en" ? "Window" : lang === "es" ? "Ventana" : "Janela";
 
     return (
-      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
-        <span className="pi-simple-filter-label">{label}</span>
-        <select
-          className="pi-simple-filter-select"
-          value={windowDays}
-          onChange={(e) => setWindowDays(Number(e.target.value))}
-          aria-label={t(lang, "odds.filterWindow")}
-        >
-          <option value={1}>{t(lang, "odds.windowToday")}</option>
-          <option value={3}>{t(lang, "odds.window3d")}</option>
-          <option value={7}>{t(lang, "odds.window7d")}</option>
-          <option value={30}>{t(lang, "odds.window30d")}</option>
-        </select>
-      </label>
+      <SearchableSingleSelect
+        className={extraClassName}
+        label={label}
+        placeholder={t(lang, "odds.filterWindow")}
+        searchPlaceholder={
+          lang === "en"
+            ? "Search window"
+            : lang === "es"
+            ? "Buscar ventana"
+            : "Buscar janela"
+        }
+        emptyText={
+          lang === "en"
+            ? "No options found"
+            : lang === "es"
+            ? "No se encontraron opciones"
+            : "Nenhuma opção encontrada"
+        }
+        selectedValue={String(windowDays)}
+        options={[
+          { value: "1", label: t(lang, "odds.windowToday") },
+          { value: "3", label: t(lang, "odds.window3d") },
+          { value: "7", label: t(lang, "odds.window7d") },
+          { value: "30", label: t(lang, "odds.window30d") },
+        ]}
+        onChange={(next) => setWindowDays(Number(next))}
+      />
     );
   }
 
@@ -590,38 +609,92 @@ export default function ProductIndex() {
       lang === "en" ? "Sort by" : lang === "es" ? "Ordenar por" : "Ordenar por";
 
     return (
-      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
-        <span className="pi-simple-filter-label">{label}</span>
-        <select
-          className="pi-simple-filter-select"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortBy)}
-          aria-label={t(lang, "odds.sortBy")}
-        >
-          <option value="DATE">
-            {lang === "en"
-              ? "Closest date"
-              : lang === "es"
-              ? "Fecha más próxima"
-              : "Data mais próxima"}
-          </option>
-          <option value="CONFIDENCE">
-            {lang === "en"
-              ? "Highest confidence"
-              : lang === "es"
-              ? "Mayor confianza"
-              : "Maior confiança"}
-          </option>
-          <option value="EDGE">
-            {lang === "en"
-              ? "Highest edge"
-              : lang === "es"
-              ? "Mayor edge"
-              : "Maior edge"}
-          </option>
-        </select>
-      </label>
+      <SearchableSingleSelect
+        className={extraClassName}
+        label={label}
+        placeholder={t(lang, "odds.sortBy")}
+        searchPlaceholder={
+          lang === "en"
+            ? "Search sort"
+            : lang === "es"
+            ? "Buscar ordenación"
+            : "Buscar ordenação"
+        }
+        emptyText={
+          lang === "en"
+            ? "No options found"
+            : lang === "es"
+            ? "No se encontraron opciones"
+            : "Nenhuma opção encontrada"
+        }
+        selectedValue={sortBy}
+        options={[
+          {
+            value: "DATE",
+            label:
+              lang === "en"
+                ? "Closest date"
+                : lang === "es"
+                ? "Fecha más próxima"
+                : "Data mais próxima",
+          },
+          {
+            value: "CONFIDENCE",
+            label:
+              lang === "en"
+                ? "Highest confidence"
+                : lang === "es"
+                ? "Mayor confianza"
+                : "Maior confiança",
+          },
+          {
+            value: "EDGE",
+            label:
+              lang === "en"
+                ? "Highest edge"
+                : lang === "es"
+                ? "Mayor edge"
+                : "Maior edge",
+          },
+        ]}
+        onChange={(next) => setSortBy(next as SortBy)}
+      />
     );
+  }
+
+  function compactSelectedLabel(label: string) {
+    const cleaned = String(label ?? "")
+      .replace(/^\d+\.\s*/, "")
+      .trim();
+
+    if (cleaned.length <= 18) return cleaned;
+    return `${cleaned.slice(0, 18).trim()}…`;
+  }
+
+  function buildSelectedSummary(
+    type: "country" | "league" | "book" | "team",
+    selectedOptions: Array<{ label: string }>,
+    placeholder: string
+  ) {
+    if (!selectedOptions.length) return placeholder;
+
+    if (selectedOptions.length === 1) {
+      return compactSelectedLabel(selectedOptions[0].label);
+    }
+
+    if (type === "country") {
+      return `${selectedOptions.length} países`;
+    }
+
+    if (type === "league") {
+      return `${selectedOptions.length} ligas`;
+    }
+
+    if (type === "book") {
+      return `${selectedOptions.length} casas`;
+    }
+
+    return `${selectedOptions.length} times`;
   }
 
   useEffect(() => {
@@ -1561,6 +1634,7 @@ return (
     <div className="pi-filters pi-filters-desktop">
       <div className="pi-filters-grid-desktop">
         <SearchableMultiSelect
+          className="pi-filter-country"
           label={t(lang, "product.filterCountries")}
           placeholder={t(lang, "product.filterCountriesPlaceholder")}
           searchPlaceholder={t(lang, "product.searchCountryPlaceholder")}
@@ -1568,6 +1642,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedCountryCodes}
           options={countryOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "country",
+              selectedOptions,
+              t(lang, "product.filterCountriesPlaceholder")
+            )
+          }
           onChange={setSelectedCountryCodes}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
@@ -1774,6 +1855,7 @@ return (
         />
 
         <SearchableMultiSelect
+          className="pi-filter-league"
           label={t(lang, "product.filterLeagues")}
           placeholder={t(lang, "product.filterLeaguesPlaceholder")}
           searchPlaceholder={t(lang, "product.searchLeaguePlaceholder")}
@@ -1781,6 +1863,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedLeagueSportKeys}
           options={leagueOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "league",
+              selectedOptions,
+              t(lang, "product.filterLeaguesPlaceholder")
+            )
+          }
           onChange={setSelectedLeagueSportKeys}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
@@ -1788,6 +1877,7 @@ return (
         />
 
         <SearchableMultiSelect
+          className="pi-filter-book"
           label={t(lang, "product.filterBooks")}
           placeholder={t(lang, "product.filterBooksPlaceholder")}
           searchPlaceholder={t(lang, "product.searchBookPlaceholder")}
@@ -1795,10 +1885,18 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedBookKeys}
           options={bookOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "book",
+              selectedOptions,
+              t(lang, "product.filterBooksPlaceholder")
+            )
+          }
           onChange={setSelectedBookKeys}
         />
 
         <SearchableMultiSelect
+          className="pi-filter-team"
           label={t(lang, "product.filterTeams")}
           placeholder={t(lang, "product.filterTeamsPlaceholder")}
           searchPlaceholder={t(lang, "product.searchTeamPlaceholder")}
@@ -1806,6 +1904,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedTeams}
           options={teamOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "team",
+              selectedOptions,
+              t(lang, "product.filterTeamsPlaceholder")
+            )
+          }
           onChange={setSelectedTeams}
         />
 

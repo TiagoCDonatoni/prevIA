@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 import re
 import unicodedata
@@ -14,8 +14,13 @@ from src.ops.jobs.odds_league_gap_scan import odds_league_gap_scan
 from src.db.pg import pg_conn
 from src.ops.jobs.odds_league_autoclassify import odds_league_autoclassify
 from src.ops.jobs.update_pipeline import update_pipeline_run
+from src.internal_access.guards import require_admin_access
 
-router = APIRouter(prefix="/admin/ops", tags=["admin-ops"])
+router = APIRouter(
+    prefix="/admin/ops",
+    tags=["admin-ops"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 def _norm_text(value: str | None) -> str:
     s = (value or "").strip().lower()
@@ -382,6 +387,7 @@ def admin_ops_league_map_approve(
     sport_key: str,
     league_id: int,
     official_name: str,
+    official_country_code: str | None = None,
     regions: str = "eu",
     hours_ahead: int = 720,
     tol_hours: int = 6,
@@ -390,21 +396,28 @@ def admin_ops_league_map_approve(
     enabled: bool = True,
 ):
     """
-    Aprova um mapeamento: seta league_id + params e marca approved.
+    Aprova um mapeamento: seta league_id + metadados oficiais + params e marca approved.
     """
     if not sport_key or not isinstance(sport_key, str):
         return {"ok": False, "error": "sport_key_required"}
     if league_id is None or int(league_id) <= 0:
         return {"ok": False, "error": "league_id_must_be_positive"}
+
     official_name_clean = str(official_name or "").strip()
     if not official_name_clean:
         return {"ok": False, "error": "official_name_required"}
+
+    official_country_code_clean = None
+    if official_country_code is not None:
+        value = str(official_country_code).strip().upper()
+        official_country_code_clean = value if value else None
 
     sql = """
       update odds.odds_league_map
       set
         league_id = %(league_id)s,
         official_name = %(official_name)s,
+        official_country_code = %(official_country_code)s,
         regions = %(regions)s,
         hours_ahead = %(hours_ahead)s,
         tol_hours = %(tol_hours)s,
@@ -417,24 +430,32 @@ def admin_ops_league_map_approve(
         updated_at_utc = now()
       where sport_key = %(sport_key)s
         and mapping_status in ('pending','approved')
-      returning sport_key, league_id, official_name, mapping_status, enabled
+      returning
+        sport_key,
+        league_id,
+        official_name,
+        official_country_code,
+        mapping_status,
+        enabled
     """
 
     with pg_conn() as conn:
         conn.autocommit = False
         with conn.cursor() as cur:
             cur.execute(
+                sql,
                 {
                     "sport_key": sport_key,
                     "league_id": int(league_id),
                     "official_name": official_name_clean,
+                    "official_country_code": official_country_code_clean,
                     "regions": regions,
                     "hours_ahead": int(hours_ahead),
                     "tol_hours": int(tol_hours),
                     "season_policy": season_policy,
                     "fixed_season": fixed_season,
                     "enabled": bool(enabled),
-                };
+                },
             )
             row = cur.fetchone()
         conn.commit()
@@ -447,8 +468,9 @@ def admin_ops_league_map_approve(
         "sport_key": row[0],
         "league_id": row[1],
         "official_name": row[2],
-        "mapping_status": row[3],
-        "enabled": row[4],
+        "official_country_code": row[3],
+        "mapping_status": row[4],
+        "enabled": row[5],
     }
 
 @router.get("/leagues")
@@ -457,6 +479,7 @@ def admin_ops_list_leagues():
       select
         m.sport_key,
         m.official_name,
+        m.official_country_code,
         c.sport_title,
         c.sport_group,
         m.league_id,
@@ -471,14 +494,14 @@ def admin_ops_list_leagues():
         m.notes,
         m.updated_at_utc
       from odds.odds_league_map m
-      join odds.odds_sport_catalog c on c.sport_key = m.sport_key
+      left join odds.odds_sport_catalog c on c.sport_key = m.sport_key
       order by
         m.enabled desc,
         c.sport_group nulls last,
-        coalesce(nullif(btrim(m.official_name), ''), c.sport_title),
+        coalesce(nullif(btrim(m.official_name), ''), c.sport_title, m.sport_key),
         m.sport_key
     """
-    
+
     items = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -486,9 +509,9 @@ def admin_ops_list_leagues():
             rows = cur.fetchall() or []
 
     for r in rows:
-        league_id = int(r[3] or 0)
-        enabled = bool(r[9])
-        mapping_status = str(r[10] or "")
+        league_id = int(r[5] or 0)
+        enabled = bool(r[11])
+        mapping_status = str(r[12] or "")
 
         if enabled and mapping_status == "approved" and league_id > 0:
             computed_status = "approved"
@@ -503,19 +526,21 @@ def admin_ops_list_leagues():
             {
                 "sport_key": r[0],
                 "official_name": r[1],
-                "sport_title": r[2],
-                "sport_group": r[3],
-                "league_id": r[4],
-                "season_policy": r[5],
-                "fixed_season": r[6],
-                "regions": r[7],
-                "hours_ahead": r[8],
-                "tol_hours": r[9],
-                "enabled": r[10],
-                "mapping_status": r[11],
-                "confidence": float(r[12]) if r[12] is not None else None,
-                "notes": r[13],
-                "updated_at_utc": r[14].isoformat() if hasattr(r[14], "isoformat") else str(r[14]),
+                "official_country_code": r[2],
+                "sport_title": r[3] or r[0],
+                "sport_group": r[4],
+                "league_id": r[5],
+                "season_policy": r[6],
+                "fixed_season": r[7],
+                "regions": r[8],
+                "hours_ahead": r[9],
+                "tol_hours": r[10],
+                "enabled": r[11],
+                "mapping_status": r[12],
+                "computed_status": computed_status,
+                "confidence": float(r[13]) if r[13] is not None else None,
+                "notes": r[14],
+                "updated_at_utc": r[15].isoformat() if hasattr(r[15], "isoformat") else str(r[15]),
             }
         )
 

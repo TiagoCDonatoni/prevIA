@@ -427,91 +427,14 @@ export default function OddsIntel() {
       <div className="section-title">Odds Intel</div>
 
       <Card title="Fluxo oficial — Atualização do produto (produção)">
-        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <button className="btn" onClick={() => void runAll()} disabled={runAllLoading}>
-            {runAllLoading ? "Atualizando ligas autorizadas…" : "Atualizar ligas autorizadas"}
-          </button>
-
-          <div style={{ marginTop: 14 }}>
-            <div className="note" style={{ marginBottom: 6 }}>
-              Etapa atual: <b>{runAllStepLabel}</b>
-            </div>
-
-            <div
-              style={{
-                width: "100%",
-                height: 12,
-                borderRadius: 999,
-                background: "rgba(255,255,255,0.08)",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${runAllPct}%`,
-                  height: "100%",
-                  borderRadius: 999,
-                  background: "linear-gradient(90deg, #4f46e5 0%, #22c55e 100%)",
-                  transition: "width 200ms ease",
-                }}
-              />
-            </div>
-
-            <div className="note" style={{ marginTop: 6 }}>
-              {runAllPct}% concluído
-            </div>
-
-            {runAllLoading && runAllPct >= 90 ? (
-              <div className="note" style={{ marginTop: 6 }}>
-                Aguardando finalização do job no backend. As últimas etapas dependem da resposta consolidada.
-              </div>
-            ) : null}
-
-          </div>
+        <div className="note">
+          A ação manual de <span className="mono">Atualizar ligas autorizadas</span> foi movida para
+          <span className="mono"> Ops → Overview</span> como operação provisória / legado temporário.
         </div>
 
-          {runAllErr ? (
-            <div className="note" style={{ marginTop: 10 }}>
-              Error: <b>{runAllErr}</b>
-            </div>
-          ) : null}
-
-          {pipelineSummary ? (
-            <div style={{ marginTop: 14 }}>
-              <div className="note">
-                <b>Resumo do update:</b>{" "}
-                ligas processadas <span className="mono">{pipelineSummary.leaguesProcessed}</span>
-                {" • "}
-                fixtures atualizados <span className="mono">{pipelineSummary.fixturesUpdated}</span>
-                {" • "}
-                stats inseridos <span className="mono">{pipelineSummary.statsInserted}</span>
-                {" • "}
-                odds refresh <span className="mono">{pipelineSummary.oddsRefreshRuns}</span>
-                {" • "}
-                eventos resolvidos <span className="mono">{pipelineSummary.eventsResolved}</span>
-                {" • "}
-                snapshots gerados <span className="mono">{pipelineSummary.snapshotsUpserted}</span>
-                {" • "}
-                fallbacks <span className="mono">{pipelineSummary.fallbacks}</span>
-                {" • "}
-                erros <span className="mono">{pipelineSummary.errors}</span>
-              </div>
-
-              {pipelineSummary.errors > 0 ? (
-                <div className="note" style={{ marginTop: 8 }}>
-                  Atenção: houve erros em parte do update. Revise os logs/retorno do job antes de considerar a execução totalmente saudável.
-                </div>
-              ) : (
-                <div className="note" style={{ marginTop: 8 }}>
-                  Update concluído sem erros reportados no resumo agregado.
-                </div>
-              )}
-            </div>
-          ) : (
-          <div className="note" style={{ marginTop: 10 }}>
-            Fluxo oficial de produção: <span className="mono">allowlist approved + enabled → fixtures/core → stats → odds → resolve → snapshots</span>
-          </div>
-        )}
+        <div className="note" style={{ marginTop: 10 }}>
+          Nesta tela ficam apenas visão de odds, troubleshooting e análise do output operacional.
+        </div>
       </Card>
 
       <Card title="Ferramentas de suporte / debug">

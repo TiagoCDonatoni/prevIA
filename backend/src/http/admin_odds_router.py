@@ -5,7 +5,7 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel
 
 from fastapi import Body, Query
@@ -30,8 +30,16 @@ from src.ops.job_runs import (
     get_last_success_finished_at,
 )
 from src.product.model_registry import get_active_model_version, get_calc_version
+from src.internal_access.guards import require_admin_access
 
-router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
+router = APIRouter(
+    prefix="/admin/odds",
+    tags=["admin-odds"],
+    dependencies=[Depends(require_admin_access)],
+)
+
+class AdminLeagueCountryUpdateBody(BaseModel):
+    official_country_name: str | None = None
 
 # MVP: default artifact (ajuste se você quiser centralizar isso em settings)
 DEFAULT_EPL_ARTIFACT = "epl_1x2_logreg_v1_C_2021_2023_C0.3.json"
@@ -838,6 +846,98 @@ def admin_odds_league_map_pending(
 
     return {"ok": True, "items": [it.model_dump() for it in items]}
 
+@router.get("/league_map")
+def admin_odds_league_map_list(
+    *,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    sql = """
+      SELECT
+        m.sport_key,
+        c.sport_title,
+        c.sport_group,
+        m.league_id,
+        m.mapping_status,
+        m.enabled,
+        m.official_country_name,
+        l.country_name AS core_country_name,
+        m.updated_at_utc
+      FROM odds.odds_league_map m
+      JOIN odds.odds_sport_catalog c
+        ON c.sport_key = m.sport_key
+      LEFT JOIN core.leagues l
+        ON l.league_id = m.league_id
+      ORDER BY m.updated_at_utc DESC NULLS LAST, m.sport_key ASC
+      LIMIT %(limit)s
+    """
+
+    items: List[Dict[str, Any]] = []
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"limit": int(limit)})
+            rows = cur.fetchall() or []
+
+    for row in rows:
+        items.append(
+            {
+                "sport_key": str(row[0]),
+                "sport_title": str(row[1]) if row[1] is not None else None,
+                "sport_group": str(row[2]) if row[2] is not None else None,
+                "league_id": int(row[3]) if row[3] is not None else None,
+                "mapping_status": str(row[4]),
+                "enabled": bool(row[5]),
+                "official_country_name": str(row[6]) if row[6] is not None else None,
+                "core_country_name": str(row[7]) if row[7] is not None else None,
+                "updated_at_utc": (
+                    row[8].isoformat() if hasattr(row[8], "isoformat") else (str(row[8]) if row[8] is not None else None)
+                ),
+            }
+        )
+
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+@router.post("/league_map/{sport_key}/official_country")
+def admin_odds_set_official_country(
+    sport_key: str,
+    body: AdminLeagueCountryUpdateBody = Body(...),
+) -> Dict[str, Any]:
+    official_country_name = None
+    if body.official_country_name is not None:
+        value = str(body.official_country_name).strip()
+        official_country_name = value if value else None
+
+    sql = """
+      UPDATE odds.odds_league_map
+      SET
+        official_country_name = %(official_country_name)s,
+        updated_at_utc = now()
+      WHERE sport_key = %(sport_key)s
+      RETURNING sport_key, official_country_name, updated_at_utc
+    """
+
+    with pg_conn() as conn:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "sport_key": str(sport_key),
+                    "official_country_name": official_country_name,
+                },
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="sport_key_not_found")
+
+    return {
+        "ok": True,
+        "sport_key": str(row[0]),
+        "official_country_name": str(row[1]) if row[1] is not None else None,
+        "updated_at_utc": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
+    }
 
 @router.post("/refresh", response_model=AdminOddsRefreshResponse)
 def admin_odds_refresh(

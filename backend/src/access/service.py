@@ -23,6 +23,18 @@ def _normalize_plan_code(raw: Any) -> str:
     plan = str(raw or "FREE").strip().upper()
     return plan if plan in {"FREE", "BASIC", "LIGHT", "PRO"} else "FREE"
 
+def _fetch_extra_credits_for_date(cur, *, user_id: int, date_key) -> int:
+    cur.execute(
+        """
+        SELECT COALESCE(SUM(granted_credits), 0)::int
+        FROM access.user_daily_credit_grants
+        WHERE user_id = %(user_id)s
+          AND date_key = %(date_key)s
+        """,
+        {"user_id": user_id, "date_key": date_key},
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
 
 def _plan_has_persistent_reveals(plan_code: Any) -> bool:
     return _normalize_plan_code(plan_code) in PERSISTENT_REVEAL_PLAN_CODES
@@ -109,6 +121,12 @@ def _is_fixture_currently_revealed(
     )
     return cur.fetchone() is not None
 
+def _resolve_product_plan_code(actor: Dict[str, Any]) -> str:
+    access_context = actor.get("access") or {}
+    product_plan_code = str(access_context.get("product_plan_code") or "").strip().upper()
+    if product_plan_code in {"FREE", "BASIC", "LIGHT", "PRO"}:
+        return product_plan_code
+    return _normalize_plan_code((actor.get("subscription") or {}).get("plan_code"))
 
 def _resolve_current_actor(request: Request) -> Dict[str, Any]:
     payload = get_auth_me_payload(request)
@@ -127,7 +145,7 @@ def _resolve_current_actor(request: Request) -> Dict[str, Any]:
 def get_usage_payload(request: Request) -> Dict[str, Any]:
     actor = _resolve_current_actor(request)
     user = actor["user"]
-    plan_code = actor["subscription"]["plan_code"]
+    plan_code = _resolve_product_plan_code(actor)
     entitlements = actor["entitlements"]
 
     user_id = int(user["user_id"])
@@ -152,10 +170,16 @@ def get_usage_payload(request: Request) -> Dict[str, Any]:
                 date_key=date_key,
                 plan_code=plan_code,
             )
+            extra_credits = _fetch_extra_credits_for_date(
+                cur,
+                user_id=user_id,
+                date_key=date_key,
+            )
 
     credits_used = int(row[0]) if row else 0
     revealed_count = int(row[1]) if row else 0
-    daily_limit = int(entitlements["credits"]["daily_limit"])
+    base_daily_limit = int(entitlements["credits"]["daily_limit"])
+    daily_limit = base_daily_limit + extra_credits
     remaining = max(0, daily_limit - credits_used)
     revealed_fixture_keys = [str(r[0]) for r in revealed_rows]
 
@@ -167,6 +191,8 @@ def get_usage_payload(request: Request) -> Dict[str, Any]:
         "usage": {
             "credits_used": credits_used,
             "revealed_count": revealed_count,
+            "base_daily_limit": base_daily_limit,
+            "extra_credits": extra_credits,
             "daily_limit": daily_limit,
             "remaining": remaining,
             "revealed_fixture_keys": revealed_fixture_keys,
@@ -190,7 +216,7 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
             "message": "fixture_key is required",
         }
 
-    daily_limit = int(entitlements["credits"]["daily_limit"])
+    base_daily_limit = int(entitlements["credits"]["daily_limit"])
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -199,7 +225,7 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                 user_id=user_id,
                 date_key=date_key,
                 fixture_key=fixture_key,
-                plan_code=actor["subscription"]["plan_code"],
+                plan_code=_resolve_product_plan_code(actor),
             )
 
             if already:
@@ -215,6 +241,12 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                 row = cur.fetchone()
                 credits_used = int(row[0]) if row else 0
                 revealed_count = int(row[1]) if row else 0
+                extra_credits = _fetch_extra_credits_for_date(
+                    cur,
+                    user_id=user_id,
+                    date_key=date_key,
+                )
+                daily_limit = base_daily_limit + extra_credits
 
                 return {
                     "ok": True,
@@ -223,6 +255,8 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                     "usage": {
                         "credits_used": credits_used,
                         "revealed_count": revealed_count,
+                        "base_daily_limit": base_daily_limit,
+                        "extra_credits": extra_credits,
                         "daily_limit": daily_limit,
                         "remaining": max(0, daily_limit - credits_used),
                     },
@@ -261,6 +295,13 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
             credits_used = int(row[0]) if row else 0
             revealed_count = int(row[1]) if row else 0
 
+            extra_credits = _fetch_extra_credits_for_date(
+                cur,
+                user_id=user_id,
+                date_key=date_key,
+            )
+            daily_limit = base_daily_limit + extra_credits
+
             if credits_used >= daily_limit:
                 return {
                     "ok": False,
@@ -269,6 +310,8 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                     "usage": {
                         "credits_used": credits_used,
                         "revealed_count": revealed_count,
+                        "base_daily_limit": base_daily_limit,
+                        "extra_credits": extra_credits,
                         "daily_limit": daily_limit,
                         "remaining": 0,
                     },
@@ -319,6 +362,8 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
         "usage": {
             "credits_used": credits_used,
             "revealed_count": revealed_count,
+            "base_daily_limit": base_daily_limit,
+            "extra_credits": extra_credits,
             "daily_limit": daily_limit,
             "remaining": max(0, daily_limit - credits_used),
         },

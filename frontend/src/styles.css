@@ -623,3 +623,65 @@ hr.sep{
   font-size: 12px;
   text-decoration: underline;
 }
+
+.topbar-admin {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.brand-admin {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.nav-admin {
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.nav-macroareas {
+  gap: 10px;
+}
+
+.nav-subpages {
+  justify-content: flex-start;
+}
+
+.content-admin {
+  padding: 20px 16px 28px;
+}
+
+.admin-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.admin-subnav-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 14px;
+}
+
+.admin-subnav-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-subnav-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.admin-subnav-copy {
+  font-size: 12px;
+  opacity: 0.7;
+}

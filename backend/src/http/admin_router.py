@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Literal
 import re
 import unicodedata
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 from src.db.pg import pg_conn
 
@@ -14,9 +14,18 @@ from src.core.settings import load_settings
 from src.provider.apifootball.client import ApiFootballClient
 from src.etl.raw_ingest_pg import insert_raw_response
 from src.etl.core_etl_pg import run_core_etl
+from src.internal_access.guards import require_admin_access
 
-admin_router = APIRouter(prefix="/admin", tags=["admin"])
-admin_odds_router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
+admin_router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin_access)],
+)
+admin_odds_router = APIRouter(
+    prefix="/admin/odds",
+    tags=["admin-odds"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 # --- AUDIT (reliability) helpers ---
 

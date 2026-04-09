@@ -68,6 +68,7 @@ class Settings:
     app_env: str
 
     frontend_allowed_origins: List[str]
+    product_public_origin: str
 
     product_auth_enabled: bool
     admin_auth_enabled: bool
@@ -127,6 +128,7 @@ def load_settings() -> Settings:
         "FRONTEND_ALLOWED_ORIGINS",
         default=default_frontend_allowed_origins if app_env in {"dev", "development"} else [],
     )
+    product_public_origin = _env_str("PRODUCT_PUBLIC_ORIGIN", "http://localhost:5173").rstrip("/")
 
     product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
@@ -187,6 +189,7 @@ def load_settings() -> Settings:
         supported_langs=supported_langs,
         app_env=app_env,
         frontend_allowed_origins=frontend_allowed_origins,
+        product_public_origin=product_public_origin,
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
         product_dev_auto_login_enabled=product_dev_auto_login_enabled,

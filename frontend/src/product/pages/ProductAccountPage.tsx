@@ -1,14 +1,16 @@
 import React from "react";
 import { Link, useOutletContext } from "react-router-dom";
 
-import { t, type Lang } from "../i18n";
-import { patchAuthProfile } from "../api/auth";
+import { fetchAccessUsage } from "../api/access";
+import { fetchAuthMe, normalizeBackendPlanCode, patchAuthProfile } from "../api/auth";
 import {
+  fetchBillingCheckoutSessionStatus,
   fetchBillingSubscription,
   postBillingCancelRenewal,
   postBillingResumeRenewal,
   type BillingSubscriptionResponse,
 } from "../api/billing";
+import { t, type Lang } from "../i18n";
 import { PLAN_CATALOG } from "../planCatalog";
 import { PLAN_LABELS } from "../entitlements";
 import { useProductStore } from "../state/productStore";
@@ -130,6 +132,10 @@ export default function ProductAccountPage() {
   const isAuthenticated = Boolean(store.state.auth.is_logged_in);
   const account = store.accountSnapshot;
 
+  const [isFinalizingCheckout, setIsFinalizingCheckout] = React.useState(false);
+  const [checkoutFinalizeSlow, setCheckoutFinalizeSlow] = React.useState(false);
+  const [checkoutFinalizeError, setCheckoutFinalizeError] = React.useState<string | null>(null);
+
   const [isEditingProfile, setIsEditingProfile] = React.useState(false);
   const [profileName, setProfileName] = React.useState(account.full_name ?? "");
   const [profileLang, setProfileLang] = React.useState<Lang>(
@@ -227,6 +233,43 @@ export default function ProductAccountPage() {
   const billingTrialEnd = formatDateTime(lang, billingSubscription?.trial_end_utc);
   const billingLastSync = formatDateTime(lang, billingSubscription?.updated_at_utc);
 
+  const syncAccountFromBackend = React.useCallback(async () => {
+    const authData = await fetchAuthMe();
+
+    store.applyBackendBootstrap({
+      is_authenticated: Boolean(authData.is_authenticated),
+      email: authData.user?.email ?? null,
+      plan: normalizeBackendPlanCode(authData.subscription?.plan_code),
+      auth_mode: authData.auth_mode ?? null,
+      user_id: authData.user?.user_id ?? null,
+      full_name: authData.user?.full_name ?? null,
+      preferred_lang: authData.user?.preferred_lang ?? null,
+      user_status: authData.user?.status ?? null,
+      email_verified: authData.user?.email_verified ?? null,
+      subscription_plan_code: authData.subscription?.plan_code ?? null,
+      subscription_status: authData.subscription?.status ?? null,
+      subscription_provider: authData.subscription?.provider ?? null,
+      subscription_billing_cycle: authData.subscription?.billing_cycle ?? null,
+    });
+
+    if (!authData.is_authenticated) {
+      return authData;
+    }
+
+    const usage = await fetchAccessUsage();
+
+    store.applyBackendUsage({
+      date_key: usage.date_key,
+      credits_used: usage.usage.credits_used,
+      revealed_count: usage.usage.revealed_count,
+      daily_limit: usage.usage.daily_limit,
+      remaining: usage.usage.remaining,
+      revealed_fixture_keys: usage.usage.revealed_fixture_keys,
+    });
+
+    return authData;
+  }, [store]);
+
   const loadBilling = React.useCallback(async () => {
     if (!isAuthenticated) {
       setBillingState(null);
@@ -247,6 +290,65 @@ export default function ProductAccountPage() {
     }
   }, [isAuthenticated, lang]);
 
+  function isStripeSubscriptionMaterialized(
+    authData: {
+      subscription?: {
+        provider?: string | null;
+        plan_code?: string | null;
+        status?: string | null;
+      } | null;
+    } | null | undefined,
+    billingData: BillingSubscriptionResponse | null | undefined
+  ) {
+    const effectiveProvider = String(
+      billingData?.subscription?.provider ?? authData?.subscription?.provider ?? ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const effectivePlanCode = String(
+      billingData?.subscription?.plan_code ?? authData?.subscription?.plan_code ?? "FREE"
+    )
+      .trim()
+      .toUpperCase();
+
+    const effectiveStatus = String(
+      billingData?.subscription?.billing_status ?? authData?.subscription?.status ?? ""
+    )
+      .trim()
+      .toLowerCase();
+
+    return (
+      effectiveProvider === "stripe" &&
+      effectivePlanCode !== "FREE" &&
+      ["active", "trialing", "past_due"].includes(effectiveStatus)
+    );
+  }
+
+  const handleRefreshAfterCheckout = React.useCallback(async () => {
+    setCheckoutFinalizeError(null);
+
+    try {
+      const authData = await syncAccountFromBackend();
+      const billingData = await fetchBillingSubscription();
+
+      setBillingState(billingData);
+
+      if (isStripeSubscriptionMaterialized(authData, billingData)) {
+        setCheckoutFinalizeSlow(false);
+        setIsFinalizingCheckout(false);
+        return true;
+      }
+
+      setCheckoutFinalizeSlow(true);
+      return false;
+    } catch (error) {
+      console.error("checkout finalization refresh failed", error);
+      setCheckoutFinalizeError(t(lang, "auth.billingCheckoutFinalizingSlow"));
+      return false;
+    }
+  }, [lang, syncAccountFromBackend]);
+
   React.useEffect(() => {
     setProfileName(account.full_name ?? "");
     setProfileLang(normalizeEditableLang(account.preferred_lang, store.state.lang as Lang));
@@ -262,10 +364,209 @@ export default function ProductAccountPage() {
     const url = new URL(window.location.href);
     if (url.searchParams.get("billing") !== "updated") return;
 
-    setBillingActionMessage(t(lang, "auth.billingCheckoutSuccess"));
+    const rawCheckoutSessionId = url.searchParams.get("session_id");
+    const storedCheckoutSessionId = window.sessionStorage.getItem(
+      "billing_last_checkout_session_id"
+    );
+
+    const checkoutSessionId =
+      rawCheckoutSessionId &&
+      !rawCheckoutSessionId.includes("{") &&
+      !rawCheckoutSessionId.includes("CHECKOUT_SESSION_ID")
+        ? rawCheckoutSessionId
+        : storedCheckoutSessionId;
+
+    let cancelled = false;
+    let slowTimerId: number | null = null;
+
+    setIsFinalizingCheckout(true);
+    setCheckoutFinalizeSlow(false);
+    setCheckoutFinalizeError(null);
+
+    async function syncCheckoutReturn() {
+      setBillingActionMessage(t(lang, "auth.billingCheckoutSuccess"));
+      setBillingError(null);
+      setIsBillingLoading(true);
+
+      slowTimerId = window.setTimeout(() => {
+        if (!cancelled) {
+          setCheckoutFinalizeSlow(true);
+        }
+      }, 8000);
+
+      try {
+        if (checkoutSessionId) {
+          try {
+            const checkoutSync = await fetchBillingCheckoutSessionStatus(checkoutSessionId);
+
+            if (cancelled) return;
+
+            setBillingState(checkoutSync);
+
+            if (isStripeSubscriptionMaterialized(null, checkoutSync)) {
+              setCheckoutFinalizeSlow(false);
+              setIsFinalizingCheckout(false);
+              return;
+            }
+          } catch (error) {
+            console.error("checkout session immediate sync failed", error);
+          }
+        }
+
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const authData = await syncAccountFromBackend();
+          const billingData = await fetchBillingSubscription();
+
+          if (cancelled) return;
+
+          setBillingState(billingData);
+
+          if (isStripeSubscriptionMaterialized(authData, billingData)) {
+            setCheckoutFinalizeSlow(false);
+            setIsFinalizingCheckout(false);
+            break;
+          }
+
+          if (attempt < 5) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          }
+        }
+      } catch (error) {
+        console.error("checkout return billing sync failed", error);
+        setBillingError(t(lang, "auth.billingLoadError"));
+        setCheckoutFinalizeError(t(lang, "auth.billingCheckoutFinalizingSlow"));
+      } finally {
+        if (slowTimerId != null) {
+          window.clearTimeout(slowTimerId);
+        }
+
+        if (!cancelled) {
+          setIsBillingLoading(false);
+          setIsFinalizingCheckout(false);
+        }
+      }
+    }
+
     url.searchParams.delete("billing");
+    url.searchParams.delete("session_id");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [lang]);
+
+    void syncCheckoutReturn();
+
+    return () => {
+      cancelled = true;
+      if (slowTimerId != null) {
+        window.clearTimeout(slowTimerId);
+      }
+    };
+  }, [isStripeSubscriptionMaterialized, lang, syncAccountFromBackend]);
+
+  React.useEffect(() => {
+    void loadBilling();
+  }, [loadBilling]);
+
+    React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("billing") !== "updated") return;
+
+    const rawCheckoutSessionId = url.searchParams.get("session_id");
+    const storedCheckoutSessionId = window.sessionStorage.getItem(
+      "billing_last_checkout_session_id"
+    );
+
+    const checkoutSessionId =
+      rawCheckoutSessionId &&
+      !rawCheckoutSessionId.includes("{") &&
+      !rawCheckoutSessionId.includes("CHECKOUT_SESSION_ID")
+        ? rawCheckoutSessionId
+        : storedCheckoutSessionId;
+
+    let cancelled = false;
+    let slowTimerId: number | null = null;
+
+    setIsFinalizingCheckout(true);
+    setCheckoutFinalizeSlow(false);
+    setCheckoutFinalizeError(null);
+
+    async function syncCheckoutReturn() {
+      setBillingActionMessage(t(lang, "auth.billingCheckoutSuccess"));
+      setBillingError(null);
+      setIsBillingLoading(true);
+
+      slowTimerId = window.setTimeout(() => {
+        if (!cancelled) {
+          setCheckoutFinalizeSlow(true);
+        }
+      }, 8000);
+
+      try {
+        if (checkoutSessionId) {
+          try {
+            const checkoutSync = await fetchBillingCheckoutSessionStatus(checkoutSessionId);
+
+            if (cancelled) return;
+
+            setBillingState(checkoutSync);
+
+            if (isStripeSubscriptionMaterialized(null, checkoutSync)) {
+              setCheckoutFinalizeSlow(false);
+              setIsFinalizingCheckout(false);
+              return;
+            }
+          } catch (error) {
+            console.error("checkout session immediate sync failed", error);
+          }
+        }
+
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const authData = await syncAccountFromBackend();
+          const billingData = await fetchBillingSubscription();
+
+          if (cancelled) return;
+
+          setBillingState(billingData);
+
+          if (isStripeSubscriptionMaterialized(authData, billingData)) {
+            setCheckoutFinalizeSlow(false);
+            setIsFinalizingCheckout(false);
+            break;
+          }
+
+          if (attempt < 5) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          }
+        }
+      } catch (error) {
+        console.error("checkout return billing sync failed", error);
+        setBillingError(t(lang, "auth.billingLoadError"));
+        setCheckoutFinalizeError(t(lang, "auth.billingCheckoutFinalizingSlow"));
+      } finally {
+        if (slowTimerId != null) {
+          window.clearTimeout(slowTimerId);
+        }
+
+        if (!cancelled) {
+          setIsBillingLoading(false);
+          setIsFinalizingCheckout(false);
+        }
+      }
+    }
+
+    url.searchParams.delete("billing");
+    url.searchParams.delete("session_id");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+
+    void syncCheckoutReturn();
+
+    return () => {
+      cancelled = true;
+      if (slowTimerId != null) {
+        window.clearTimeout(slowTimerId);
+      }
+    };
+  }, [lang, syncAccountFromBackend]);
 
   async function handleBillingAction(action: "cancel" | "resume") {
     try {
@@ -321,10 +622,41 @@ export default function ProductAccountPage() {
     } finally {
       setIsSavingProfile(false);
     }
-  }
+  }  
   
   return (
     <section className="account-page">
+      {isFinalizingCheckout ? (
+        <div className="account-finalizing-overlay" role="status" aria-live="polite">
+          <div className="account-finalizing-card">
+            <div className="account-finalizing-spinner" aria-hidden="true" />
+
+            <h2>{t(lang, "auth.billingCheckoutFinalizingTitle")}</h2>
+
+            <p>
+              {checkoutFinalizeSlow
+                ? t(lang, "auth.billingCheckoutFinalizingSlow")
+                : t(lang, "auth.billingCheckoutFinalizingBody")}
+            </p>
+
+            <div className="account-actions-list">
+              <button
+                type="button"
+                className="product-primary"
+                onClick={() => {
+                  void handleRefreshAfterCheckout();
+                }}
+              >
+                {t(lang, "auth.billingCheckoutRefreshNow")}
+              </button>
+            </div>
+
+            {checkoutFinalizeError ? (
+              <div className="account-note">{checkoutFinalizeError}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="account-hero">
         <div>
           <div className="account-kicker">{t(lang, "auth.accountSettings")}</div>
