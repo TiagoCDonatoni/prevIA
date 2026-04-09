@@ -295,8 +295,6 @@ export function PlanChangeModal(props: {
     : null;
 
   const selectedPrice = selectedCatalogEntry?.amount ?? null;
-
-  const isPostSignupOffer = props.reason === "POST_SIGNUP";
   const canDismissModal = !isPostSignupOffer;
 
   function handleRequestClose() {
