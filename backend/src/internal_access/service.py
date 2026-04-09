@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
+
+from fastapi import Request
+
 from src.core.settings import load_settings
 
 ADMIN_ACCESS_CAPABILITY = "admin.access"
@@ -13,6 +16,9 @@ INTERNAL_MARKER_CAPABILITIES = {
     PRODUCT_INTERNAL_ACCESS_CAPABILITY,
     BILLING_SANDBOX_CAPABILITY,
 }
+
+VALID_PRODUCT_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
+PRODUCT_PLAN_OVERRIDE_HEADER = "x-product-plan-override"
 
 
 def _normalize_text(value: Any) -> str:
@@ -69,6 +75,30 @@ def actor_has_capability(access_context: Optional[Dict[str, Any]], capability_ke
     caps = access_context.get("capabilities") or []
     return str(capability_key or "").strip() in {str(item or "").strip() for item in caps}
 
+def resolve_runtime_product_plan_code(
+    *,
+    request: Optional[Request],
+    access_context: Optional[Dict[str, Any]],
+    fallback_plan_code: str,
+) -> str:
+    fallback = _normalize_text(fallback_plan_code).upper()
+    if fallback not in VALID_PRODUCT_PLAN_CODES:
+        fallback = "FREE"
+
+    context = access_context or {}
+    can_override = bool(context.get("allow_plan_override")) or actor_has_capability(
+        context,
+        PRODUCT_INTERNAL_PLAN_OVERRIDE_CAPABILITY,
+    )
+
+    if not can_override or request is None:
+        return fallback
+
+    override = _normalize_text(request.headers.get(PRODUCT_PLAN_OVERRIDE_HEADER)).upper()
+    if override in VALID_PRODUCT_PLAN_CODES:
+        return override
+
+    return fallback
 
 def _fetch_active_role_keys(cur, *, user_id: int) -> list[str]:
     cur.execute(
@@ -212,6 +242,8 @@ def resolve_user_access_context(
     access["admin_access"] = ADMIN_ACCESS_CAPABILITY in capabilities
     access["product_internal_access"] = PRODUCT_INTERNAL_ACCESS_CAPABILITY in capabilities
     access["allow_plan_override"] = PRODUCT_INTERNAL_PLAN_OVERRIDE_CAPABILITY in capabilities
-    access["product_plan_code"] = "PRO" if access["product_internal_access"] else None
+    # Não forçar PRO por ser sessão interna.
+    # Sem override explícito, o produto deve cair no plano real da assinatura.
+    access["product_plan_code"] = None
 
     return access

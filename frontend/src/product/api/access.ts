@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "../../config";
+import { buildProductRuntimeHeaders } from "./auth";
 
 export type AccessUsageResponse = {
   ok: boolean;
@@ -44,6 +45,7 @@ export async function fetchAccessUsage(): Promise<AccessUsageResponse> {
     credentials: "include",
     headers: {
       Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
     },
   });
 
@@ -61,6 +63,7 @@ export async function postAccessReveal(fixtureKey: string): Promise<AccessReveal
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
     },
     body: JSON.stringify({
       fixture_key: fixtureKey,

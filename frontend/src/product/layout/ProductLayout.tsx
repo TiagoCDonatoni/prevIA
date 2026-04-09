@@ -1,11 +1,14 @@
 import React, { useCallback, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom"; 
 
-import { IS_DEV, PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
+import { PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
 import { fetchAccessUsage } from "../api/access";
 import {
+  clearProductPlanOverride,
+  fetchAuthMe,
   normalizeBackendPlanCode,
   postAuthLogout,
+  writeProductPlanOverride,
   type AuthMeResponse,
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
@@ -187,7 +190,11 @@ export function ProductLayout() {
   const lang = store.state.lang as Lang;
   const footer = PRODUCT_FOOTER_COPY[lang];
   const plan = store.state.plan;
-  const DEV = IS_DEV;
+  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
+    "MANUAL"
+  );
+
+  const internalPlanViewOptions = PLAN_LABELS.filter((item) => item.id !== "FREE_ANON");
 
   const navigate = useNavigate();
 
@@ -274,7 +281,18 @@ React.useEffect(() => {
     "MANUAL"
   );
 
-  const allowDevPlanOverride = DEV && PRODUCT_DEV_AUTO_LOGIN_ENABLED;
+  const allowInternalPlanOverride = Boolean(store.accessContext?.allow_plan_override);
+  const isInternalMode = Boolean(
+    store.accessContext?.product_internal_access || store.accessContext?.is_internal
+  );
+  const canUseInternalTestingControls = Boolean(
+    store.accessContext?.admin_access ||
+      store.accessContext?.allow_plan_override ||
+      store.accessContext?.product_internal_access ||
+      store.accessContext?.is_internal
+  );
+  const selectedInternalPlan = normalizeBackendPlanCode(plan);
+  const internalBillingRuntime = String(store.accessContext?.billing_runtime ?? "live").toUpperCase();
 
   const isDevAutoLoginSession =
     PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
@@ -284,6 +302,9 @@ React.useEffect(() => {
 
   const isAuthenticated =
     Boolean(store.state.auth.is_logged_in) || isDevAutoLoginSession;
+
+  const authBootstrapPending =
+    PRODUCT_AUTH_ENABLED && !store.bootstrap.is_ready;
 
   const isAccountMenuEligiblePlan =
     plan === "FREE" ||
@@ -333,9 +354,11 @@ React.useEffect(() => {
       subscription_status: data.subscription?.status ?? null,
       subscription_provider: data.subscription?.provider ?? null,
       subscription_billing_cycle: data.subscription?.billing_cycle ?? null,
+      access_context: data.access ?? null,
     });
 
     if (!data.is_authenticated) {
+      clearProductPlanOverride();
       return;
     }
 
@@ -355,9 +378,54 @@ React.useEffect(() => {
     }
   }
 
+  async function handleInternalPlanChange(nextPlanRaw: string) {
+    const nextPlan = normalizeBackendPlanCode(nextPlanRaw);
+    const subscriptionPlan = normalizeBackendPlanCode(
+      store.accountSnapshot?.subscription?.plan_code ?? store.state.plan
+    );
+
+    store.clearBackendUsage();
+    store.setPlan(nextPlan);
+
+    if (nextPlan === subscriptionPlan) {
+      clearProductPlanOverride();
+    } else {
+      writeProductPlanOverride(nextPlan);
+    }
+
+    if (!PRODUCT_AUTH_ENABLED || !isAuthenticated) {
+      return;
+    }
+
+    try {
+      const data = await fetchAuthMe();
+      await syncSessionFromAuthPayload(data);
+    } catch (err) {
+      console.error("internal plan override sync failed", err);
+    }
+  }
+
+  async function handleTestingReset(onAfterReset?: () => void) {
+    clearProductPlanOverride();
+    store.resetForTesting();
+    onAfterReset?.();
+
+    if (!PRODUCT_AUTH_ENABLED || !isAuthenticated) {
+      return;
+    }
+
+    try {
+      const data = await fetchAuthMe();
+      await syncSessionFromAuthPayload(data);
+    } catch (err) {
+      console.error("product testing reset sync failed", err);
+    }
+  }
+
   async function handleLogout() {
     try {
       store.promoteCurrentSessionToDeviceAnonShadow();
+      clearProductPlanOverride();
       await postAuthLogout();
 
       store.applyBackendBootstrap({
@@ -374,6 +442,7 @@ React.useEffect(() => {
         subscription_status: null,
         subscription_provider: null,
         subscription_billing_cycle: null,
+        access_context: null,
       });
 
       setAuthOpen(false);
@@ -405,6 +474,9 @@ React.useEffect(() => {
   );
 
   const renderHeaderActions = (onAfterClick?: () => void) => {
+    if (authBootstrapPending) {
+      return null;
+    }
     if (!isAuthenticated) {
       if (!PRODUCT_AUTH_ENABLED || PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
         return null;
@@ -440,7 +512,7 @@ React.useEffect(() => {
       );
     }
 
-    if (plan === "PRO") return null;
+    if (isInternalMode || plan === "PRO") return null;
 
     return (
       <button
@@ -492,15 +564,17 @@ const accountMenuDropdown = isAccountMenuOpen ? (
 
 const mobileHeaderMenuContent = (
   <>
-    {allowDevPlanOverride ? (
+    {allowInternalPlanOverride ? (
       <div className="product-pill">
-        <span className="product-pill-label">DEV PLAN</span>
+        <span className="product-pill-label">PLAN VIEW</span>
         <select
           className="product-select"
-          value={plan}
-          onChange={(e) => store.setPlan(e.target.value as PlanId)}
+          value={selectedInternalPlan}
+          onChange={(e) => {
+            void handleInternalPlanChange(e.target.value);
+          }}
         >
-          {PLAN_LABELS.map((p) => (
+          {internalPlanViewOptions.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
             </option>
@@ -509,12 +583,11 @@ const mobileHeaderMenuContent = (
       </div>
     ) : null}
 
-    {DEV ? (
+    {canUseInternalTestingControls ? (
       <button
         className="product-reset-btn"
         onClick={() => {
-          store.resetForTesting();
-          setIsMobileHeaderMenuOpen(false);
+          void handleTestingReset(() => setIsMobileHeaderMenuOpen(false));
         }}
         title={t(lang, "common.devResetTitle")}
       >
@@ -539,6 +612,50 @@ const mobileHeaderMenuContent = (
   return (
     <div className="product-shell">
 
+      {isInternalMode ? (
+        <div className="product-internal-banner" role="status">
+          <div className="product-internal-banner-text">
+            <strong>INTERNAL MODE</strong>
+            <span> Billing runtime: {internalBillingRuntime}</span>
+          </div>
+
+          {allowInternalPlanOverride || canUseInternalTestingControls ? (
+            <div className="product-internal-banner-controls">
+              {allowInternalPlanOverride ? (
+                <>
+                  <span className="product-pill-label">PLAN VIEW</span>
+                  <select
+                    className="product-select"
+                    value={selectedInternalPlan}
+                    onChange={(e) => {
+                      void handleInternalPlanChange(e.target.value);
+                    }}
+                  >
+                    {internalPlanViewOptions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : null}
+
+              {canUseInternalTestingControls ? (
+                <button
+                  className="product-reset-btn"
+                  onClick={() => {
+                    void handleTestingReset();
+                  }}
+                  title={t(lang, "common.devResetTitle")}
+                >
+                  {t(lang, "common.devReset")}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <header className={`product-header ${isMobileHeaderMenuOpen ? "is-mobile-menu-open" : ""}`}>
         <div className="product-header-bar">
           <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
@@ -546,35 +663,6 @@ const mobileHeaderMenuContent = (
           </Link>
 
           <div className="product-header-right product-header-right-desktop">
-            {allowDevPlanOverride ? (
-              <div className="product-pill">
-                <span className="product-pill-label">DEV PLAN</span>
-                <select
-                  className="product-select"
-                  value={plan}
-                  onChange={(e) => store.setPlan(e.target.value as PlanId)}
-                >
-                  {PLAN_LABELS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            {DEV ? (
-              <button
-                className="product-reset-btn"
-                onClick={() => {
-                  store.resetForTesting();
-                }}
-                title={t(lang, "common.devResetTitle")}
-              >
-                {t(lang, "common.devReset")}
-              </button>
-            ) : null}
-
             <div className="product-pill product-pill-lang">
               <LanguageDropdown
                 value={lang}
