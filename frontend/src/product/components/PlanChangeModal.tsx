@@ -22,7 +22,7 @@ import {
   type BillingCycle,
 } from "../api/billing";
 
-type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED";
+type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED" | "POST_SIGNUP";
 
 const LOW_CREDITS_THRESHOLD = 5;
 const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
@@ -151,6 +151,7 @@ function getModalTitle(
   tr: (k: string, vars?: Record<string, any>) => string,
   reason: Reason
 ) {
+  if (reason === "POST_SIGNUP") return "Sua conta Free+ já está ativa";
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsTitle");
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureTitle");
   return tr("plans.modal.manualTitle");
@@ -161,6 +162,9 @@ function getModalSubtitle(
   reason: Reason,
   vars: { delta: number; total: number }
 ) {
+  if (reason === "POST_SIGNUP") {
+    return "Você já pode entrar no app agora, mas estes planos liberam mais profundidade, créditos e recursos.";
+  }
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsBody", vars);
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureBody", vars);
   return tr("plans.modal.manualSubtitle");
@@ -254,7 +258,7 @@ export function PlanChangeModal(props: {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        props.onClose();
+        handleRequestClose();
       }
     };
 
@@ -278,6 +282,8 @@ export function PlanChangeModal(props: {
     total: nextLimit,
   });
 
+  const isPostSignupOffer = props.reason === "POST_SIGNUP";
+
   const showPlans = higherPlans.length > 0;
 
   const selectedLimit = selectedPlan ? dailyLimitForPlan(selectedPlan) : null;
@@ -289,6 +295,14 @@ export function PlanChangeModal(props: {
     : null;
 
   const selectedPrice = selectedCatalogEntry?.amount ?? null;
+
+  const isPostSignupOffer = props.reason === "POST_SIGNUP";
+  const canDismissModal = !isPostSignupOffer;
+
+  function handleRequestClose() {
+    if (!canDismissModal) return;
+    props.onClose();
+  }
 
   const selectedPriceLabel =
     selectedPrice != null
@@ -306,7 +320,7 @@ export function PlanChangeModal(props: {
       role="dialog"
       aria-modal="true"
       onClick={() => {
-        props.onClose();
+        handleRequestClose();
       }}
     >
       <div
@@ -335,14 +349,16 @@ export function PlanChangeModal(props: {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="product-modal-close"
-            onClick={props.onClose}
-            aria-label={tr("common.close")}
-          >
-            ×
-          </button>
+          {canDismissModal ? (
+            <button
+              type="button"
+              className="product-modal-close"
+              onClick={handleRequestClose}
+              aria-label={tr("common.close")}
+            >
+              ×
+            </button>
+          ) : null}
         </div>
 
         <div className="product-modal-body">
@@ -544,7 +560,9 @@ export function PlanChangeModal(props: {
               </div>
             </>
           ) : (
-            <div className="product-plan-empty-card">{tr("common.notNow")}</div>
+            <div className="product-plan-empty-card">
+              {isPostSignupOffer ? "Sua conta Free+ já está pronta para uso." : tr("common.notNow")}
+            </div>
           )}
 
           {!checkoutSession ? (
@@ -557,7 +575,7 @@ export function PlanChangeModal(props: {
 
               <div className="product-plan-actions">
                 <button type="button" className="product-secondary" onClick={props.onClose}>
-                  {tr("common.notNow")}
+                  {isPostSignupOffer ? "Continuar com Free+" : tr("common.notNow")}
                 </button>
 
                 <button

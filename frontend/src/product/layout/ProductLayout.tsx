@@ -190,9 +190,9 @@ export function ProductLayout() {
   const lang = store.state.lang as Lang;
   const footer = PRODUCT_FOOTER_COPY[lang];
   const plan = store.state.plan;
-  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
-    "MANUAL"
-  );
+  const [planReason, setPlanReason] = useState<
+    "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED" | "POST_SIGNUP"
+  >("MANUAL");
 
   const internalPlanViewOptions = PLAN_LABELS.filter((item) => item.id !== "FREE_ANON");
 
@@ -837,6 +837,14 @@ const mobileHeaderMenuContent = (
         onAuthSuccess={async (payload) => {
           await syncSessionFromAuthPayload(payload);
           setAuthOpen(false);
+
+          const shouldOpenPostSignupOffer =
+            authInitialMode === "signup" && Boolean(payload.is_authenticated);
+
+          if (shouldOpenPostSignupOffer) {
+            setPlanReason("POST_SIGNUP");
+            setPlanOpen(true);
+          }
         }}
       />
 
