@@ -19,7 +19,11 @@
   },
   "modal": {
     "manualTitle": "Escolha o plano ideal",
-    "manualSubtitle": "Compare as opções e escolha a recorrência que faz mais sentido para você."
+    "manualSubtitle": "Compare as opções e escolha a recorrência que faz mais sentido para você.",
+    "postSignupTitle": "Sua conta Free+ já está ativa",
+    "postSignupSubtitle": "Você já pode entrar no app agora, mas estes planos liberam mais profundidade, créditos e recursos.",
+    "postSignupContinue": "Continuar com Free+",
+    "postSignupEmpty": "Sua conta Free+ já está pronta para uso."
   },
 
   "cta": {

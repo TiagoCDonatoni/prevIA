@@ -22,6 +22,8 @@ import {
   type BillingCycle,
 } from "../api/billing";
 
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
+
 type Reason = "MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED" | "POST_SIGNUP";
 
 const LOW_CREDITS_THRESHOLD = 5;
@@ -151,7 +153,7 @@ function getModalTitle(
   tr: (k: string, vars?: Record<string, any>) => string,
   reason: Reason
 ) {
-  if (reason === "POST_SIGNUP") return "Sua conta Free+ já está ativa";
+  if (reason === "POST_SIGNUP") return tr("plans.modal.postSignupTitle");
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsTitle");
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureTitle");
   return tr("plans.modal.manualTitle");
@@ -163,7 +165,7 @@ function getModalSubtitle(
   vars: { delta: number; total: number }
 ) {
   if (reason === "POST_SIGNUP") {
-    return "Você já pode entrar no app agora, mas estes planos liberam mais profundidade, créditos e recursos.";
+    return tr("plans.modal.postSignupSubtitle");
   }
   if (reason === "NO_CREDITS") return tr("credits.modalNoCreditsBody", vars);
   if (reason === "FEATURE_LOCKED") return tr("credits.modalFeatureBody", vars);
@@ -206,15 +208,30 @@ export function PlanChangeModal(props: {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openedAtMs, setOpenedAtMs] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!props.open) return;
-    setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
-    setSelectedCycle("monthly");
-    setSelectedCurrency(effectiveDefaultCurrency);
-    setCheckoutSession(null);
-    setSubmitError(null);
-  }, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan, effectiveDefaultCurrency]);
+useEffect(() => {
+  if (!props.open) return;
+
+  const openedAt = Date.now();
+
+  setSelectedPlan((recommendedPlan ?? fallbackPlan ?? null) as PlanId | null);
+  setSelectedCycle("monthly");
+  setSelectedCurrency(effectiveDefaultCurrency);
+  setCheckoutSession(null);
+  setSubmitError(null);
+  setOpenedAtMs(openedAt);
+
+  if (props.reason === "POST_SIGNUP") {
+    trackProductTelemetry("post_signup_plan_offer_shown", {
+      current_plan: currentPlan,
+      recommended_plan: recommendedPlan,
+      fallback_plan: fallbackPlan,
+      billing_cycle: "monthly",
+      currency_code: effectiveDefaultCurrency,
+    });
+  }
+}, [props.open, props.reason, currentPlan, recommendedPlan, fallbackPlan, effectiveDefaultCurrency]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -300,6 +317,11 @@ export function PlanChangeModal(props: {
   function handleRequestClose() {
     if (!canDismissModal) return;
     props.onClose();
+  }
+
+  function openDurationMs() {
+    if (openedAtMs == null) return 0;
+    return Math.max(0, Date.now() - openedAtMs);
   }
 
   const selectedPriceLabel =
@@ -491,7 +513,18 @@ export function PlanChangeModal(props: {
                       className={`product-plan-card ${isRecommended ? "is-recommended" : ""} ${
                         isSelected ? "is-selected" : ""
                       }`}
-                      onClick={() => setSelectedPlan(pid)}
+                      onClick={() => {
+                        setSelectedPlan(pid);
+
+                        if (isPostSignupOffer) {
+                          trackProductTelemetry("post_signup_plan_selected", {
+                            selected_plan: pid,
+                            billing_cycle: selectedCycle,
+                            currency_code: selectedCurrency,
+                            duration_ms: openDurationMs(),
+                          });
+                        }
+                      }}
                       aria-pressed={isSelected}
                     >
                       <div className="product-plan-card-check">{isSelected ? "✓" : ""}</div>
@@ -559,7 +592,7 @@ export function PlanChangeModal(props: {
             </>
           ) : (
             <div className="product-plan-empty-card">
-              {isPostSignupOffer ? "Sua conta Free+ já está pronta para uso." : tr("common.notNow")}
+              {isPostSignupOffer ? tr("plans.modal.postSignupEmpty") : tr("common.notNow")}
             </div>
           )}
 
@@ -572,8 +605,23 @@ export function PlanChangeModal(props: {
               ) : null}
 
               <div className="product-plan-actions">
-                <button type="button" className="product-secondary" onClick={props.onClose}>
-                  {isPostSignupOffer ? "Continuar com Free+" : tr("common.notNow")}
+                <button
+                  type="button"
+                  className="product-secondary"
+                  onClick={() => {
+                    if (isPostSignupOffer) {
+                      trackProductTelemetry("post_signup_continue_free_clicked", {
+                        selected_plan: selectedPlan,
+                        billing_cycle: selectedCycle,
+                        currency_code: selectedCurrency,
+                        duration_ms: openDurationMs(),
+                      });
+                    }
+
+                    props.onClose();
+                  }}
+                >
+                  {isPostSignupOffer ? tr("plans.modal.postSignupContinue") : tr("common.notNow")}
                 </button>
 
                 <button
@@ -599,6 +647,14 @@ export function PlanChangeModal(props: {
                       setIsSubmitting(true);
                       setSubmitError(null);
 
+                      if (isPostSignupOffer) {
+                        trackProductTelemetry("post_signup_checkout_started", {
+                          selected_plan: selectedPlan,
+                          billing_cycle: selectedCycle,
+                          currency_code: selectedCurrency,
+                          duration_ms: openDurationMs(),
+                        });
+                      }
                       const response = await createBillingCheckoutSession({
                         plan_code: selectedPlan as Exclude<PlanId, "FREE" | "FREE_ANON">,
                         billing_cycle: selectedCycle,
