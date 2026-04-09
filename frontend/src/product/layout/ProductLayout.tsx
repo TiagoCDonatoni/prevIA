@@ -277,10 +277,6 @@ React.useEffect(() => {
   return () => window.removeEventListener("resize", onResize);
 }, []);
 
-  const [planReason, setPlanReason] = useState<"MANUAL" | "NO_CREDITS" | "FEATURE_LOCKED">(
-    "MANUAL"
-  );
-
   const allowInternalPlanOverride = Boolean(store.accessContext?.allow_plan_override);
   const isInternalMode = Boolean(
     store.accessContext?.product_internal_access || store.accessContext?.is_internal
