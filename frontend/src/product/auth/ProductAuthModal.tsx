@@ -57,6 +57,7 @@ export function ProductAuthModal(props: {
   open: boolean;
   lang: Lang;
   initialMode?: Mode;
+  initialResetToken?: string;
   onClose: () => void;
   onAuthSuccess: (payload: AuthMeResponse) => void | Promise<void>;
 }) {
@@ -81,6 +82,8 @@ export function ProductAuthModal(props: {
 
   const tr = useMemo(() => (k: string, vars?: Record<string, any>) => t(lang, k, vars), [lang]);
   const initialMode = props.initialMode ?? "signup";
+  const initialResetToken = props.initialResetToken ?? "";
+  const hasInitialResetToken = initialResetToken.trim().length > 0;
   const canStepBack = mode === "forgot" || mode === "reset";
   const secondaryActionLabel =
     mode === "changePassword"
@@ -96,9 +99,15 @@ export function ProductAuthModal(props: {
   function switchMode(nextMode: Mode) {
     setMode(nextMode);
     setPassword("");
-    setResetToken("");
     setCurrentPassword("");
     setConfirmPassword("");
+
+    if (nextMode === "reset" && hasInitialResetToken) {
+      setResetToken(initialResetToken);
+    } else {
+      setResetToken("");
+    }
+
     resetFeedback();
   }
 
@@ -120,13 +129,19 @@ export function ProductAuthModal(props: {
 
   useEffect(() => {
     if (!open) return;
+
     setMode(initialMode);
     resetFeedback();
     setPassword("");
-    setResetToken("");
     setCurrentPassword("");
     setConfirmPassword("");
-  }, [open, initialMode]);
+
+    if (initialMode === "reset" && hasInitialResetToken) {
+      setResetToken(initialResetToken);
+    } else {
+      setResetToken("");
+    }
+  }, [open, initialMode, initialResetToken, hasInitialResetToken]);
 
   useEffect(() => {
     if (!open) return;
@@ -435,13 +450,13 @@ export function ProductAuthModal(props: {
             </>
           ) : null}
 
-          {mode === "signup" ? (
+          {mode === "reset" && !hasInitialResetToken ? (
             <label className="product-field">
-              <span>{tr("auth.fullName")}</span>
+              <span>{tr("auth.resetToken")}</span>
               <input
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder={tr("auth.fullNamePlaceholder")}
+                value={resetToken}
+                onChange={(e) => setResetToken(e.target.value)}
+                placeholder={tr("auth.resetTokenPlaceholder")}
               />
             </label>
           ) : null}

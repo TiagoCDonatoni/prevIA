@@ -1,5 +1,14 @@
 import React from "react";
-import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import type { Lang } from "../../i18n";
 import { publicCopy } from "../content/publicCopy";
@@ -188,7 +197,8 @@ const PUBLIC_FOOTER_COPY = {
 export function PublicLayout() {
   const { lang } = useParams<{ lang: string }>();
   const location = useLocation();
-  const navigate = useNavigate();
+  const navigate = useNavigate();]
+  const [searchParams, setSearchParams] = useSearchParams();
 
   React.useLayoutEffect(() => {
     if (location.hash) return;
@@ -211,6 +221,8 @@ export function PublicLayout() {
   const [authInitialMode, setAuthInitialMode] = React.useState<
     "signup" | "login" | "forgot" | "reset"
   >("signup");
+
+  const [authInitialResetToken, setAuthInitialResetToken] = React.useState("");
 
   const navItems = [
     {
@@ -256,9 +268,21 @@ export function PublicLayout() {
 
   function openAuthModal(mode: "signup" | "login") {
     setAuthInitialMode(mode);
+    setAuthInitialResetToken("");
     setIsMobileMenuOpen(false);
     setAuthOpen(true);
   }
+
+  React.useEffect(() => {
+    const auth = String(searchParams.get("auth") || "").trim().toLowerCase();
+    const token = String(searchParams.get("token") || "").trim();
+
+    if (auth !== "reset" || !token) return;
+
+    setAuthInitialMode("reset");
+    setAuthInitialResetToken(token);
+    setAuthOpen(true);
+  }, [searchParams]); 
 
   if (!isValidLang) {
     return <Navigate to="/pt" replace />;
@@ -485,9 +509,21 @@ export function PublicLayout() {
           open={authOpen}
           lang={currentLang as Lang}
           initialMode={authInitialMode}
-          onClose={() => setAuthOpen(false)}
+          initialResetToken={authInitialResetToken}
+          onClose={() => {
+            setAuthOpen(false);
+            setAuthInitialResetToken("");
+
+            if (searchParams.get("auth") === "reset" || searchParams.get("token")) {
+              const nextParams = new URLSearchParams(searchParams);
+              nextParams.delete("auth");
+              nextParams.delete("token");
+              setSearchParams(nextParams, { replace: true });
+            }
+          }}
           onAuthSuccess={async () => {
             setAuthOpen(false);
+            setAuthInitialResetToken("");
             navigate("/app");
           }}
         />
