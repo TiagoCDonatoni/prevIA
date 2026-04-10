@@ -495,8 +495,11 @@ export default function ProductIndex() {
   const [selectedId, setSelectedId] = useState<string>("");
 
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const [analysisOpening, setAnalysisOpening] = useState(false);
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
+
+  const isAnalysisLoading = analysisOpening || quoteLoading;
 
   const [isMobileAnalysisView, setIsMobileAnalysisView] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -911,27 +914,47 @@ export default function ProductIndex() {
       return;
     }
 
-    const fixtureKey = String(selectedId);
+    async function onRevealAndOpen() {
+      if (!selectedId) return;
 
-    const r = store.backendUsage.is_ready
-      ? await store.revealViaBackend(fixtureKey)
-      : store.tryReveal(fixtureKey);
+      const ev = visibleEvents.find((e) => String(e.event_id) === String(selectedId));
+      const hasAnalysis =
+        ev?.match_status === "MODEL_FOUND" ||
+        ev?.match_status === "EXACT" ||
+        ev?.match_status === "PROBABLE";
 
-    if (!r.ok) {
-      if (r.reason === "NO_CREDITS") {
-        setUpgradeReason("NO_CREDITS");
-        setUpgradeOpen(true);
+      if (ev && !hasAnalysis) {
+        setQuoteError(t(lang, "errors.matchUnreliable"));
         return;
       }
 
-      if (r.reason !== "ALREADY_REVEALED") {
-        console.error("Reveal failed:", r.reason);
-        return;
+      const fixtureKey = String(selectedId);
+
+      setAnalysisOpening(true);
+
+      try {
+        const r = store.backendUsage.is_ready
+          ? await store.revealViaBackend(fixtureKey)
+          : store.tryReveal(fixtureKey);
+
+        if (!r.ok) {
+          if (r.reason === "NO_CREDITS") {
+            setUpgradeReason("NO_CREDITS");
+            setUpgradeOpen(true);
+            return;
+          }
+
+          if (r.reason !== "ALREADY_REVEALED") {
+            console.error("Reveal failed:", r.reason);
+            return;
+          }
+        }
+
+        await runQuote(fixtureKey);
+      } finally {
+        setAnalysisOpening(false);
       }
     }
-
-    await runQuote(fixtureKey);
-  }
 
   useEffect(() => {
     loadLeagues();
@@ -1107,7 +1130,7 @@ export default function ProductIndex() {
 
   const analysisOpened =
     alreadyRevealed ||
-    quoteLoading ||
+    isAnalysisLoading ||
     !!quote ||
     !!quoteError;
 
@@ -1155,10 +1178,10 @@ export default function ProductIndex() {
                 <button
                   className="pi-btn"
                   onClick={onRevealAndOpen}
-                  disabled={!selectedId || quoteLoading}
+                  disabled={!selectedId || isAnalysisLoading}
                   title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
                 >
-                  {quoteLoading
+                  {isAnalysisLoading
                     ? (lang === "en"
                         ? "Loading analysis..."
                         : lang === "es"
@@ -2056,7 +2079,7 @@ return (
       </div>
     ) : null}
 
-    {quoteLoading ? (
+    {isAnalysisLoading ? (
       <div className="pi-analysis-loading-overlay" aria-live="polite" aria-busy="true">
         <div className="pi-analysis-loading-card">
           <div className="pi-analysis-loading-spinner" aria-hidden="true" />
