@@ -5,6 +5,7 @@ import type {
   Narrative1x2Probs,
   NarrativeBlock,
   NarrativeResponse,
+  NarrativeStyleId,
   SportNarrativeRequest,
 } from "../../../core/types";
 import { pickVariant } from "../../../core/selectors";
@@ -185,21 +186,21 @@ function balancedHeadlineOptions(lang: Lang) {
   return [
     langText(
       lang,
-      "Jogo aberto, sem um lado claramente dominante.",
-      "Open matchup with no clearly dominant side.",
-      "Partido abierto, sin un lado claramente dominante."
+      "Jogo bem aberto, sem um favorito tão claro.",
+      "This looks like an open game, without a clear favorite.",
+      "Pinta de partido abierto, sin un favorito demasiado claro."
     ),
     langText(
       lang,
-      "O confronto parece equilibrado e com pouca separação entre cenários.",
-      "The game looks balanced, with limited separation between outcomes.",
-      "El cruce se ve equilibrado y con poca separación entre escenarios."
+      "O confronto parece equilibrado e sem muita distância entre os cenários.",
+      "The matchup looks balanced, with little distance between outcomes.",
+      "El cruce luce equilibrado y con poca distancia entre escenarios."
     ),
     langText(
       lang,
-      "Não há um favorito claro neste jogo.",
-      "No side opens as a clear favorite here.",
-      "No aparece un favorito claro en este partido."
+      "Aqui o jogo parece mais parelho do que decidido.",
+      "This one looks more even than settled.",
+      "Aquí el partido parece más parejo que resuelto."
     ),
   ];
 }
@@ -216,70 +217,70 @@ function sideHeadlineOptions(
   if (dominant === "D") {
     const pt: Record<typeof strength, string[]> = {
       slight: [
-        "O empate segue muito vivo neste jogo.",
-        "O modelo mantém o empate claramente em jogo aqui.",
+        "O empate aparece bastante no radar deste jogo.",
+        "O empate segue bem vivo por aqui.",
       ],
       moderate: [
-        "O empate lidera a leitura, embora o jogo siga competitivo.",
-        "O modelo se inclina para o empate, mas sem uma grande brecha.",
+        "O empate até aparece um pouco melhor neste confronto.",
+        "Os números deixam o empate com uma cara interessante aqui.",
       ],
       relevant: [
-        "O empate vira um resultado central e relevante aqui.",
-        "O modelo vê o empate como cenário forte neste confronto.",
+        "O empate ganha força e merece bastante atenção.",
+        "Neste jogo, o empate vira um caminho bem respeitável.",
       ],
       strong: [
-        "O empate aparece com muita força na projeção atual.",
-        "Este é um cenário de empate forte em termos de 1x2.",
+        "O empate vem forte neste confronto.",
+        "Os números colocam o empate bem no centro da leitura aqui.",
       ],
       clear: [
-        "O empate é o cenário dominante do 1x2 aqui.",
-        "O modelo transforma o empate no desfecho mais claro deste jogo.",
+        "O empate é o cenário que mais chama atenção aqui.",
+        "Entre os caminhos do 1x2, o empate é o que aparece melhor neste jogo.",
       ],
     };
 
     const en: Record<typeof strength, string[]> = {
       slight: [
-        "Draw stays very live in this matchup.",
-        "The model keeps the draw firmly in play here.",
+        "The draw is very much on the radar here.",
+        "The draw stays very live in this matchup.",
       ],
       moderate: [
-        "Draw edges the read, though the game still looks competitive.",
-        "The model leans toward a draw, but not by a huge gap.",
+        "The draw even looks a bit better in this game.",
+        "The numbers give the draw a decent look here.",
       ],
       relevant: [
-        "Draw becomes a relevant central outcome here.",
-        "The model sees draw as a strong scenario in this game.",
+        "The draw gains strength and deserves real attention.",
+        "In this one, the draw becomes a very respectable path.",
       ],
       strong: [
-        "Draw is strongly present in the current projection.",
-        "This is a strong draw scenario in 1x2 terms.",
+        "The draw comes in strong for this matchup.",
+        "The numbers place the draw right at the center of the read here.",
       ],
       clear: [
-        "Draw is the dominant 1x2 scenario here.",
-        "The model makes draw the clearest outcome in this matchup.",
+        "The draw is the outcome that stands out the most here.",
+        "Among the 1x2 outcomes, the draw is the one that shows up best.",
       ],
     };
 
     const es: Record<typeof strength, string[]> = {
       slight: [
-        "El empate sigue muy vivo en este partido.",
-        "El modelo mantiene al empate claramente en juego aquí.",
+        "El empate aparece bastante en el radar de este partido.",
+        "El empate sigue muy vivo por aquí.",
       ],
       moderate: [
-        "El empate encabeza la lectura, aunque el partido siga competitivo.",
-        "El modelo se inclina por el empate, pero sin una gran brecha.",
+        "El empate incluso luce un poco mejor en este cruce.",
+        "Los números le dan al empate una pinta interesante aquí.",
       ],
       relevant: [
-        "El empate se vuelve un resultado central y relevante aquí.",
-        "El modelo ve al empate como un escenario fuerte en este partido.",
+        "El empate gana fuerza y merece bastante atención.",
+        "En este partido, el empate se vuelve un camino muy respetable.",
       ],
       strong: [
-        "El empate aparece con mucha fuerza en la proyección actual.",
-        "Este es un escenario de empate fuerte en términos de 1x2.",
+        "El empate viene fuerte en este encuentro.",
+        "Los números colocan al empate en el centro de la lectura aquí.",
       ],
       clear: [
-        "El empate es el escenario dominante del 1x2 aquí.",
-        "El modelo convierte al empate en el resultado más claro de este partido.",
+        "El empate es el resultado que más llama la atención aquí.",
+        "Entre los caminos del 1x2, el empate es el que mejor aparece en este partido.",
       ],
     };
 
@@ -290,70 +291,70 @@ function sideHeadlineOptions(
 
   const pt: Record<typeof strength, string[]> = {
     slight: [
-      `${side} aparece um passo à frente, mas sem muita folga.`,
-      `Há uma leve inclinação para ${side} neste confronto.`,
+      `${side} aparece um pouco melhor aqui.`,
+      `Há uma leve vantagem para ${side} neste jogo.`,
     ],
     moderate: [
-      `${side} tem vantagem moderada, embora o jogo siga aberto.`,
-      `O confronto favorece ${side}, mas ainda sem favoritismo claro.`,
+      `${side} chega com uma vantagem razoável, mas sem sobrar.`,
+      `${side} vem na frente, embora o jogo siga bem aberto.`,
     ],
     relevant: [
-      `${side} carrega um favoritismo relevante na leitura atual.`,
-      `O modelo dá uma vantagem perceptível para ${side}.`,
+      `${side} aparece melhor e merece respeito neste confronto.`,
+      `${side} puxa a leitura principal deste jogo.`,
     ],
     strong: [
-      `${side} chega como favorito forte, embora não em nível absoluto.`,
-      `O modelo mostra favoritismo forte para ${side}.`,
+      `${side} entra como favorito mais nítido aqui.`,
+      `${side} é o lado que mais convence neste confronto.`,
     ],
     clear: [
-      `${side} é o favorito claro aqui.`,
-      `O modelo coloca ${side} bem à frente dos demais cenários.`,
+      `${side} é o lado mais forte do jogo.`,
+      `${side} aparece com bastante força neste confronto.`,
     ],
   };
 
   const en: Record<typeof strength, string[]> = {
     slight: [
-      `${side} is a step ahead, but without much room.`,
-      `There is a slight lean toward ${side} in this matchup.`,
+      `${side} looks a bit better here.`,
+      `There is a slight edge toward ${side} in this game.`,
     ],
     moderate: [
-      `${side} holds a moderate edge, though the game remains open.`,
-      `The matchup favors ${side}, but not at a clear-favorite level.`,
+      `${side} comes in with a fair edge, but not by much.`,
+      `${side} is ahead, though the game still feels quite open.`,
     ],
     relevant: [
-      `${side} carries relevant favoritism in the current read.`,
-      `The model gives ${side} a noticeable edge here.`,
+      `${side} looks better and deserves respect in this matchup.`,
+      `${side} leads the main read for this game.`,
     ],
     strong: [
-      `${side} comes in as a strong favorite, though not an absolute lock.`,
-      `The model shows strong favoritism for ${side}.`,
+      `${side} comes in as the more obvious favorite here.`,
+      `${side} is the side that makes the strongest case in this matchup.`,
     ],
     clear: [
-      `${side} is the clear favorite here.`,
-      `The model places ${side} well ahead of the rest.`,
+      `${side} is the strongest side in this game.`,
+      `${side} shows up with real strength in this matchup.`,
     ],
   };
 
   const es: Record<typeof strength, string[]> = {
     slight: [
-      `${side} aparece un paso por delante, pero sin demasiado margen.`,
-      `Hay una leve inclinación hacia ${side} en este partido.`,
+      `${side} aparece un poco mejor aquí.`,
+      `Hay una leve ventaja para ${side} en este partido.`,
     ],
     moderate: [
-      `${side} tiene una ventaja moderada, aunque el partido sigue abierto.`,
-      `El cruce favorece a ${side}, pero aún sin favoritismo claro.`,
+      `${side} llega con una ventaja razonable, pero sin sobrar.`,
+      `${side} viene por delante, aunque el partido sigue bastante abierto.`,
     ],
     relevant: [
-      `${side} carga con un favoritismo relevante en la lectura actual.`,
-      `El modelo da una ventaja visible a ${side}.`,
+      `${side} aparece mejor y merece respeto en este cruce.`,
+      `${side} lidera la lectura principal de este partido.`,
     ],
     strong: [
-      `${side} llega como favorito fuerte, aunque no como un cierre absoluto.`,
-      `El modelo muestra un favoritismo fuerte para ${side}.`,
+      `${side} entra como favorito más claro aquí.`,
+      `${side} es el lado que más convence en este encuentro.`,
     ],
     clear: [
-      `${side} es el favorito claro aquí.`,
-      `El modelo coloca a ${side} claramente por delante del resto.`,
+      `${side} es el lado más fuerte del partido.`,
+      `${side} aparece con bastante fuerza en este cruce.`,
     ],
   };
 
@@ -373,46 +374,46 @@ function summaryOptions(
   if (balanced) {
     const pt: Record<ConfidenceLevel, string[]> = {
       high: [
-        "Mesmo com um sinal estável do modelo, o jogo segue perto demais para apontar um lado claro.",
-        "A leitura é organizada, embora equilibrada em termos de 1x2.",
+        "Mesmo com um sinal estável do modelo, o jogo segue equilibrado demais para apontar um lado com segurança.",
+        "Os números até se organizam bem, mas continuam mostrando um confronto bem parelho.",
       ],
       medium: [
-        "O modelo aponta alguma direção, mas a brecha ainda é curta demais para cravar leitura forte.",
-        "Este duelo parece equilibrado o suficiente para exigir cautela.",
+        "Tem uma direção ali, mas ainda não com distância suficiente para falar em lado claro.",
+        "É um daqueles jogos em que vale mais respeitar o equilíbrio do que forçar uma certeza.",
       ],
       low: [
-        "A baixa confiança reforça o caráter equilibrado deste confronto.",
-        "Jogo apertado com confiança limitada pede cautela extra.",
+        "Com a confiança mais baixa, o equilíbrio deste jogo pesa ainda mais.",
+        "O confronto já parecia aberto, e a confiança limitada reforça essa cautela.",
       ],
     };
 
     const en: Record<ConfidenceLevel, string[]> = {
       high: [
-        "Even with a stable model signal, the game stays close enough to avoid a clear side.",
-        "The read is orderly, yet still balanced in 1x2 terms.",
+        "Even with a stable model signal, the game still looks too balanced for a firm side.",
+        "The numbers are orderly, but they still point to a very even matchup.",
       ],
       medium: [
-        "The model points somewhere, but the gap is still too small for a firm call.",
-        "This looks balanced enough to demand caution.",
+        "There is some direction there, but not enough distance to call a clear side.",
+        "This is one of those games where respecting the balance matters more than forcing certainty.",
       ],
       low: [
-        "Low confidence reinforces the balanced nature of this matchup.",
-        "A tight game with limited confidence deserves extra caution.",
+        "With lower confidence, the balance of this game matters even more.",
+        "The matchup already looked open, and limited confidence only reinforces that caution.",
       ],
     };
 
     const es: Record<ConfidenceLevel, string[]> = {
       high: [
-        "Incluso con una señal estable del modelo, el partido sigue demasiado parejo para marcar un lado claro.",
-        "La lectura es ordenada, aunque equilibrada en términos de 1x2.",
+        "Incluso con una señal estable del modelo, el partido sigue demasiado equilibrado para marcar un lado con firmeza.",
+        "Los números se ordenan bien, pero siguen mostrando un cruce muy parejo.",
       ],
       medium: [
-        "El modelo apunta hacia alguna dirección, pero la brecha sigue siendo corta para una lectura firme.",
-        "Este cruce luce lo bastante equilibrado como para exigir cautela.",
+        "Hay cierta dirección, pero todavía sin distancia suficiente para hablar de un lado claro.",
+        "Es uno de esos partidos donde conviene respetar el equilibrio antes que forzar una certeza.",
       ],
       low: [
-        "La baja confianza refuerza el carácter equilibrado de este partido.",
-        "Un partido cerrado y con confianza limitada pide más cautela.",
+        "Con una confianza más baja, el equilibrio de este partido pesa todavía más.",
+        "El cruce ya parecía abierto, y la confianza limitada refuerza esa cautela.",
       ],
     };
 
@@ -423,46 +424,46 @@ function summaryOptions(
 
   const pt: Record<ConfidenceLevel, string[]> = {
     high: [
-      `O modelo coloca o cenário dominante perto de ${pctText}, com leitura relativamente estável por trás.`,
-      `A projeção leva o desfecho principal para algo em torno de ${pctText}, apoiado por boa estabilidade.`,
+      `Hoje o lado principal aparece perto de ${pctText}, com números relativamente firmes por trás.`,
+      `Os números deixam o caminho principal em torno de ${pctText}, com uma base mais estável.`,
     ],
     medium: [
-      `O cenário principal gira em torno de ${pctText}, mas ainda com espaço para resistência do restante do campo.`,
-      `O lado dominante chega à faixa de ${pctText}, mas ainda com alguma incerteza.`,
+      `O lado que lidera o jogo gira perto de ${pctText}, mas ainda sem transformar isso em passeio.`,
+      `A vantagem principal fica por volta de ${pctText}, ainda com espaço para o resto do jogo reagir.`,
     ],
     low: [
-      `O cenário principal gira em torno de ${pctText}, mas a confiança continua limitada.`,
-      `Há um lado visível perto de ${pctText}, porém com sinal de confiança cauteloso.`,
+      `O lado principal aparece perto de ${pctText}, mas ainda com uma dose boa de incerteza.`,
+      `Tem um lado na frente perto de ${pctText}, só que a confiança aqui pede mais calma.`,
     ],
   };
 
   const en: Record<ConfidenceLevel, string[]> = {
     high: [
-      `The model puts the dominant side around ${pctText}, with a stable read behind it.`,
-      `Projection points to roughly ${pctText} for the leading outcome, supported by good stability.`,
+      `Today the main side shows up near ${pctText}, with fairly solid numbers behind it.`,
+      `The numbers place the main path around ${pctText}, with a steadier base underneath.`,
     ],
     medium: [
-      `The leading scenario is around ${pctText}, but still with room for pushback from the field.`,
-      `The dominant side reaches about ${pctText}, but the read still carries some uncertainty.`,
+      `The leading side sits near ${pctText}, but not enough to call this a runaway spot.`,
+      `The main edge is around ${pctText}, still with room for the rest of the game to push back.`,
     ],
     low: [
-      `The leading scenario is around ${pctText}, but confidence stays limited.`,
-      `There is a visible leading side near ${pctText}, but with a cautious confidence signal.`,
+      `The main side shows up near ${pctText}, but still with a fair amount of uncertainty.`,
+      `There is a side ahead near ${pctText}, though confidence here asks for a calmer read.`,
     ],
   };
 
   const es: Record<ConfidenceLevel, string[]> = {
     high: [
-      `El modelo coloca al escenario dominante cerca del ${pctText}, con una lectura bastante estable detrás.`,
-      `La proyección lleva el resultado principal a alrededor de ${pctText}, apoyado por una buena estabilidad.`,
+      `Hoy el lado principal aparece cerca del ${pctText}, con números bastante firmes detrás.`,
+      `Los números dejan el camino principal alrededor del ${pctText}, con una base más estable.`,
     ],
     medium: [
-      `El escenario principal ronda el ${pctText}, pero todavía con margen para resistencia del resto.`,
-      `El lado dominante llega a cerca del ${pctText}, pero aún con cierta incertidumbre.`,
+      `El lado que lidera ronda el ${pctText}, pero todavía sin convertir esto en un paseo.`,
+      `La ventaja principal queda cerca del ${pctText}, todavía con margen para que el resto del partido responda.`,
     ],
     low: [
-      `El escenario principal ronda el ${pctText}, pero la confianza sigue limitada.`,
-      `Hay un lado visible cerca del ${pctText}, pero con una señal de confianza prudente.`,
+      `El lado principal aparece cerca del ${pctText}, pero todavía con una buena dosis de incertidumbre.`,
+      `Hay un lado por delante cerca del ${pctText}, aunque la confianza aquí pide más calma.`,
     ],
   };
 
@@ -474,34 +475,34 @@ function summaryOptions(
 function drawPressureOptions(lang: Lang, pressure: Exclude<DrawPressure, "low">) {
   const pt = {
     high: [
-      "O empate ainda merece bastante respeito na leitura final.",
-      "A pressão do empate segue alta e esfria o favoritismo.",
+      "Mesmo com um lado na frente, o empate ainda pesa bastante aqui.",
+      "O empate continua muito presente e segura um pouco esse favoritismo.",
     ],
     medium: [
-      "O empate continua relevante no pano de fundo desta projeção.",
-      "Ainda existe pressão suficiente de empate para evitar leitura de passeio.",
+      "O empate ainda aparece como pano de fundo importante deste jogo.",
+      "Tem empate o bastante rondando o jogo para evitar qualquer leitura exagerada.",
     ],
   };
 
   const en = {
     high: [
-      "The draw still deserves strong respect in the final read.",
-      "Draw pressure stays high enough to cool the favoritism.",
+      "Even with one side ahead, the draw still matters a lot here.",
+      "The draw remains very present and cools that favoritism a bit.",
     ],
     medium: [
-      "The draw remains relevant in the background of this projection.",
-      "There is still enough draw pressure to avoid calling this a runaway spot.",
+      "The draw still sits in the background as an important part of this game.",
+      "There is enough draw pressure here to avoid any exaggerated read.",
     ],
   };
 
   const es = {
     high: [
-      "El empate todavía merece mucho respeto en la lectura final.",
-      "La presión del empate sigue alta y enfría el favoritismo.",
+      "Incluso con un lado por delante, el empate sigue pesando bastante aquí.",
+      "El empate sigue muy presente y enfría un poco ese favoritismo.",
     ],
     medium: [
-      "El empate sigue siendo relevante en el fondo de esta proyección.",
-      "Todavía hay suficiente presión de empate como para no hablar de un escenario desbocado.",
+      "El empate todavía aparece como un fondo importante de este partido.",
+      "Hay suficiente presión de empate aquí como para evitar una lectura exagerada.",
     ],
   };
 
@@ -513,46 +514,46 @@ function drawPressureOptions(lang: Lang, pressure: Exclude<DrawPressure, "low">)
 function priceOptions(lang: Lang, tag: PriceEval["tag"], who: string) {
   const pt: Record<PriceEval["tag"], string[]> = {
     GOOD: [
-      `O preço atual de ${who} parece um pouco generoso frente ao modelo.`,
-      `A odd de ${who} fica acima da expectativa justa do modelo.`,
+      `A odd de ${who} parece boa para o cenário do jogo.`,
+      `Pelo que os números mostram, o preço de ${who} parece interessante.`,
     ],
     ALIGNED: [
-      `O preço de ${who} parece bem alinhado com o modelo.`,
-      `Há pouco desencontro entre modelo e mercado para ${who}.`,
+      `A odd de ${who} parece justa no momento.`,
+      `Aqui o preço de ${who} parece bem próximo do que o jogo sugere.`,
     ],
     BAD: [
-      `O preço de ${who} parece curto para o risco envolvido.`,
-      `Mesmo com apoio do modelo, a odd atual de ${who} não parece tão generosa.`,
+      `A odd de ${who} parece um pouco apertada para o risco.`,
+      `Mesmo com algum apoio dos números, o preço de ${who} não parece tão convidativo.`,
     ],
   };
 
   const en: Record<PriceEval["tag"], string[]> = {
     GOOD: [
-      `The current price for ${who} looks a bit generous versus the model.`,
-      `The odds on ${who} sit above the model's fair expectation.`,
+      `The odds on ${who} look good for the game setup.`,
+      `From what the numbers show, the price on ${who} looks interesting.`,
     ],
     ALIGNED: [
-      `The price on ${who} looks broadly aligned with the model.`,
-      `There is little mismatch between model and market for ${who}.`,
+      `The odds on ${who} look fair right now.`,
+      `Here the price on ${who} feels close to what the game suggests.`,
     ],
     BAD: [
-      `The price on ${who} looks a bit short for the risk involved.`,
-      `Even with support in the model, the current odds on ${who} are not very generous.`,
+      `The odds on ${who} look a bit tight for the risk.`,
+      `Even with some support from the numbers, the price on ${who} is not that inviting.`,
     ],
   };
 
   const es: Record<PriceEval["tag"], string[]> = {
     GOOD: [
-      `La cuota actual de ${who} parece algo generosa frente al modelo.`,
-      `La cuota de ${who} queda por encima del precio justo del modelo.`,
+      `La cuota de ${who} parece buena para este escenario.`,
+      `Por lo que muestran los números, el precio de ${who} parece interesante.`,
     ],
     ALIGNED: [
-      `La cuota de ${who} luce bastante alineada con el modelo.`,
-      `Hay poca diferencia entre modelo y mercado para ${who}.`,
+      `La cuota de ${who} parece justa ahora mismo.`,
+      `Aquí el precio de ${who} se siente bastante cerca de lo que sugiere el partido.`,
     ],
     BAD: [
-      `La cuota de ${who} se ve algo corta para el riesgo asumido.`,
-      `Incluso con apoyo del modelo, la cuota actual de ${who} no parece muy generosa.`,
+      `La cuota de ${who} parece un poco ajustada para el riesgo.`,
+      `Incluso con cierto apoyo de los números, el precio de ${who} no se ve tan atractivo.`,
     ],
   };
 
@@ -565,15 +566,15 @@ function lowPayOptions(lang: Lang) {
   return [
     langText(
       lang,
-      "Mesmo com leitura favorável, o retorno pode ficar limitado nesse número.",
-      "Even if the read is favorable, the payout may be limited at this number.",
-      "Aunque el escenario sea favorable, el retorno puede verse limitado en esta cuota."
+      "Ter um lado a favor não significa, por si só, que a odd esteja boa.",
+      "Having the side in your favor does not automatically mean the odds are good.",
+      "Tener el lado a favor no significa, por sí solo, que la cuota sea buena."
     ),
     langText(
       lang,
-      "Ter apoio do modelo não torna o preço automaticamente atraente.",
-      "Support from the model does not automatically make the price attractive.",
-      "El apoyo del modelo no convierte automáticamente al precio en atractivo."
+      "Às vezes o jogo aponta para um lado, mas o preço já veio espremido demais.",
+      "Sometimes the game points one way, but the price is already too squeezed.",
+      "A veces el partido apunta hacia un lado, pero el precio ya viene demasiado apretado."
     ),
   ];
 }
@@ -582,22 +583,23 @@ function lowConfidenceOptions(lang: Lang) {
   return [
     langText(
       lang,
-      "A confiança aqui é baixa, então volatilidade e eficiência de mercado merecem mais respeito.",
-      "Confidence is low here, so swings and market efficiency deserve extra respect.",
-      "La confianza aquí es baja, así que la volatilidad y la eficiencia del mercado merecen más respeto."
+      "A confiança aqui é mais baixa, então vale tratar essa leitura com um pouco mais de cuidado.",
+      "Confidence is lower here, so this read deserves a bit more care.",
+      "La confianza aquí es más baja, así que conviene tratar esta lectura con algo más de cuidado."
     ),
     langText(
       lang,
-      "Esta projeção traz incerteza suficiente para pedir cautela extra.",
-      "This projection carries enough uncertainty to justify extra caution.",
-      "Esta proyección trae suficiente incertidumbre como para exigir más cautela."
+      "Os números ajudam a orientar, mas este jogo ainda deixa espaço para bastante variação.",
+      "The numbers help guide the read, but this game still leaves room for plenty of variance.",
+      "Los números ayudan a orientar, pero este partido todavía deja espacio para bastante variación."
     ),
   ];
 }
 
 export function generateFootball1x2Narrative(
   req: SportNarrativeRequest,
-  profile: NarrativeProfile
+  profile: NarrativeProfile,
+  _style: NarrativeStyleId
 ): NarrativeResponse {
   const blocks: NarrativeBlock[] = [];
   const tags: string[] = [];
@@ -611,27 +613,27 @@ export function generateFootball1x2Narrative(
       type: "headline",
       text: langText(
         req.lang,
-        "Análise indisponível no momento.",
-        "Analysis unavailable right now.",
-        "Análisis no disponible en este momento."
+        "Não deu para montar a leitura deste jogo agora.",
+        "Could not build the read for this game right now.",
+        "No fue posible montar la lectura de este partido ahora."
       ),
     });
     blocks.push({
       type: "warning",
       text: langText(
         req.lang,
-        "Sem probabilidades do modelo disponíveis para este jogo.",
-        "No model probabilities available for this match.",
-        "No hay probabilidades del modelo disponibles para este partido."
+        "As probabilidades do modelo não vieram disponíveis neste momento.",
+        "The model probabilities are not available at the moment.",
+        "Las probabilidades del modelo no están disponibles en este momento."
       ),
     });
     blocks.push({
       type: "disclaimer",
       text: langText(
         req.lang,
-        "Isso é uma estimativa estatística e não garante o resultado.",
-        "This is a statistical estimate and does not guarantee the result.",
-        "Esta es una estimación estadística y no garantiza el resultado."
+        "É uma leitura baseada nos números, não uma certeza do que vai acontecer.",
+        "This is a numbers-based read, not a certainty of what will happen.",
+        "Es una lectura basada en números, no una certeza de lo que va a pasar."
       ),
     });
 
@@ -735,9 +737,9 @@ export function generateFootball1x2Narrative(
           type: "pricePro",
           text: langText(
             req.lang,
-            `Preço do modelo para ${who}: mercado ${market} vs justo ${fair} (edge ${edgePp}pp).`,
-            `Model pricing for ${who}: market ${market} vs fair ${fair} (edge ${edgePp}pp).`,
-            `Precio del modelo para ${who}: mercado ${market} vs justo ${fair} (edge ${edgePp}pp).`
+            `Nos números do modelo, ${who} estaria mais perto de ${fair}; o mercado está em ${market} (diferença de ${edgePp}pp).`,
+            `On the model side, ${who} would sit closer to ${fair}; the market is at ${market} (${edgePp}pp gap).`,
+            `En los números del modelo, ${who} estaría más cerca de ${fair}; el mercado está en ${market} (brecha de ${edgePp}pp).`
           ),
         });
       }
@@ -749,9 +751,9 @@ export function generateFootball1x2Narrative(
       type: "bullet",
       text: langText(
         req.lang,
-        "Use isso como leitura de direção, não como certeza.",
-        "Use this as a directional read, not as a certainty.",
-        "Usa esto como una lectura de dirección, no como certeza."
+        "Use isso como direção do jogo, não como garantia.",
+        "Use this as a direction for the game, not as a guarantee.",
+        "Usa esto como dirección del partido, no como garantía."
       ),
     });
   }
@@ -761,9 +763,9 @@ export function generateFootball1x2Narrative(
       type: "bullet",
       text: langText(
         req.lang,
-        "Gestão de risco pesa ainda mais quando empate e margens curtas seguem vivos.",
-        "Risk management matters most when draws and short margins stay alive.",
-        "La gestión de riesgo pesa aún más cuando el empate y los márgenes cortos siguen vivos."
+        "Quando empate e margens curtas seguem vivos, o risco do jogo pesa ainda mais.",
+        "When draws and short margins stay alive, the game risk matters even more.",
+        "Cuando el empate y los márgenes cortos siguen vivos, el riesgo del partido pesa aún más."
       ),
     });
   }
@@ -784,9 +786,9 @@ export function generateFootball1x2Narrative(
     type: "disclaimer",
     text: langText(
       req.lang,
-      "Isso é uma estimativa estatística e não garante o resultado.",
-      "This is a statistical estimate and does not guarantee the result.",
-      "Esta es una estimación estadística y no garantiza el resultado."
+      "É uma leitura baseada nos números, não uma certeza do que vai acontecer.",
+      "This is a numbers-based read, not a certainty of what will happen.",
+      "Es una lectura basada en números, no una certeza de lo que va a pasar."
     ),
   });
 

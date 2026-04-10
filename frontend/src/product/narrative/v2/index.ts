@@ -4,4 +4,5 @@ export type {
   SportNarrativeRequest,
   NarrativeResponse,
   NarrativeBlock,
+  NarrativeStyleId,
 } from "./core/types";

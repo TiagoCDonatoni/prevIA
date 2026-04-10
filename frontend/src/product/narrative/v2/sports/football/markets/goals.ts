@@ -1,6 +1,11 @@
 import type { Lang } from "../../../../../i18n";
 import type { NarrativeProfile } from "../../../core/profiles";
-import type { NarrativeBlock, NarrativeResponse, SportNarrativeRequest } from "../../../core/types";
+import type {
+  NarrativeBlock,
+  NarrativeResponse,
+  NarrativeStyleId,
+  SportNarrativeRequest,
+} from "../../../core/types";
 import { pickVariant } from "../../../core/selectors";
 
 type TotalsStrength = "balanced" | "slight" | "moderate" | "strong";
@@ -107,8 +112,8 @@ function classifyBtts(pYes: number | null | undefined, pNo: number | null | unde
 function totalsLabelOptions(lang: Lang, direction: TotalsDirection, strength: TotalsStrength) {
   if (direction === "balanced" || strength === "balanced") {
     return [
-      langText(lang, "Linha equilibrada", "Balanced totals line", "Línea equilibrada"),
-      langText(lang, "Totais equilibrados", "Even totals setup", "Totales equilibrados"),
+      langText(lang, "Linha de gols bem ajustada", "Balanced goal line", "Línea de goles equilibrada"),
+      langText(lang, "Mercado de gols bem parelho", "Even goals market", "Mercado de goles bastante parejo"),
     ];
   }
 
@@ -116,38 +121,38 @@ function totalsLabelOptions(lang: Lang, direction: TotalsDirection, strength: To
   const labels = {
     pt: {
       over: {
-        slight: ["Leve viés para over", "Sinal leve de over"],
-        moderate: ["Viés moderado para over", "Over melhor posicionado"],
-        strong: ["Sinal forte de over", "Over se destaca"],
+        slight: ["Leve sinal de over", "Over um pouco melhor"],
+        moderate: ["Over com boa cara", "Over melhor posicionado"],
+        strong: ["Over chama atenção", "Over vem forte"],
       },
       under: {
-        slight: ["Leve viés para under", "Sinal leve de under"],
-        moderate: ["Viés moderado para under", "Under melhor posicionado"],
-        strong: ["Sinal forte de under", "Under se destaca"],
+        slight: ["Leve sinal de under", "Under um pouco melhor"],
+        moderate: ["Under com boa cara", "Under melhor posicionado"],
+        strong: ["Under chama atenção", "Under vem forte"],
       },
     },
     en: {
       over: {
-        slight: ["Slight lean to over", "Light over signal"],
-        moderate: ["Moderate lean to over", "Over in a better spot"],
-        strong: ["Strong over signal", "Over stands out"],
+        slight: ["Slight over signal", "Over looks a bit better"],
+        moderate: ["Over has a decent look", "Over is in the better spot"],
+        strong: ["Over stands out", "Over comes in strong"],
       },
       under: {
-        slight: ["Slight lean to under", "Light under signal"],
-        moderate: ["Moderate lean to under", "Under in a better spot"],
-        strong: ["Strong under signal", "Under stands out"],
+        slight: ["Slight under signal", "Under looks a bit better"],
+        moderate: ["Under has a decent look", "Under is in the better spot"],
+        strong: ["Under stands out", "Under comes in strong"],
       },
     },
     es: {
       over: {
-        slight: ["Leve sesgo al over", "Señal ligera de over"],
-        moderate: ["Sesgo moderado al over", "Over mejor posicionado"],
-        strong: ["Señal fuerte de over", "Over destaca"],
+        slight: ["Leve señal de over", "Over aparece un poco mejor"],
+        moderate: ["Over tiene buena pinta", "Over queda mejor posicionado"],
+        strong: ["Over llama la atención", "Over viene fuerte"],
       },
       under: {
-        slight: ["Leve sesgo al under", "Señal ligera de under"],
-        moderate: ["Sesgo moderado al under", "Under mejor posicionado"],
-        strong: ["Señal fuerte de under", "Under destaca"],
+        slight: ["Leve señal de under", "Under aparece un poco mejor"],
+        moderate: ["Under tiene buena pinta", "Under queda mejor posicionado"],
+        strong: ["Under llama la atención", "Under viene fuerte"],
       },
     },
   };
@@ -166,15 +171,15 @@ function totalsHeadlineOptions(
     return [
       langText(
         lang,
-        "A linha de {line} gols parece bem equilibrada neste confronto.",
-        "The {line} goals line looks well balanced in this matchup.",
-        "La línea de {line} goles luce bastante equilibrada en este partido."
+        "A linha de {line} gols parece bem ajustada para este jogo.",
+        "The {line} goals line looks well set for this game.",
+        "La línea de {line} goles parece bien ajustada para este partido."
       ),
       langText(
         lang,
-        "O modelo não separa muito over e under em {line}.",
-        "The model does not separate over and under much on {line}.",
-        "El modelo no separa demasiado over y under en {line}."
+        "Aqui o over e o under aparecem bem próximos na leitura.",
+        "Here over and under show up very close in the read.",
+        "Aquí over y under aparecen muy cerca en la lectura."
       ),
     ];
   }
@@ -182,44 +187,44 @@ function totalsHeadlineOptions(
   if (direction === "over") {
     const pt = {
       slight: [
-        "Há uma leve inclinação para over {line} gols.",
-        "Over {line} fica um pouco à frente no modelo.",
+        "O jogo aponta um pouco para over {line}.",
+        "Over {line} aparece levemente à frente neste confronto.",
       ],
       moderate: [
-        "O modelo se inclina com alguma consistência para over {line} gols.",
-        "Há uma configuração razoavelmente favorável para over {line}.",
+        "Over {line} aparece com uma cara interessante aqui.",
+        "Os números dão um apoio razoável para over {line}.",
       ],
       strong: [
-        "Over {line} gols se destaca com clareza na leitura atual.",
-        "O modelo mostra apoio forte para over {line} aqui.",
+        "Over {line} ganha força neste jogo.",
+        "A leitura de gols puxa bem para over {line} aqui.",
       ],
     };
     const en = {
       slight: [
-        "There is a slight lean toward over {line} goals.",
-        "Over {line} sits a touch ahead in the model.",
+        "The game leans a bit toward over {line}.",
+        "Over {line} sits slightly ahead in this matchup.",
       ],
       moderate: [
-        "The model leans with some consistency toward over {line} goals.",
-        "There is a reasonably favorable setup for over {line}.",
+        "Over {line} has an interesting look here.",
+        "The numbers give fair support to over {line}.",
       ],
       strong: [
-        "Over {line} goals stands out clearly in the current read.",
-        "The model shows strong support for over {line} here.",
+        "Over {line} gains real strength in this game.",
+        "The goals read leans strongly toward over {line} here.",
       ],
     };
     const es = {
       slight: [
-        "Hay una leve inclinación hacia over {line} goles.",
-        "Over {line} queda apenas por delante en el modelo.",
+        "El partido apunta un poco hacia over {line}.",
+        "Over {line} aparece ligeramente por delante en este cruce.",
       ],
       moderate: [
-        "El modelo se inclina con cierta consistencia hacia over {line} goles.",
-        "Hay una configuración razonablemente favorable para over {line}.",
+        "Over {line} tiene una pinta interesante aquí.",
+        "Los números dan un apoyo razonable para over {line}.",
       ],
       strong: [
-        "Over {line} goles destaca con claridad en la lectura actual.",
-        "El modelo muestra apoyo fuerte para over {line} aquí.",
+        "Over {line} gana fuerza en este partido.",
+        "La lectura de goles tira con fuerza hacia over {line} aquí.",
       ],
     };
 
@@ -230,44 +235,44 @@ function totalsHeadlineOptions(
 
   const pt = {
     slight: [
-      "Há uma leve inclinação para under {line} gols.",
-      "Under {line} fica um pouco à frente no modelo.",
+      "O jogo aponta um pouco para under {line}.",
+      "Under {line} aparece levemente à frente neste confronto.",
     ],
     moderate: [
-      "O modelo se inclina com alguma consistência para under {line} gols.",
-      "Há uma configuração razoavelmente favorável para under {line}.",
+      "Under {line} aparece com uma cara interessante aqui.",
+      "Os números dão um apoio razoável para under {line}.",
     ],
     strong: [
-      "Under {line} gols se destaca com clareza na leitura atual.",
-      "O modelo mostra apoio forte para under {line} aqui.",
+      "Under {line} ganha força neste jogo.",
+      "A leitura de gols puxa bem para under {line} aqui.",
     ],
   };
   const en = {
     slight: [
-      "There is a slight lean toward under {line} goals.",
-      "Under {line} sits a touch ahead in the model.",
+      "The game leans a bit toward under {line}.",
+      "Under {line} sits slightly ahead in this matchup.",
     ],
     moderate: [
-      "The model leans with some consistency toward under {line} goals.",
-      "There is a reasonably favorable setup for under {line}.",
+      "Under {line} has an interesting look here.",
+      "The numbers give fair support to under {line}.",
     ],
     strong: [
-      "Under {line} goals stands out clearly in the current read.",
-      "The model shows strong support for under {line} here.",
+      "Under {line} gains real strength in this game.",
+      "The goals read leans strongly toward under {line} here.",
     ],
   };
   const es = {
     slight: [
-      "Hay una leve inclinación hacia under {line} goles.",
-      "Under {line} queda apenas por delante en el modelo.",
+      "El partido apunta un poco hacia under {line}.",
+      "Under {line} aparece ligeramente por delante en este cruce.",
     ],
     moderate: [
-      "El modelo se inclina con cierta consistencia hacia under {line} goles.",
-      "Hay una configuración razonablemente favorable para under {line}.",
+      "Under {line} tiene una pinta interesante aquí.",
+      "Los números dan un apoyo razonable para under {line}.",
     ],
     strong: [
-      "Under {line} goles destaca con claridad en la lectura actual.",
-      "El modelo muestra apoyo fuerte para under {line} aquí.",
+      "Under {line} gana fuerza en este partido.",
+      "La lectura de goles tira con fuerza hacia under {line} aquí.",
     ],
   };
 
@@ -279,8 +284,8 @@ function totalsHeadlineOptions(
 function bttsLabelOptions(lang: Lang, direction: BttsDirection, strength: BttsStrength) {
   if (direction === "neutral" || strength === "neutral") {
     return [
-      langText(lang, "BTTS equilibrado", "Balanced BTTS", "BTTS equilibrado"),
-      langText(lang, "Sem vantagem clara em BTTS", "No clear BTTS edge", "Sin ventaja clara en BTTS"),
+      langText(lang, "BTTS bem equilibrado", "Balanced BTTS", "BTTS bastante equilibrado"),
+      langText(lang, "BTTS sem lado tão claro", "No clear BTTS side", "BTTS sin un lado tan claro"),
     ];
   }
 
@@ -288,38 +293,38 @@ function bttsLabelOptions(lang: Lang, direction: BttsDirection, strength: BttsSt
   const labels = {
     pt: {
       yes: {
-        slight: ["Leve viés para BTTS Sim", "Sinal leve de BTTS Sim"],
-        moderate: ["Viés moderado para BTTS Sim", "BTTS Sim melhor posicionado"],
-        strong: ["Sinal forte de BTTS Sim", "BTTS Sim se destaca"],
+        slight: ["Leve sinal para BTTS Sim", "BTTS Sim um pouco melhor"],
+        moderate: ["BTTS Sim com boa cara", "BTTS Sim melhor posicionado"],
+        strong: ["BTTS Sim chama atenção", "BTTS Sim vem forte"],
       },
       no: {
-        slight: ["Leve viés para BTTS Não", "Sinal leve de BTTS Não"],
-        moderate: ["Viés moderado para BTTS Não", "BTTS Não melhor posicionado"],
-        strong: ["Sinal forte de BTTS Não", "BTTS Não se destaca"],
+        slight: ["Leve sinal para BTTS Não", "BTTS Não um pouco melhor"],
+        moderate: ["BTTS Não com boa cara", "BTTS Não melhor posicionado"],
+        strong: ["BTTS Não chama atenção", "BTTS Não vem forte"],
       },
     },
     en: {
       yes: {
-        slight: ["Slight BTTS Yes lean", "Light BTTS Yes signal"],
-        moderate: ["Moderate BTTS Yes lean", "BTTS Yes in a decent spot"],
-        strong: ["Strong BTTS Yes signal", "BTTS Yes stands out"],
+        slight: ["Slight BTTS Yes signal", "BTTS Yes looks a bit better"],
+        moderate: ["BTTS Yes has a decent look", "BTTS Yes is in the better spot"],
+        strong: ["BTTS Yes stands out", "BTTS Yes comes in strong"],
       },
       no: {
-        slight: ["Slight BTTS No lean", "Light BTTS No signal"],
-        moderate: ["Moderate BTTS No lean", "BTTS No in a decent spot"],
-        strong: ["Strong BTTS No signal", "BTTS No stands out"],
+        slight: ["Slight BTTS No signal", "BTTS No looks a bit better"],
+        moderate: ["BTTS No has a decent look", "BTTS No is in the better spot"],
+        strong: ["BTTS No stands out", "BTTS No comes in strong"],
       },
     },
     es: {
       yes: {
-        slight: ["Leve sesgo a BTTS Sí", "Señal ligera de BTTS Sí"],
-        moderate: ["Sesgo moderado a BTTS Sí", "BTTS Sí mejor posicionado"],
-        strong: ["Señal fuerte de BTTS Sí", "BTTS Sí destaca"],
+        slight: ["Leve señal para BTTS Sí", "BTTS Sí aparece un poco mejor"],
+        moderate: ["BTTS Sí tiene buena pinta", "BTTS Sí queda mejor posicionado"],
+        strong: ["BTTS Sí llama la atención", "BTTS Sí viene fuerte"],
       },
       no: {
-        slight: ["Leve sesgo a BTTS No", "Señal ligera de BTTS No"],
-        moderate: ["Sesgo moderado a BTTS No", "BTTS No mejor posicionado"],
-        strong: ["Señal fuerte de BTTS No", "BTTS No destaca"],
+        slight: ["Leve señal para BTTS No", "BTTS No aparece un poco mejor"],
+        moderate: ["BTTS No tiene buena pinta", "BTTS No queda mejor posicionado"],
+        strong: ["BTTS No llama la atención", "BTTS No viene fuerte"],
       },
     },
   };
@@ -334,15 +339,15 @@ function bttsHeadlineOptions(lang: Lang, direction: BttsDirection, strength: Btt
     return [
       langText(
         lang,
-        "BTTS parece equilibrado neste confronto.",
-        "BTTS looks balanced in this matchup.",
-        "BTTS luce equilibrado en este partido."
+        "O BTTS aparece bem equilibrado neste confronto.",
+        "BTTS looks well balanced in this matchup.",
+        "El BTTS aparece bastante equilibrado en este partido."
       ),
       langText(
         lang,
-        "O mercado de ambos marcam segue bastante parelho.",
-        "The both-teams-to-score market stays fairly even.",
-        "El mercado de ambos marcan se mantiene bastante parejo."
+        "Aqui o mercado de ambos marcam não mostra uma vantagem tão clara.",
+        "Here the both-teams-to-score market does not show such a clear edge.",
+        "Aquí el mercado de ambos marcan no muestra una ventaja tan clara."
       ),
     ];
   }
@@ -350,44 +355,44 @@ function bttsHeadlineOptions(lang: Lang, direction: BttsDirection, strength: Btt
   if (direction === "yes") {
     const pt = {
       slight: [
-        "Há uma leve inclinação para BTTS Sim.",
-        "BTTS Sim fica um pouco à frente na leitura atual.",
+        "O jogo aponta um pouco para BTTS Sim.",
+        "BTTS Sim aparece levemente melhor neste confronto.",
       ],
       moderate: [
-        "BTTS Sim carrega apoio moderado neste confronto.",
-        "Há sinais decentes para BTTS Sim aqui.",
+        "BTTS Sim aparece com uma boa cara aqui.",
+        "Os números dão um apoio razoável para BTTS Sim.",
       ],
       strong: [
-        "BTTS Sim se destaca com clareza na leitura atual.",
-        "O modelo mostra apoio forte para os dois times marcarem aqui.",
+        "BTTS Sim ganha força neste jogo.",
+        "A leitura de ambos marcam vem forte por aqui.",
       ],
     };
     const en = {
       slight: [
-        "There is a slight lean toward BTTS Yes.",
-        "BTTS Yes sits a touch ahead in the current read.",
+        "The game leans a bit toward BTTS Yes.",
+        "BTTS Yes looks slightly better in this matchup.",
       ],
       moderate: [
-        "BTTS Yes carries moderate support in this matchup.",
-        "There are decent signs for BTTS Yes here.",
+        "BTTS Yes has a decent look here.",
+        "The numbers give fair support to BTTS Yes.",
       ],
       strong: [
-        "BTTS Yes stands out clearly in the current read.",
-        "The model shows strong support for both teams scoring here.",
+        "BTTS Yes gains strength in this game.",
+        "The both-teams-to-score read comes in strong here.",
       ],
     };
     const es = {
       slight: [
-        "Hay una leve inclinación hacia BTTS Sí.",
-        "BTTS Sí queda apenas por delante en la lectura actual.",
+        "El partido apunta un poco hacia BTTS Sí.",
+        "BTTS Sí aparece ligeramente mejor en este cruce.",
       ],
       moderate: [
-        "BTTS Sí carga con apoyo moderado en este partido.",
-        "Hay señales decentes para BTTS Sí aquí.",
+        "BTTS Sí tiene buena pinta aquí.",
+        "Los números dan un apoyo razonable para BTTS Sí.",
       ],
       strong: [
-        "BTTS Sí destaca con claridad en la lectura actual.",
-        "El modelo muestra apoyo fuerte a que ambos equipos marquen aquí.",
+        "BTTS Sí gana fuerza en este partido.",
+        "La lectura de ambos marcan viene fuerte por aquí.",
       ],
     };
 
@@ -398,44 +403,44 @@ function bttsHeadlineOptions(lang: Lang, direction: BttsDirection, strength: Btt
 
   const pt = {
     slight: [
-      "Há uma leve inclinação para BTTS Não.",
-      "BTTS Não fica um pouco à frente na leitura atual.",
+      "O jogo aponta um pouco para BTTS Não.",
+      "BTTS Não aparece levemente melhor neste confronto.",
     ],
     moderate: [
-      "BTTS Não carrega apoio moderado neste confronto.",
-      "Há sinais decentes para BTTS Não aqui.",
+      "BTTS Não aparece com uma boa cara aqui.",
+      "Os números dão um apoio razoável para BTTS Não.",
     ],
     strong: [
-      "BTTS Não se destaca com clareza na leitura atual.",
-      "O modelo mostra apoio forte contra os dois times marcarem aqui.",
+      "BTTS Não ganha força neste jogo.",
+      "A leitura de ambos marcam não vem forte por aqui.",
     ],
   };
   const en = {
     slight: [
-      "There is a slight lean toward BTTS No.",
-      "BTTS No sits a touch ahead in the current read.",
+      "The game leans a bit toward BTTS No.",
+      "BTTS No looks slightly better in this matchup.",
     ],
     moderate: [
-      "BTTS No carries moderate support in this matchup.",
-      "There are decent signs for BTTS No here.",
+      "BTTS No has a decent look here.",
+      "The numbers give fair support to BTTS No.",
     ],
     strong: [
-      "BTTS No stands out clearly in the current read.",
-      "The model shows strong support against both teams scoring here.",
+      "BTTS No gains strength in this game.",
+      "The both-teams-to-score read is clearly weaker here.",
     ],
   };
   const es = {
     slight: [
-      "Hay una leve inclinación hacia BTTS No.",
-      "BTTS No queda apenas por delante en la lectura actual.",
+      "El partido apunta un poco hacia BTTS No.",
+      "BTTS No aparece ligeramente mejor en este cruce.",
     ],
     moderate: [
-      "BTTS No carga con apoyo moderado en este partido.",
-      "Hay señales decentes para BTTS No aquí.",
+      "BTTS No tiene buena pinta aquí.",
+      "Los números dan un apoyo razonable para BTTS No.",
     ],
     strong: [
-      "BTTS No destaca con claridad en la lectura actual.",
-      "El modelo muestra apoyo fuerte contra ambos equipos marquen aquí.",
+      "BTTS No gana fuerza en este partido.",
+      "La lectura de ambos marcan pierde bastante fuerza por aquí.",
     ],
   };
 
@@ -448,22 +453,23 @@ function teamGoalsOptions(lang: Lang) {
   return [
     langText(
       lang,
-      "Probabilidade de gol da casa: {homeGoal} • Probabilidade de gol do visitante: {awayGoal}.",
-      "Home goal probability: {homeGoal} • Away goal probability: {awayGoal}.",
-      "Probabilidad de gol local: {homeGoal} • Probabilidad de gol visitante: {awayGoal}."
+      "Chance de a casa marcar: {homeGoal} • chance de o visitante marcar: {awayGoal}.",
+      "Home team scoring chance: {homeGoal} • away team scoring chance: {awayGoal}.",
+      "Chance de gol del local: {homeGoal} • chance de gol del visitante: {awayGoal}."
     ),
     langText(
       lang,
-      "A chance de marcar fica em {homeGoal} para a casa e {awayGoal} para o visitante.",
-      "Chance of scoring stays at {homeGoal} for the home side and {awayGoal} for the away side.",
-      "La chance de marcar queda en {homeGoal} para el local y {awayGoal} para el visitante."
+      "Nos números do jogo, a casa tem {homeGoal} de chance de marcar e o visitante {awayGoal}.",
+      "In the game numbers, the home side has {homeGoal} to score and the away side {awayGoal}.",
+      "En los números del partido, el local tiene {homeGoal} de marcar y el visitante {awayGoal}."
     ),
   ];
 }
 
 export function generateFootballGoalsNarrative(
   req: SportNarrativeRequest,
-  profile: NarrativeProfile
+  profile: NarrativeProfile,
+  _style: NarrativeStyleId
 ): NarrativeResponse | null {
   const totals = classifyTotals(req.market?.totals?.pOver, req.market?.totals?.pUnder);
   const btts = classifyBtts(req.market?.btts?.pYes, req.market?.btts?.pNo);
