@@ -16,7 +16,8 @@ VALUES
 ('update_pipeline_run', 'global', 'global', NULL, NULL, 150, 1800, 1, 'default global override'),
 ('pipeline_run_all', 'global', 'global', NULL, NULL, 140, 1800, 1, 'default global override'),
 ('odds_league_gap_scan', 'global', 'global', NULL, NULL, 80, 900, 1, 'default global override'),
-('odds_league_autoclassify', 'global', 'global', NULL, NULL, 85, 900, 1, 'default global override')
+('odds_league_autoclassify', 'global', 'global', NULL, NULL, 85, 900, 1, 'default global override'),
+('odds_catalog_sync', 'global', 'global', NULL, NULL, 70, 900, 1, 'default global override')
 ON CONFLICT (job_key, scope_type, scope_key) DO UPDATE SET
   priority_override = EXCLUDED.priority_override,
   timeout_sec_override = EXCLUDED.timeout_sec_override,

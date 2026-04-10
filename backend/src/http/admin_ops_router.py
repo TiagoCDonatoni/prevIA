@@ -240,8 +240,17 @@ def admin_ops_odds_refresh(
     regions: str = Query(default="eu"),
 ):
     res = run_job("odds_refresh", odds_refresh, sport_key=sport_key, regions=regions)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
-
+    return {
+        "ok": res.ok,
+        "job": res.job_name,
+        "run_id": res.run_id,
+        "attempt_id": res.attempt_id,
+        "status": res.status,
+        "elapsed_sec": res.elapsed_sec,
+        "counters": res.counters,
+        "error": res.error,
+        "blocked_reason": res.blocked_reason,
+    }
 
 @router.post("/odds/resolve")
 def admin_ops_odds_resolve(
@@ -264,7 +273,17 @@ def admin_ops_odds_resolve(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
+    return {
+        "ok": res.ok,
+        "job": res.job_name,
+        "run_id": res.run_id,
+        "attempt_id": res.attempt_id,
+        "status": res.status,
+        "elapsed_sec": res.elapsed_sec,
+        "counters": res.counters,
+        "error": res.error,
+        "blocked_reason": res.blocked_reason,
+    }
 
 
 @router.post("/snapshots/materialize")
@@ -281,14 +300,6 @@ def admin_ops_snapshots_materialize(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
-
-
-@router.post("/pipeline/run_all")
-def admin_ops_pipeline_run_all(
-    only_sport_key: str | None = Query(default=None),
-):
-    res = run_job("pipeline_run_all", pipeline_run_all, only_sport_key=only_sport_key)
     return {
         "ok": res.ok,
         "job": res.job_name,
@@ -300,6 +311,25 @@ def admin_ops_pipeline_run_all(
         "error": res.error,
         "blocked_reason": res.blocked_reason,
     }
+
+
+@router.post("/pipeline/run")
+def admin_ops_pipeline_run(
+    only_sport_key: str | None = Query(default=None),
+):
+    res = run_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
+    return {
+        "ok": res.ok,
+        "job": res.job_name,
+        "run_id": res.run_id,
+        "attempt_id": res.attempt_id,
+        "status": res.status,
+        "elapsed_sec": res.elapsed_sec,
+        "counters": res.counters,
+        "error": res.error,
+        "blocked_reason": res.blocked_reason,
+    }
+
 
 @router.post("/pipeline/run")
 def admin_ops_pipeline_run(
@@ -398,7 +428,17 @@ def admin_ops_league_map_pending(limit: int = 200):
 @router.post("/odds/league_map/autoclassify")
 def admin_ops_league_map_autoclassify():
     res = run_job("odds_league_autoclassify", odds_league_autoclassify)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
+    return {
+        "ok": res.ok,
+        "job": res.job_name,
+        "run_id": res.run_id,
+        "attempt_id": res.attempt_id,
+        "status": res.status,
+        "elapsed_sec": res.elapsed_sec,
+        "counters": res.counters,
+        "error": res.error,
+        "blocked_reason": res.blocked_reason,
+    }
 
 
 @router.post("/odds/league_map/approve")

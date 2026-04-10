@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 import time
 import traceback
@@ -114,7 +113,23 @@ def run_job(
     override = get_job_scope_override(job_key=job_name, sport_key=sport_key)
     flag = get_effective_enabled_flag(job_key=job_name, sport_key=sport_key)
 
-    effective_enabled = job_def["enabled_by_default"]
+    requested_payload = dict(payload or {})
+    effective_payload = _merge_payloads(
+        job_def.get("default_payload_json") or {},
+        (override or {}).get("payload_patch_json") or {},
+        requested_payload,
+    )
+
+    effective_job_kwargs = dict(effective_payload)
+    effective_job_kwargs.update(job_kwargs)
+
+    effective_enabled = bool(job_def["enabled_by_default"])
+    block_reason: Optional[str] = None
+
+    if trigger_source == "manual" and not job_def["allow_manual_run"]:
+        block_reason = "manual_run_disabled"
+    elif trigger_source == "scheduler" and not job_def["allow_scheduler_run"]:
+        block_reason = "scheduler_run_disabled"
 
     if override and override.get("enabled_override") is not None:
         effective_enabled = bool(override["enabled_override"])
@@ -122,12 +137,8 @@ def run_job(
     if flag.get("matched"):
         effective_enabled = bool(flag["enabled"])
 
-    requested_payload = dict(payload or {})
-    effective_payload = _merge_payloads(
-        job_def.get("default_payload_json") or {},
-        (override or {}).get("payload_patch_json") or {},
-        requested_payload,
-    )
+    if not effective_enabled and not block_reason:
+        block_reason = flag.get("reason") or "disabled_by_flag_or_override"
 
     with pg_conn() as conn:
         conn.autocommit = False
@@ -158,10 +169,10 @@ def run_job(
                     "scope_type": scope_type,
                     "scope_key": scope_key,
                     "sport_key": sport_key,
-                    "status": "blocked" if not effective_enabled else "queued",
-                    "block_reason": None if effective_enabled else (flag.get("reason") or "disabled_by_flag_or_override"),
+                    "status": "blocked" if block_reason else "queued",
+                    "block_reason": block_reason,
                     "requested_payload_json": requested_payload,
-                    "effective_payload_json": effective_payload,
+                    "effective_payload_json": effective_job_kwargs,
                     "parent_run_id": parent_run_id,
                     "correlation_id": correlation_id,
                     "idempotency_key": idempotency_key,
@@ -173,19 +184,21 @@ def run_job(
             conn,
             run_id=run_id,
             attempt_id=None,
-            event_type="queued" if effective_enabled else "blocked",
-            event_level="warn" if not effective_enabled else "info",
-            message=None if effective_enabled else "job blocked before execution",
+            event_type="blocked" if block_reason else "queued",
+            event_level="warn" if block_reason else "info",
+            message="job blocked before execution" if block_reason else None,
             payload={
                 "job_name": job_name,
                 "scope_key": scope_key,
                 "sport_key": sport_key,
                 "flag": flag,
                 "override": override,
+                "effective_job_kwargs": effective_job_kwargs,
+                "block_reason": block_reason,
             },
         )
 
-        if not effective_enabled:
+        if block_reason:
             conn.commit()
             return JobRunResult(
                 ok=False,
@@ -196,7 +209,7 @@ def run_job(
                 elapsed_sec=round(time.perf_counter() - t0, 6),
                 counters={},
                 error=None,
-                blocked_reason=(flag.get("reason") or "disabled_by_flag_or_override"),
+                blocked_reason=block_reason,
             )
 
         with conn.cursor() as cur:
@@ -234,14 +247,14 @@ def run_job(
                 "job_name": job_name,
                 "scope_key": scope_key,
                 "sport_key": sport_key,
-                "effective_payload": effective_payload,
+                "effective_job_kwargs": effective_job_kwargs,
             },
         )
 
         conn.commit()
 
     try:
-        raw_result = job_fn(**job_kwargs)
+        raw_result = job_fn(**effective_job_kwargs)
         ok = bool((raw_result or {}).get("ok", True))
         counters = dict((raw_result or {}).get("counters") or {})
         error_text = None if ok else str((raw_result or {}).get("error") or "job_returned_not_ok")
