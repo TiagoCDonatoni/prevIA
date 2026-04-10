@@ -358,7 +358,7 @@ function fmtKickoff(iso: string, lang: string) {
 }
 
 function hasOpportunityEdge(edge: number | null | undefined) {
-  return typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02;
+  return typeof edge === "number" && Number.isFinite(edge) && edge >= 0.05;
 }
 
 function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
@@ -1158,7 +1158,13 @@ export default function ProductIndex() {
                   disabled={!selectedId || quoteLoading}
                   title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
                 >
-                  {t(lang, "credits.viewAnalysis")}
+                  {quoteLoading
+                    ? (lang === "en"
+                        ? "Loading analysis..."
+                        : lang === "es"
+                        ? "Cargando análisis..."
+                        : "Carregando análise...")
+                    : t(lang, "credits.viewAnalysis")}
                 </button>
 
                 {!alreadyRevealed ? (
@@ -2045,6 +2051,28 @@ return (
 
           <div className="pi-mobile-analysis-body">
             {renderAnalysisPane()}
+          </div>
+        </div>
+      </div>
+    ) : null}
+
+    {quoteLoading ? (
+      <div className="pi-analysis-loading-overlay" aria-live="polite" aria-busy="true">
+        <div className="pi-analysis-loading-card">
+          <div className="pi-analysis-loading-spinner" aria-hidden="true" />
+          <div className="pi-analysis-loading-title">
+            {lang === "en"
+              ? "Loading analysis..."
+              : lang === "es"
+              ? "Cargando análisis..."
+              : "Carregando análise..."}
+          </div>
+          <div className="pi-analysis-loading-sub">
+            {lang === "en"
+              ? "Please wait while we prepare the match insights."
+              : lang === "es"
+              ? "Espera mientras preparamos el análisis del partido."
+              : "Aguarde enquanto preparamos a análise da partida."}
           </div>
         </div>
       </div>
