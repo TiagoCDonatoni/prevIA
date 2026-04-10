@@ -10,8 +10,7 @@ import { PlanChangeModal } from "../components/PlanChangeModal";
 
 import { applyLeagueOverride } from "../config/leagueOverrides";
 
-import { generateNarrative } from "../narrative/generateNarrative";
-import type { NarrativeDepth } from "../narrative/types";
+import { generateNarrativesForSport } from "../narrative/v2";
 import type { PlanId } from "../entitlements";
 
 import { SearchableMultiSelect } from "../components/SearchableMultiSelect";
@@ -403,13 +402,6 @@ function LockedPanel({
       </div>
     </div>
   );
-}
-
-function narrativeDepthForPlan(plan: PlanId): NarrativeDepth {
-  if (plan === "PRO") return 4;
-  if (plan === "LIGHT") return 3;
-  if (plan === "BASIC") return 2;
-  return 1; // FREE / FREE_ANON
 }
 
 export default function ProductIndex() {
@@ -914,47 +906,33 @@ export default function ProductIndex() {
       return;
     }
 
-    async function onRevealAndOpen() {
-      if (!selectedId) return;
+    const fixtureKey = String(selectedId);
 
-      const ev = visibleEvents.find((e) => String(e.event_id) === String(selectedId));
-      const hasAnalysis =
-        ev?.match_status === "MODEL_FOUND" ||
-        ev?.match_status === "EXACT" ||
-        ev?.match_status === "PROBABLE";
+    setAnalysisOpening(true);
 
-      if (ev && !hasAnalysis) {
-        setQuoteError(t(lang, "errors.matchUnreliable"));
-        return;
-      }
+    try {
+      const r = store.backendUsage.is_ready
+        ? await store.revealViaBackend(fixtureKey)
+        : store.tryReveal(fixtureKey);
 
-      const fixtureKey = String(selectedId);
-
-      setAnalysisOpening(true);
-
-      try {
-        const r = store.backendUsage.is_ready
-          ? await store.revealViaBackend(fixtureKey)
-          : store.tryReveal(fixtureKey);
-
-        if (!r.ok) {
-          if (r.reason === "NO_CREDITS") {
-            setUpgradeReason("NO_CREDITS");
-            setUpgradeOpen(true);
-            return;
-          }
-
-          if (r.reason !== "ALREADY_REVEALED") {
-            console.error("Reveal failed:", r.reason);
-            return;
-          }
+      if (!r.ok) {
+        if (r.reason === "NO_CREDITS") {
+          setUpgradeReason("NO_CREDITS");
+          setUpgradeOpen(true);
+          return;
         }
 
-        await runQuote(fixtureKey);
-      } finally {
-        setAnalysisOpening(false);
+        if (r.reason !== "ALREADY_REVEALED") {
+          console.error("Reveal failed:", r.reason);
+          return;
+        }
       }
+
+      await runQuote(fixtureKey);
+    } finally {
+      setAnalysisOpening(false);
     }
+  }
 
   useEffect(() => {
     loadLeagues();
@@ -1208,8 +1186,6 @@ export default function ProductIndex() {
               <>
                 {/* ===== Narrativa (destaque) ===== */}
                 {(() => {
-                  const depth = narrativeDepthForPlan(plan);
-
                   const oddsBest =
                     quote?.odds?.best
                       ? {
@@ -1225,28 +1201,46 @@ export default function ProductIndex() {
                         }
                       : null;
 
-                  const narrative = generateNarrative({
-                    meta: { version: "narrative.v1", lang, depth },
+                  const narrativeBundle = generateNarrativesForSport({
+                    sportKey: selected.sport_key || sportKey || "football",
+                    lang,
+                    plan,
+                    eventId: selected.event_id,
                     match: {
                       homeTeam: selected.home_name,
                       awayTeam: selected.away_name,
                     },
                     model: {
-                      probs: effectiveProbs,
+                      probs1x2: effectiveProbs,
                       status: effectiveMatchStatus,
                     },
                     market: {
-                      odds_1x2_best: oddsBest,
+                      odds1x2Best: oddsBest,
+                      totals: {
+                        line: totalsLine,
+                        pOver: totalsOver,
+                        pUnder: totalsUnder,
+                      },
+                      btts: {
+                        pYes: bttsYes,
+                        pNo: bttsNo,
+                      },
+                      inputs: {
+                        lambdaHome,
+                        lambdaAway,
+                        lambdaTotal,
+                      },
                     },
                   });
 
-                  const headline = narrative.blocks.find((b) => b.type === "headline");
-                  const summary = narrative.blocks.find((b) => b.type === "summary");
-                  const price = narrative.blocks.find((b) => b.type === "price");
-                  const pricePro = narrative.blocks.find((b) => b.type === "pricePro");
-                  const bullets = narrative.blocks.filter((b) => b.type === "bullet");
-                  const warning = narrative.blocks.find((b) => b.type === "warning");
-                  const disclaimer = narrative.blocks.find((b) => b.type === "disclaimer");
+                  const narrative = narrativeBundle.main;
+                  const headline = narrative?.blocks.find((b) => b.type === "headline");
+                  const summary = narrative?.blocks.find((b) => b.type === "summary");
+                  const price = narrative?.blocks.find((b) => b.type === "price");
+                  const pricePro = narrative?.blocks.find((b) => b.type === "pricePro");
+                  const bullets = narrative?.blocks.filter((b) => b.type === "bullet") ?? [];
+                  const warning = narrative?.blocks.find((b) => b.type === "warning");
+                  const disclaimer = narrative?.blocks.find((b) => b.type === "disclaimer");
 
                   return (
                     <div className="pi-narrative">
@@ -1359,17 +1353,72 @@ export default function ProductIndex() {
                               : "Mercados de Gols"}
                           </div>
 
-                          <div className="pi-panel-value">
-                            {hasTotalsInsight
-                              ? totalsInsightLabel(lang, totalsOver, totalsUnder)
-                              : bttsInsightLabel(lang, bttsYes)}
-                          </div>
+                          {(() => {
+                            const goalsNarrative = generateNarrativesForSport({
+                              sportKey: selected.sport_key || sportKey || "football",
+                              lang,
+                              plan,
+                              eventId: selected.event_id,
+                              match: {
+                                homeTeam: selected.home_name,
+                                awayTeam: selected.away_name,
+                              },
+                              model: {
+                                probs1x2: effectiveProbs,
+                                status: effectiveMatchStatus,
+                              },
+                              market: {
+                                odds1x2Best: quote?.odds?.best
+                                  ? {
+                                      H: quote.odds.best.H ?? null,
+                                      D: quote.odds.best.D ?? null,
+                                      A: quote.odds.best.A ?? null,
+                                    }
+                                  : selected.odds_best
+                                  ? {
+                                      H: selected.odds_best.H ?? null,
+                                      D: selected.odds_best.D ?? null,
+                                      A: selected.odds_best.A ?? null,
+                                    }
+                                  : null,
+                                totals: {
+                                  line: totalsLine,
+                                  pOver: totalsOver,
+                                  pUnder: totalsUnder,
+                                },
+                                btts: {
+                                  pYes: bttsYes,
+                                  pNo: bttsNo,
+                                },
+                                inputs: {
+                                  lambdaHome,
+                                  lambdaAway,
+                                  lambdaTotal,
+                                },
+                              },
+                            }).goals;
 
-                          <div className="pi-muted" style={{ marginTop: 6 }}>
-                            {hasTotalsInsight
-                              ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
-                              : bttsInsightHeadline(lang, bttsYes)}
-                          </div>
+                            const goalsHeadline = goalsNarrative?.blocks.find((b) => b.type === "headline")?.text;
+                            const goalsSummary = goalsNarrative?.blocks.find((b) => b.type === "summary")?.text;
+
+                            return (
+                              <>
+                                <div className="pi-panel-value">
+                                  {goalsHeadline ??
+                                    (hasTotalsInsight
+                                      ? totalsInsightLabel(lang, totalsOver, totalsUnder)
+                                      : bttsInsightLabel(lang, bttsYes))}
+                                </div>
+
+                                <div className="pi-muted" style={{ marginTop: 6 }}>
+                                  {goalsSummary ??
+                                    (hasTotalsInsight
+                                      ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
+                                      : bttsInsightHeadline(lang, bttsYes))}
+                                </div>
+                              </>
+                            );
+                          })()}
 
                           <div className="pi-goals-kpis">
                             {typeof totalsOver === "number" ? (
