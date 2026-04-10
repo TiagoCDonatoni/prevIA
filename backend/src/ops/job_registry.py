@@ -53,48 +53,50 @@ def get_job_scope_override(
     job_key: str,
     sport_key: Optional[str],
 ) -> Optional[Dict[str, Any]]:
+    if sport_key is None:
+        sql = """
+            SELECT
+              override_id, job_key, scope_type, scope_key, sport_key,
+              enabled_override, priority_override, timeout_sec_override,
+              max_attempts_override, scheduler_cron, scheduler_timezone,
+              payload_patch_json, notes
+            FROM ops.ops_job_scope_overrides
+            WHERE job_key = %(job_key)s
+              AND scope_type = 'global'
+              AND scope_key = 'global'
+            ORDER BY override_id DESC
+            LIMIT 1
+        """
+        params = {"job_key": job_key}
+    else:
+        sql = """
+            SELECT
+              override_id, job_key, scope_type, scope_key, sport_key,
+              enabled_override, priority_override, timeout_sec_override,
+              max_attempts_override, scheduler_cron, scheduler_timezone,
+              payload_patch_json, notes
+            FROM ops.ops_job_scope_overrides
+            WHERE job_key = %(job_key)s
+              AND (
+                (scope_type = 'job_sport_key' AND scope_key = %(sport_key)s)
+                OR (scope_type = 'sport_key' AND scope_key = %(sport_key)s)
+                OR (scope_type = 'global' AND scope_key = 'global')
+              )
+            ORDER BY
+              CASE
+                WHEN scope_type = 'job_sport_key' THEN 1
+                WHEN scope_type = 'sport_key' THEN 2
+                WHEN scope_type = 'global' THEN 3
+                ELSE 999
+              END,
+              override_id DESC
+            LIMIT 1
+        """
+        params = {"job_key": job_key, "sport_key": sport_key}
+
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            if sport_key:
-                cur.execute(
-                    """
-                    SELECT
-                      override_id, job_key, scope_type, scope_key, sport_key,
-                      enabled_override, priority_override, timeout_sec_override,
-                      max_attempts_override, scheduler_cron, scheduler_timezone,
-                      payload_patch_json, notes
-                    FROM ops.ops_job_scope_overrides
-                    WHERE job_key = %(job_key)s
-                      AND (
-                        (scope_type = 'job_sport_key' AND scope_key = %(sport_key)s)
-                        OR (scope_type = 'sport_key' AND scope_key = %(sport_key)s)
-                      )
-                    ORDER BY
-                      CASE
-                        WHEN scope_type = 'job_sport_key' THEN 1
-                        WHEN scope_type = 'sport_key' THEN 2
-                        ELSE 999
-                      END
-                    LIMIT 1
-                    """,
-                    {"job_key": job_key, "sport_key": sport_key},
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT
-                      override_id, job_key, scope_type, scope_key, sport_key,
-                      enabled_override, priority_override, timeout_sec_override,
-                      max_attempts_override, scheduler_cron, scheduler_timezone,
-                      payload_patch_json, notes
-                    FROM ops.ops_job_scope_overrides
-                    WHERE job_key = %(job_key)s
-                      AND scope_type = 'global'
-                      AND scope_key = 'global'
-                    LIMIT 1
-                    """,
-                    {"job_key": job_key},
-                )
+            cur.execute(sql, params)
             row = cur.fetchone()
 
     if not row:
