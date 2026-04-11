@@ -39,12 +39,20 @@ export default function AdminUsers() {
   const [creditsDraft, setCreditsDraft] = React.useState(5);
   const [notesDraft, setNotesDraft] = React.useState("");
   const [reasonDraft, setReasonDraft] = React.useState("");
+  const [createEmailDraft, setCreateEmailDraft] = React.useState("");
+  const [createPasswordDraft, setCreatePasswordDraft] = React.useState("");
+  const [createReasonDraft, setCreateReasonDraft] = React.useState("");
 
   const [actionBusy, setActionBusy] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = React.useState<string | null>(null);
 
   const reasonIsValid = reasonDraft.trim().length >= 3;
+  const createReasonIsValid = createReasonDraft.trim().length >= 3;
+  const createFormIsValid =
+    createEmailDraft.trim().length > 3 &&
+    createPasswordDraft.length >= 8 &&
+    createReasonIsValid;
 
   async function loadUsers(nextSelectedUserId?: number | null) {
     setListLoading(true);

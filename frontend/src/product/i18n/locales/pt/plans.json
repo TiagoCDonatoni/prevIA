@@ -1,22 +1,50 @@
 {
   "freeAnon": { "name": "Free", "badge": "Sem login", "desc": "Teste rápido sem conta" },
   "free": { "name": "Free+", "badge": "Com login", "desc": "Comece e teste o produto" },
-  "basic": { "name": "Basic", "badge": "Mais créditos", "desc": "Uso leve e consistência" },
-  "light": { "name": "Light", "badge": "Mais contexto", "desc": "Acompanhar vários jogos com folga" },
-  "pro": { "name": "Pro", "badge": "Avançado", "desc": "Volume alto e máxima consistência" },
+
+  "basic": {
+    "name": "Basic",
+    "badge": "Mais créditos",
+    "desc": "Mais espaço diário para usar o produto sem parar cedo.",
+    "bullets": [
+      "{limit} créditos/dia",
+      "Ideal para uso recorrente com a experiência essencial",
+      "Mais folga para consultar análises ao longo do dia"
+    ]
+  },
+
+  "light": {
+    "name": "Light",
+    "badge": "Mais contexto",
+    "desc": "Mais contexto para comparar jogos e decidir com mais segurança.",
+    "bullets": [
+      "{limit} créditos/dia",
+      "Libera fair odds, edge e leitura mais explicada",
+      "Confiança, amostra e forma recente para mais contexto"
+    ]
+  },
+
+  "pro": {
+    "name": "Pro",
+    "badge": "Avançado",
+    "desc": "A camada mais completa para rotina intensa e análise avançada.",
+    "bullets": [
+      "{limit} créditos/dia",
+      "Libera best odds, head-to-head e métricas do modelo",
+      "Indicado para volume alto e leitura mais profunda"
+    ]
+  },
 
   "badge": { "recommended": "Recomendado" },
   "units": { "creditsPerDay": "créditos/dia" },
-  "copy": {
-    "moreCredits": "+{plus}/dia vs atual",
-    "lessInterruptions": "Menos interrupções por limite"
-  },
+
   "price": {
     "placeholder": "Preço em breve",
     "perMonth": "por mês",
     "perQuarter": "por trimestre",
     "perYear": "por ano"
   },
+
   "modal": {
     "manualTitle": "Escolha o plano ideal",
     "manualSubtitle": "Compare as opções e escolha a recorrência que faz mais sentido para você.",

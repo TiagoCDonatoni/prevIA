@@ -81,6 +81,14 @@ export type BillingSubscriptionResponse = {
   message?: string;
 };
 
+export type BillingCheckoutSessionSyncResponse = BillingSubscriptionResponse & {
+  synced: boolean;
+  checkout_session_id: string;
+  checkout_session_status?: string | null;
+  checkout_payment_status?: string | null;
+  sync_result?: Record<string, any> | null;
+};
+
 export class BillingRequestError extends Error {
   status: number;
   code?: string;
@@ -157,6 +165,14 @@ export async function createBillingCheckoutSession(payload: {
   return requestBilling<BillingCheckoutSessionResponse, typeof payload>(
     "/billing/checkout/session",
     payload
+  );
+}
+
+export async function fetchBillingCheckoutSessionStatus(
+  sessionId: string
+): Promise<BillingCheckoutSessionSyncResponse> {
+  return requestBilling<BillingCheckoutSessionSyncResponse>(
+    `/billing/checkout/session/status?session_id=${encodeURIComponent(sessionId)}`
   );
 }
 

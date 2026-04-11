@@ -5,11 +5,16 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+from urllib.parse import quote
 
 from fastapi import Request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
+from src.auth.email_templates import (
+    build_password_changed_email,
+    build_password_reset_email,
+)
 from src.auth.passwords import hash_password, validate_password_policy, verify_password
 from src.auth.sessions import (
     build_request_fingerprints,
@@ -21,6 +26,7 @@ from src.auth.sessions import (
 from src.billing.service import get_effective_subscription_for_user
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
+from src.integrations.product_email import send_product_email
 from src.internal_access.service import (
     resolve_runtime_product_plan_code,
     resolve_user_access_context,
@@ -68,6 +74,89 @@ def _coerce_json_dict(raw: Any) -> Dict[str, Any]:
             return {}
     return {}
 
+def _resolve_public_lang(preferred_lang: str | None) -> str:
+    raw = str(preferred_lang or "").strip().lower()
+    if raw.startswith("pt"):
+        return "pt"
+    if raw.startswith("es"):
+        return "es"
+    return "en"
+
+
+def _safe_error_message(exc: Exception) -> str:
+    return str(exc).strip()[:500]
+
+
+def _build_password_reset_public_url(*, raw_reset_token: str, preferred_lang: str | None) -> str:
+    settings = load_settings()
+    base = settings.product_public_origin.rstrip("/")
+    lang = _resolve_public_lang(preferred_lang)
+    return f"{base}/{lang}?auth=reset&token={quote(raw_reset_token)}"
+
+
+def _record_security_flow_event(
+    *,
+    user_id: int | None,
+    identity_id: int | None = None,
+    reset_token_id: int | None = None,
+    flow_type: str,
+    status: str,
+    target_email: str | None = None,
+    provider: str | None = None,
+    request_ip_hash: str | None = None,
+    request_user_agent_hash: str | None = None,
+    error_message: str | None = None,
+    meta_json: Dict[str, Any] | None = None,
+) -> None:
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO auth.security_flow_events (
+                        user_id,
+                        identity_id,
+                        reset_token_id,
+                        flow_type,
+                        status,
+                        target_email,
+                        provider,
+                        request_ip_hash,
+                        request_user_agent_hash,
+                        error_message,
+                        meta_json
+                    )
+                    VALUES (
+                        %(user_id)s,
+                        %(identity_id)s,
+                        %(reset_token_id)s,
+                        %(flow_type)s,
+                        %(status)s,
+                        %(target_email)s,
+                        %(provider)s,
+                        %(request_ip_hash)s,
+                        %(request_user_agent_hash)s,
+                        %(error_message)s,
+                        %(meta_json)s::jsonb
+                    )
+                    """,
+                    {
+                        "user_id": user_id,
+                        "identity_id": identity_id,
+                        "reset_token_id": reset_token_id,
+                        "flow_type": flow_type,
+                        "status": status,
+                        "target_email": target_email,
+                        "provider": provider,
+                        "request_ip_hash": request_ip_hash,
+                        "request_user_agent_hash": request_user_agent_hash,
+                        "error_message": error_message,
+                        "meta_json": json.dumps(meta_json or {}, ensure_ascii=False),
+                    },
+                )
+            conn.commit()
+    except Exception:
+        pass
 
 def _build_anonymous_payload() -> Dict[str, Any]:
     return {
@@ -1381,7 +1470,9 @@ def forgot_password(
                 SELECT
                     u.user_id,
                     i.identity_id,
-                    u.email
+                    u.email,
+                    u.full_name,
+                    u.preferred_lang
                 FROM app.users u
                 JOIN app.user_identities i
                   ON i.user_id = u.user_id
@@ -1401,10 +1492,16 @@ def forgot_password(
 
             user_id = int(row[0])
             identity_id = int(row[1])
-            provider_email = str(row[2])
+            provider_email = str(row[2]).strip()
+            full_name = str(row[3]).strip() if row[3] is not None else None
+            if full_name == "":
+                full_name = None
+            preferred_lang = str(row[4]).strip() if row[4] is not None else None
+
             raw_reset_token = _make_password_reset_token()
             reset_token_hash = _make_password_reset_token_hash(raw_reset_token)
             expires_at_utc = _build_password_reset_expires_at()
+            expires_at_utc_iso = expires_at_utc.isoformat().replace("+00:00", "Z")
             fingerprints = build_request_fingerprints(request)
 
             cur.execute(
@@ -1438,6 +1535,7 @@ def forgot_password(
                     %(request_ip_hash)s,
                     %(request_user_agent_hash)s
                 )
+                RETURNING reset_token_id
                 """,
                 {
                     "user_id": user_id,
@@ -1449,13 +1547,76 @@ def forgot_password(
                     "request_user_agent_hash": fingerprints["user_agent_hash"],
                 },
             )
+            reset_token_id = int(cur.fetchone()[0])
 
         conn.commit()
+
+    _record_security_flow_event(
+        user_id=user_id,
+        identity_id=identity_id,
+        reset_token_id=reset_token_id,
+        flow_type="password_reset",
+        status="requested",
+        target_email=provider_email,
+        request_ip_hash=fingerprints["ip_hash"],
+        request_user_agent_hash=fingerprints["user_agent_hash"],
+        meta_json={
+            "expires_at_utc": expires_at_utc_iso,
+        },
+    )
+
+    reset_url = _build_password_reset_public_url(
+        raw_reset_token=raw_reset_token,
+        preferred_lang=preferred_lang,
+    )
+    email_payload = build_password_reset_email(
+        lang=preferred_lang,
+        full_name=full_name,
+        reset_url=reset_url,
+        expires_minutes=settings.product_password_reset_ttl_minutes,
+    )
+
+    try:
+        send_product_email(
+            to_email=provider_email,
+            subject=email_payload["subject"],
+            text_body=email_payload["text_body"],
+            html_body=email_payload["html_body"],
+        )
+        _record_security_flow_event(
+            user_id=user_id,
+            identity_id=identity_id,
+            reset_token_id=reset_token_id,
+            flow_type="password_reset",
+            status="email_sent",
+            target_email=provider_email,
+            provider="smtp",
+            meta_json={
+                "expires_at_utc": expires_at_utc_iso,
+                "reset_url_lang": _resolve_public_lang(preferred_lang),
+            },
+        )
+    except Exception as exc:
+        _record_security_flow_event(
+            user_id=user_id,
+            identity_id=identity_id,
+            reset_token_id=reset_token_id,
+            flow_type="password_reset",
+            status="email_failed",
+            target_email=provider_email,
+            provider="smtp",
+            error_message=_safe_error_message(exc),
+            meta_json={
+                "expires_at_utc": expires_at_utc_iso,
+                "reset_url_lang": _resolve_public_lang(preferred_lang),
+            },
+        )
 
     if settings.product_password_reset_debug_token_enabled:
         response["debug"] = {
             "reset_token": raw_reset_token,
-            "expires_at_utc": expires_at_utc.isoformat().replace("+00:00", "Z"),
+            "reset_url": reset_url,
+            "expires_at_utc": expires_at_utc_iso,
         }
 
     return response
@@ -1505,6 +1666,7 @@ def change_password_authenticated(
         }
 
     current_session_token_hash = make_session_token_hash(raw_session_token)
+    fingerprints = build_request_fingerprints(request)
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -1522,6 +1684,9 @@ def change_password_authenticated(
                 """
                 SELECT
                     u.status,
+                    u.email,
+                    u.full_name,
+                    u.preferred_lang,
                     i.identity_id,
                     i.password_hash
                 FROM app.users u
@@ -1546,8 +1711,13 @@ def change_password_authenticated(
                 }
 
             user_status = str(row[0] or "")
-            identity_id = int(row[1]) if row[1] is not None else None
-            stored_hash = row[2]
+            email = str(row[1]).strip() if row[1] is not None else None
+            full_name = str(row[2]).strip() if row[2] is not None else None
+            if full_name == "":
+                full_name = None
+            preferred_lang = str(row[3]).strip() if row[3] is not None else None
+            identity_id = int(row[4]) if row[4] is not None else None
+            stored_hash = row[5]
 
             if user_status in {"blocked", "deleted"}:
                 conn.rollback()
@@ -1616,6 +1786,60 @@ def change_password_authenticated(
 
         conn.commit()
 
+    changed_at_utc = utc_now_iso()
+
+    _record_security_flow_event(
+        user_id=user_id,
+        identity_id=identity_id,
+        flow_type="password_change_authenticated",
+        status="completed",
+        target_email=email,
+        request_ip_hash=fingerprints["ip_hash"],
+        request_user_agent_hash=fingerprints["user_agent_hash"],
+        meta_json={
+            "changed_at_utc": changed_at_utc,
+        },
+    )
+
+    if email:
+        email_payload = build_password_changed_email(
+            lang=preferred_lang,
+            full_name=full_name,
+            changed_at_utc=changed_at_utc,
+        )
+
+        try:
+            send_product_email(
+                to_email=email,
+                subject=email_payload["subject"],
+                text_body=email_payload["text_body"],
+                html_body=email_payload["html_body"],
+            )
+            _record_security_flow_event(
+                user_id=user_id,
+                identity_id=identity_id,
+                flow_type="password_change_authenticated",
+                status="email_sent",
+                target_email=email,
+                provider="smtp",
+                meta_json={
+                    "changed_at_utc": changed_at_utc,
+                },
+            )
+        except Exception as exc:
+            _record_security_flow_event(
+                user_id=user_id,
+                identity_id=identity_id,
+                flow_type="password_change_authenticated",
+                status="email_failed",
+                target_email=email,
+                provider="smtp",
+                error_message=_safe_error_message(exc),
+                meta_json={
+                    "changed_at_utc": changed_at_utc,
+                },
+            )
+
     return {
         "ok": True,
         "message": "password changed successfully",
@@ -1658,7 +1882,10 @@ def reset_password_with_token(
                     prt.reset_token_id,
                     prt.user_id,
                     prt.identity_id,
-                    u.status
+                    u.status,
+                    u.email,
+                    u.full_name,
+                    u.preferred_lang
                 FROM auth.password_reset_tokens prt
                 JOIN app.users u
                   ON u.user_id = prt.user_id
@@ -1685,6 +1912,11 @@ def reset_password_with_token(
             user_id = int(row[1])
             preferred_identity_id = int(row[2]) if row[2] is not None else None
             user_status = str(row[3])
+            email = str(row[4]).strip() if row[4] is not None else None
+            full_name = str(row[5]).strip() if row[5] is not None else None
+            if full_name == "":
+                full_name = None
+            preferred_lang = str(row[6]).strip() if row[6] is not None else None
 
             if user_status in {"blocked", "deleted"}:
                 conn.rollback()
@@ -1771,6 +2003,61 @@ def reset_password_with_token(
             )
 
         conn.commit()
+
+    changed_at_utc = utc_now_iso()
+
+    _record_security_flow_event(
+        user_id=user_id,
+        identity_id=identity_id,
+        reset_token_id=reset_token_id,
+        flow_type="password_reset",
+        status="completed",
+        target_email=email,
+        meta_json={
+            "changed_at_utc": changed_at_utc,
+        },
+    )
+
+    if email:
+        email_payload = build_password_changed_email(
+            lang=preferred_lang,
+            full_name=full_name,
+            changed_at_utc=changed_at_utc,
+        )
+
+        try:
+            send_product_email(
+                to_email=email,
+                subject=email_payload["subject"],
+                text_body=email_payload["text_body"],
+                html_body=email_payload["html_body"],
+            )
+            _record_security_flow_event(
+                user_id=user_id,
+                identity_id=identity_id,
+                reset_token_id=reset_token_id,
+                flow_type="password_reset",
+                status="confirmation_email_sent",
+                target_email=email,
+                provider="smtp",
+                meta_json={
+                    "changed_at_utc": changed_at_utc,
+                },
+            )
+        except Exception as exc:
+            _record_security_flow_event(
+                user_id=user_id,
+                identity_id=identity_id,
+                reset_token_id=reset_token_id,
+                flow_type="password_reset",
+                status="confirmation_email_failed",
+                target_email=email,
+                provider="smtp",
+                error_message=_safe_error_message(exc),
+                meta_json={
+                    "changed_at_utc": changed_at_utc,
+                },
+            )
 
     return {
         "ok": True,

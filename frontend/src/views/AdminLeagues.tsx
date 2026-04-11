@@ -5,10 +5,12 @@ import {
   adminOpsListLeagues,
   adminOpsToggleLeague,
 } from "../api/client";
+import { getAdminCountryOptionsPt } from "../product/i18n/countryCatalog";
 
 type LeagueItem = {
   sport_key: string;
   official_name: string | null;
+  official_country_code: string | null;
   sport_title: string | null;
   sport_group: string | null;
   league_id: number;
@@ -33,7 +35,10 @@ export default function AdminLeagues() {
   const [resolveMessage, setResolveMessage] = useState<string | null>(null);
 
   const [draftOfficialNames, setDraftOfficialNames] = useState<Record<string, string>>({});
-  const [approveMessage, setApproveMessage] = useState<string | null>(null);  
+  const [draftOfficialCountryCodes, setDraftOfficialCountryCodes] = useState<Record<string, string>>({});
+  const [approveMessage, setApproveMessage] = useState<string | null>(null);
+
+  const countryOptions = useMemo(() => getAdminCountryOptionsPt(), []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +53,16 @@ export default function AdminLeagues() {
         for (const item of nextItems) {
           if (!(item.sport_key in next)) {
             next[item.sport_key] = String(item.official_name ?? item.sport_title ?? "").trim();
+          }
+        }
+        return next;
+      });
+
+      setDraftOfficialCountryCodes((prev) => {
+        const next = { ...prev };
+        for (const item of nextItems) {
+          if (!(item.sport_key in next)) {
+            next[item.sport_key] = String(item.official_country_code ?? "").trim().toUpperCase();
           }
         }
         return next;
@@ -100,9 +115,15 @@ export default function AdminLeagues() {
 
   async function onApprove(item: LeagueItem) {
     const officialName = String(draftOfficialNames[item.sport_key] ?? "").trim();
+    const officialCountryCode = String(draftOfficialCountryCodes[item.sport_key] ?? "").trim().toUpperCase();
 
     if (!officialName) {
       setError("Informe o nome oficial da liga antes de aprovar.");
+      return;
+    }
+
+    if (!officialCountryCode) {
+      setError("Informe o país oficial da liga antes de aprovar.");
       return;
     }
 
@@ -120,6 +141,7 @@ export default function AdminLeagues() {
         sport_key: item.sport_key,
         league_id: item.league_id,
         official_name: officialName,
+        official_country_code: officialCountryCode,
         regions: item.regions ?? "eu",
         hours_ahead: item.hours_ahead ?? 720,
         tol_hours: item.tol_hours ?? 6,
@@ -128,7 +150,7 @@ export default function AdminLeagues() {
         enabled: item.enabled,
       });
 
-      setApproveMessage(`Liga aprovada com nome oficial: ${officialName}`);
+      setApproveMessage(`Liga aprovada: ${officialName} / ${officialCountryCode}`);
       await load();
     } catch (err: any) {
       setError(err?.message ?? "Falha ao aprovar liga");
@@ -219,6 +241,7 @@ export default function AdminLeagues() {
           <thead>
             <tr>
               <th align="left">Nome oficial</th>
+              <th align="left">País oficial</th>
               <th align="left">Nome bruto</th>
               <th align="left">sport_key</th>
               <th align="left">league_id</th>
@@ -228,93 +251,81 @@ export default function AdminLeagues() {
               <th align="left">ação</th>
             </tr>
           </thead>
+
           <tbody>
-            {items.map((item) => {
-              const active = !!item.enabled;
-
-              return (
-                <tr key={item.sport_key}>
-                  <td style={{ padding: "10px 6px", minWidth: 240 }}>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <input
-                        className="input"
-                        value={draftOfficialNames[item.sport_key] ?? ""}
-                        onChange={(e) =>
-                          setDraftOfficialNames((prev) => ({
-                            ...prev,
-                            [item.sport_key]: e.target.value,
-                          }))
-                        }
-                        placeholder="Nome oficial da liga"
-                        disabled={busySportKey === item.sport_key}
-                      />
-                      <div className="muted" style={{ fontSize: 12 }}>
-                        {item.sport_group || "-"}
-                      </div>
-                    </div>
-                  </td>
-
-                  <td style={{ padding: "10px 6px" }}>
-                    <span className="mono">{item.sport_title ?? "—"}</span>
-                  </td>
-
-                  <td style={{ padding: "10px 6px" }}>{item.sport_key}</td>
-                  <td style={{ padding: "10px 6px" }}>{item.league_id}</td>
-                  <td style={{ padding: "10px 6px" }}>{item.regions || "-"}</td>
-
-                  <td style={{ padding: "10px 6px" }}>
-                    {item.season_policy === "fixed"
-                      ? `fixed (${item.fixed_season ?? "-"})`
-                      : "current"}
-                  </td>
-
-                  <td style={{ padding: "10px 6px" }}>
-                    <span className="pill">
-                      {item.computed_status === "approved" && "Aprovada"}
-                      {item.computed_status === "incomplete" && "Incompleta"}
-                      {item.computed_status === "pending" && "Pendente"}
-                      {item.computed_status === "disabled" && "Desativada"}
-                    </span>
-                  </td>
-
-                  <td style={{ padding: "10px 6px" }}>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        className="nav-btn"
-                        onClick={() => onToggle(item)}
-                        disabled={busySportKey === item.sport_key}
-                      >
-                        {busySportKey === item.sport_key
-                          ? "Salvando..."
-                          : active
-                          ? "Desligar"
-                          : "Ligar"}
-                      </button>
-
-                      <button
-                        className="nav-btn"
-                        onClick={() => onApprove(item)}
-                        disabled={
-                          busySportKey === item.sport_key ||
-                          !item.league_id ||
-                          item.league_id <= 0
-                        }
-                      >
-                        Aprovar
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-
-            {items.length === 0 && !loading ? (
+            {items.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: "14px 6px" }}>
-                  <span className="muted">Nenhuma liga encontrada.</span>
+                <td colSpan={9} style={{ padding: "14px 6px" }}>
+                  <span className="muted">{loading ? "Carregando..." : "Nenhuma liga encontrada."}</span>
                 </td>
               </tr>
             ) : null}
+
+            {items.map((item) => (
+              <tr key={item.sport_key} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <td style={{ padding: "10px 6px", minWidth: 220 }}>
+                  <input
+                    className="input"
+                    value={draftOfficialNames[item.sport_key] ?? ""}
+                    onChange={(e) =>
+                      setDraftOfficialNames((prev) => ({
+                        ...prev,
+                        [item.sport_key]: e.target.value,
+                      }))
+                    }
+                    placeholder="Nome oficial"
+                    disabled={busySportKey === item.sport_key}
+                  />
+                </td>
+
+                <td style={{ padding: "10px 6px", minWidth: 220 }}>
+                  <select
+                    className="input"
+                    value={draftOfficialCountryCodes[item.sport_key] ?? ""}
+                    onChange={(e) =>
+                      setDraftOfficialCountryCodes((prev) => ({
+                        ...prev,
+                        [item.sport_key]: e.target.value,
+                      }))
+                    }
+                    disabled={busySportKey === item.sport_key}
+                  >
+                    <option value="">Selecione o país</option>
+                    {countryOptions.map((opt) => (
+                      <option key={opt.code} value={opt.code}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+
+                <td style={{ padding: "10px 6px" }}>{item.sport_title ?? "—"}</td>
+                <td style={{ padding: "10px 6px", fontFamily: "monospace" }}>{item.sport_key}</td>
+                <td style={{ padding: "10px 6px" }}>{item.league_id ?? "—"}</td>
+                <td style={{ padding: "10px 6px" }}>{item.regions ?? "—"}</td>
+                <td style={{ padding: "10px 6px" }}>
+                  {item.season_policy === "fixed" ? `fixed ${item.fixed_season ?? "—"}` : "current"}
+                </td>
+                <td style={{ padding: "10px 6px" }}>{item.computed_status}</td>
+                <td style={{ padding: "10px 6px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    className="nav-btn"
+                    onClick={() => onApprove(item)}
+                    disabled={busySportKey === item.sport_key}
+                  >
+                    Aprovar
+                  </button>
+
+                  <button
+                    className="nav-btn"
+                    onClick={() => onToggle(item)}
+                    disabled={busySportKey === item.sport_key}
+                  >
+                    {item.enabled ? "Desativar" : "Ativar"}
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

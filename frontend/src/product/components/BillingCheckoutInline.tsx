@@ -1,6 +1,10 @@
 import React from "react";
 import { loadStripe } from "@stripe/stripe-js";
-import { CheckoutProvider, PaymentElement, useCheckout } from "@stripe/react-stripe-js/checkout";
+import {
+  CheckoutProvider,
+  PaymentElement,
+  useCheckout,
+} from "@stripe/react-stripe-js/checkout";
 
 import { t, type Lang } from "../i18n";
 
@@ -63,7 +67,9 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
   return (
     <form onSubmit={handleSubmit} style={{ display: "grid", gap: 16 }}>
       <div className="product-plan-cycle-bar">
-        <div className="product-plan-cycle-label">{t(props.lang, "auth.billingCheckoutTitle")}</div>
+        <div className="product-plan-cycle-label">
+          {t(props.lang, "auth.billingCheckoutTitle")}
+        </div>
         <div style={{ color: "#4f5d7a", fontSize: 14 }}>
           {t(props.lang, "auth.billingCheckoutSubtitle")}
         </div>
@@ -102,7 +108,9 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
             {t(props.lang, "auth.billingCheckoutAmount")}
           </div>
           <div style={{ fontWeight: 800, color: "#10214d" }}>{props.priceLabel}</div>
-          <div style={{ fontSize: 13, color: "#5c6b8a", marginTop: 4 }}>{props.cycleLabel}</div>
+          <div style={{ fontSize: 13, color: "#5c6b8a", marginTop: 4 }}>
+            {props.cycleLabel}
+          </div>
         </div>
       </div>
 
@@ -114,10 +122,6 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
           padding: 16,
         }}
       >
-        <div style={{ marginBottom: 12, fontSize: 13, color: "#4f5d7a" }}>
-          {t(props.lang, "auth.billingCheckoutSecureNote")}
-        </div>
-
         <PaymentElement />
       </div>
 
@@ -154,6 +158,10 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
 export function BillingCheckoutInline(props: BillingCheckoutInlineProps) {
   const stripePromise = React.useMemo(() => loadStripe(props.publishableKey), [props.publishableKey]);
 
+  const fetchClientSecret = React.useCallback(async () => {
+    return props.clientSecret;
+  }, [props.clientSecret]);
+
   if (!props.publishableKey || !props.clientSecret) {
     return (
       <div className="product-plan-empty-card">
@@ -163,7 +171,10 @@ export function BillingCheckoutInline(props: BillingCheckoutInlineProps) {
   }
 
   return (
-    <CheckoutProvider stripe={stripePromise} options={{ clientSecret: props.clientSecret }}>
+    <CheckoutProvider
+      stripe={stripePromise}
+      options={{ fetchClientSecret }}
+    >
       <BillingCheckoutInlineBody {...props} />
     </CheckoutProvider>
   );

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Literal
 import re
 import unicodedata
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 from src.db.pg import pg_conn
 
@@ -14,9 +14,18 @@ from src.core.settings import load_settings
 from src.provider.apifootball.client import ApiFootballClient
 from src.etl.raw_ingest_pg import insert_raw_response
 from src.etl.core_etl_pg import run_core_etl
+from src.internal_access.guards import require_admin_access
 
-admin_router = APIRouter(prefix="/admin", tags=["admin"])
-admin_odds_router = APIRouter(prefix="/admin/odds", tags=["admin-odds"])
+admin_router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin_access)],
+)
+admin_odds_router = APIRouter(
+    prefix="/admin/odds",
+    tags=["admin-odds"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 # --- AUDIT (reliability) helpers ---
 
@@ -681,165 +690,129 @@ def resolve_odds_teams(
 
 __all__ = ["admin_router", "admin_odds_router"]
 
-@admin_odds_router.post("/audit/sync-results")
-def admin_odds_audit_sync_results(
-    league_id: Optional[int] = Query(default=None, ge=1),
-    season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    max_rows: int = Query(default=500, ge=1, le=5000),
-    finished_before_hours: int = Query(default=1, ge=0, le=168),
-) -> Dict[str, Any]:
-    """
-    Preenche odds.audit_result usando core.fixtures (quando is_finished=true).
-    Regra: busca fixtures finalizados e gera label H/D/A.
-    """
-    now_utc = datetime.now(timezone.utc)
-    cutoff = now_utc - timedelta(hours=int(finished_before_hours))
 
-    sql_pick = """
-      SELECT
-        p.event_id,
-        p.fixture_id,
-        p.league_id,
-        p.season,
-        p.kickoff_utc,
-        f.goals_home,
-        f.goals_away
-      FROM odds.audit_prediction p
-      JOIN core.fixtures f ON f.fixture_id = p.fixture_id
-      LEFT JOIN odds.audit_result r ON r.event_id = p.event_id
-      WHERE p.fixture_id IS NOT NULL
-        AND r.event_id IS NULL
-        AND f.is_finished = true
-        AND COALESCE(f.is_cancelled, false) = false
-        AND p.kickoff_utc <= %(cutoff)s
-        AND (%(league_id)s IS NULL OR p.league_id = %(league_id)s)
-        AND (%(season)s IS NULL OR p.season = %(season)s)
-      ORDER BY p.kickoff_utc DESC
-      LIMIT %(max_rows)s
-    """
+def _iso_utc_or_none(dt: Optional[datetime]) -> Optional[str]:
+    if not dt:
+        return None
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    sql_ins = """
-      INSERT INTO odds.audit_result (
-        event_id, fixture_id, league_id, season, kickoff_utc,
-        result_1x2, home_goals, away_goals
-      )
-      VALUES (
-        %(event_id)s, %(fixture_id)s, %(league_id)s, %(season)s, %(kickoff_utc)s,
-        %(result_1x2)s, %(home_goals)s, %(away_goals)s
-      )
-      ON CONFLICT (event_id) DO UPDATE SET
-        fixture_id = EXCLUDED.fixture_id,
-        league_id = EXCLUDED.league_id,
-        season = EXCLUDED.season,
-        kickoff_utc = EXCLUDED.kickoff_utc,
-        result_1x2 = EXCLUDED.result_1x2,
-        home_goals = EXCLUDED.home_goals,
-        away_goals = EXCLUDED.away_goals,
-        finished_at_utc = now()
-    """
 
-    inserted = 0
-    rows = []
-
-    with pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql_pick, {"cutoff": cutoff, "league_id": league_id, "season": season, "max_rows": max_rows})
-            rows = cur.fetchall()
-
-        with conn.cursor() as cur:
-            for (event_id, fixture_id, l_id, s, kickoff_utc, gh, ga) in rows:
-                if gh is None or ga is None:
-                    continue
-                y = _label_1x2(int(gh), int(ga))
-                cur.execute(
-                    sql_ins,
-                    {
-                        "event_id": event_id,
-                        "fixture_id": fixture_id,
-                        "league_id": l_id,
-                        "season": s,
-                        "kickoff_utc": kickoff_utc,
-                        "result_1x2": y,
-                        "home_goals": int(gh),
-                        "away_goals": int(ga),
-                    },
-                )
-                inserted += 1
-
-        conn.commit()
-
-    return {"ok": True, "inserted": inserted, "scanned": len(rows), "cutoff_utc": cutoff.isoformat()}
-
-@admin_odds_router.get("/audit/reliability")
-def admin_odds_audit_reliability(
-    league_id: Optional[int] = Query(default=None, ge=1),
-    season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    window_days: int = Query(default=30, ge=1, le=365),
-    cutoff_hours: int = Query(default=6, ge=0, le=168),
-    artifact_filename: Optional[str] = Query(default=None),
-    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
-) -> Dict[str, Any]:
-    """
-    Retorna KPIs de confiabilidade (Modelo vs Mercado novig) em uma janela temporal,
-    escolhendo 1 snapshot por jogo: o mais recente capturado até (kickoff - cutoff_hours).
-    """
-    now_utc = datetime.now(timezone.utc)
-    start = now_utc - timedelta(days=int(window_days))
-
-    # min_confidence: NONE inclui tudo; ILIKE inclui ILIKE+EXACT; EXACT só EXACT
-    confs = None
+def _audit_conf_values(min_confidence: str) -> Optional[Tuple[str, ...]]:
     if min_confidence == "EXACT":
-        confs = ("EXACT",)
-    elif min_confidence == "ILIKE":
-        confs = ("ILIKE", "EXACT")
+        return ("EXACT",)
+    if min_confidence == "ILIKE":
+        return ("ILIKE", "EXACT")
+    return None
+
+
+def _audit_prob_triplet(p_h: Any, p_d: Any, p_a: Any) -> Optional[Dict[str, float]]:
+    if p_h is None or p_d is None or p_a is None:
+        return None
+    return {
+        "H": float(p_h),
+        "D": float(p_d),
+        "A": float(p_a),
+    }
+
+
+def _audit_best_side_prob(probs: Optional[Dict[str, float]], best_side: Optional[str]) -> Optional[float]:
+    if not probs:
+        return None
+    if best_side not in ("H", "D", "A"):
+        return None
+    return float(probs[best_side])
+
+
+def _audit_pick_rows(
+    league_id: Optional[int],
+    season: Optional[int],
+    window_days: int,
+    cutoff_hours: int,
+    artifact_filename: Optional[str],
+    min_confidence: str,
+) -> Tuple[List[Dict[str, Any]], str, str]:
+    now_utc = datetime.now(timezone.utc)
+    start_utc = now_utc - timedelta(days=int(window_days))
+    confs = _audit_conf_values(min_confidence)
 
     sql = """
       WITH cand AS (
         SELECT
           p.event_id,
+          p.artifact_filename,
+          p.sport_key,
           p.kickoff_utc,
           p.captured_at_utc,
+          e.home_name,
+          e.away_name,
           p.league_id,
           p.season,
           p.match_confidence,
-
-          p.market_p_h, p.market_p_d, p.market_p_a,
-          p.model_p_h,  p.model_p_d,  p.model_p_a,
-
-          r.result_1x2
-        FROM odds.audit_prediction p
-        JOIN odds.audit_result r ON r.event_id = p.event_id
-        WHERE p.kickoff_utc >= %(start)s
-          AND p.kickoff_utc <= %(end)s
-          AND (%(league_id)s IS NULL OR p.league_id = %(league_id)s)
-          AND (%(season)s   IS NULL OR p.season   = %(season)s)
-          AND (%(artifact_filename)s IS NULL OR p.artifact_filename = %(artifact_filename)s)
-          AND (%(confs)s IS NULL OR p.match_confidence = ANY(%(confs)s))
+          p.best_side,
+          p.best_ev,
+          p.p_mkt_h,
+          p.p_mkt_d,
+          p.p_mkt_a,
+          p.p_model_h,
+          p.p_model_d,
+          p.p_model_a,
+          r.result_1x2,
+          r.home_goals,
+          r.away_goals
+        FROM odds.audit_predictions p
+        LEFT JOIN odds.odds_events e
+          ON e.event_id = p.event_id
+        JOIN odds.audit_result r
+          ON r.event_id = p.event_id
+        WHERE p.kickoff_utc IS NOT NULL
+          AND p.captured_at_utc IS NOT NULL
+          AND p.kickoff_utc >= %(start_utc)s
+          AND p.kickoff_utc <= %(end_utc)s
+          AND (%(league_id)s::int IS NULL OR p.league_id = %(league_id)s::int)
+          AND (%(season)s::int IS NULL OR p.season = %(season)s::int)
+          AND (%(artifact_filename)s::text IS NULL OR p.artifact_filename = %(artifact_filename)s::text)
+          AND (%(confs)s::text[] IS NULL OR p.match_confidence = ANY(%(confs)s::text[]))
           AND p.captured_at_utc <= (p.kickoff_utc - (%(cutoff_hours)s || ' hours')::interval)
       ),
       picked AS (
-        SELECT DISTINCT ON (event_id)
+        SELECT DISTINCT ON (event_id, artifact_filename)
           *
         FROM cand
-        ORDER BY event_id, captured_at_utc DESC
+        ORDER BY event_id, artifact_filename, captured_at_utc DESC
       )
       SELECT
-        event_id, kickoff_utc, captured_at_utc,
-        market_p_h, market_p_d, market_p_a,
-        model_p_h,  model_p_d,  model_p_a,
-        result_1x2
+        event_id,
+        artifact_filename,
+        sport_key,
+        kickoff_utc,
+        captured_at_utc,
+        home_name,
+        away_name,
+        league_id,
+        season,
+        match_confidence,
+        best_side,
+        best_ev,
+        p_mkt_h,
+        p_mkt_d,
+        p_mkt_a,
+        p_model_h,
+        p_model_d,
+        p_model_a,
+        result_1x2,
+        home_goals,
+        away_goals
       FROM picked
-      ORDER BY kickoff_utc DESC
+      ORDER BY kickoff_utc DESC, event_id ASC
     """
 
-    rows = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 sql,
                 {
-                    "start": start,
-                    "end": now_utc,
+                    "start_utc": start_utc,
+                    "end_utc": now_utc,
                     "league_id": league_id,
                     "season": season,
                     "artifact_filename": artifact_filename,
@@ -849,7 +822,56 @@ def admin_odds_audit_reliability(
             )
             rows = cur.fetchall()
 
-    # métricas
+    out: List[Dict[str, Any]] = []
+    for (
+        event_id,
+        artifact_filename_db,
+        sport_key,
+        kickoff_utc,
+        captured_at_utc,
+        home_name,
+        away_name,
+        league_id_db,
+        season_db,
+        match_confidence,
+        best_side,
+        best_ev,
+        p_mkt_h,
+        p_mkt_d,
+        p_mkt_a,
+        p_model_h,
+        p_model_d,
+        p_model_a,
+        result_1x2,
+        home_goals,
+        away_goals,
+    ) in rows:
+        out.append(
+            {
+                "event_id": str(event_id),
+                "artifact_filename": str(artifact_filename_db),
+                "sport_key": str(sport_key) if sport_key is not None else None,
+                "kickoff_utc": _iso_utc_or_none(kickoff_utc),
+                "captured_at_utc": _iso_utc_or_none(captured_at_utc),
+                "home_name": str(home_name) if home_name is not None else None,
+                "away_name": str(away_name) if away_name is not None else None,
+                "league_id": int(league_id_db) if league_id_db is not None else None,
+                "season": int(season_db) if season_db is not None else None,
+                "match_confidence": str(match_confidence) if match_confidence is not None else None,
+                "best_side": str(best_side) if best_side is not None else None,
+                "best_ev": float(best_ev) if best_ev is not None else None,
+                "market_probs": _audit_prob_triplet(p_mkt_h, p_mkt_d, p_mkt_a),
+                "model_probs": _audit_prob_triplet(p_model_h, p_model_d, p_model_a),
+                "result_1x2": str(result_1x2) if result_1x2 is not None else None,
+                "home_goals": int(home_goals) if home_goals is not None else None,
+                "away_goals": int(away_goals) if away_goals is not None else None,
+            }
+        )
+
+    return out, _iso_utc_or_none(start_utc) or "", _iso_utc_or_none(now_utc) or ""
+
+
+def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[str, Any]:
     n_total = len(rows)
     n_model = 0
     n_market = 0
@@ -857,39 +879,260 @@ def admin_odds_audit_reliability(
 
     sum_brier_model = 0.0
     sum_ll_model = 0.0
-    sum_top1_model = 0
+    sum_top1_model = 0.0
 
     sum_brier_mkt = 0.0
     sum_ll_mkt = 0.0
-    sum_top1_mkt = 0
+    sum_top1_mkt = 0.0
 
-    for (_event_id, _kickoff, _cap, mH, mD, mA, pH, pD, pA, y) in rows:
-        y = str(y)
+    severe_miss_count = 0
 
-        has_model = (pH is not None and pD is not None and pA is not None)
-        has_mkt = (mH is not None and mD is not None and mA is not None)
+    for row in rows:
+        outcome = row.get("result_1x2")
+        if outcome not in ("H", "D", "A"):
+            continue
 
-        if has_model:
+        model_probs = row.get("model_probs")
+        market_probs = row.get("market_probs")
+
+        if model_probs:
             n_model += 1
-            pHf, pDf, pAf = float(pH), float(pD), float(pA)
-            sum_brier_model += _brier_3(pHf, pDf, pAf, y)
-            sum_ll_model += _logloss_3(pHf, pDf, pAf, y)
-            sum_top1_model += (1 if _top1(pHf, pDf, pAf) == y else 0)
+            sum_brier_model += _brier_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome)
+            sum_ll_model += _logloss_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome)
+            model_top = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
+            sum_top1_model += 1.0 if model_top == outcome else 0.0
 
-        if has_mkt:
+            best_side = row.get("best_side")
+            if best_side not in ("H", "D", "A"):
+                best_side = model_top
+
+            best_side_prob = _audit_best_side_prob(model_probs, best_side)
+            if best_side_prob is not None and best_side != outcome and best_side_prob >= float(severe_threshold):
+                severe_miss_count += 1
+
+        if market_probs:
             n_market += 1
-            mHf, mDf, mAf = float(mH), float(mD), float(mA)
-            sum_brier_mkt += _brier_3(mHf, mDf, mAf, y)
-            sum_ll_mkt += _logloss_3(mHf, mDf, mAf, y)
-            sum_top1_mkt += (1 if _top1(mHf, mDf, mAf) == y else 0)
+            sum_brier_mkt += _brier_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome)
+            sum_ll_mkt += _logloss_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome)
+            market_top = _top1(market_probs["H"], market_probs["D"], market_probs["A"])
+            sum_top1_mkt += 1.0 if market_top == outcome else 0.0
 
-        if has_model and has_mkt:
+        if model_probs and market_probs:
             n_both += 1
 
-    def _avg(s: float, n: int) -> Optional[float]:
-        return (s / n) if n > 0 else None
+    def _avg(total: float, n: int) -> Optional[float]:
+        return (total / n) if n > 0 else None
 
-    out = {
+    model_metrics = {
+        "brier": _avg(sum_brier_model, n_model),
+        "logloss": _avg(sum_ll_model, n_model),
+        "top1_acc": _avg(sum_top1_model, n_model),
+    }
+
+    market_metrics = {
+        "brier": _avg(sum_brier_mkt, n_market),
+        "logloss": _avg(sum_ll_mkt, n_market),
+        "top1_acc": _avg(sum_top1_mkt, n_market),
+    }
+
+    def _delta(a: Optional[float], b: Optional[float]) -> Optional[float]:
+        if a is None or b is None:
+            return None
+        return a - b
+
+    return {
+        "counts": {
+            "picked_rows": n_total,
+            "with_model_probs": n_model,
+            "with_market_probs": n_market,
+            "with_both": n_both,
+        },
+        "model": model_metrics,
+        "market_novig": market_metrics,
+        "comparison": {
+            "model_minus_market": {
+                "brier": _delta(model_metrics["brier"], market_metrics["brier"]),
+                "logloss": _delta(model_metrics["logloss"], market_metrics["logloss"]),
+                "top1_acc": _delta(model_metrics["top1_acc"], market_metrics["top1_acc"]),
+            }
+        },
+        "diagnostics": {
+            "severe_threshold": float(severe_threshold),
+            "severe_miss_count": int(severe_miss_count),
+            "severe_miss_rate": (float(severe_miss_count) / float(n_model)) if n_model > 0 else None,
+        },
+    }
+
+
+@admin_odds_router.post("/audit/sync-results")
+def admin_odds_audit_sync_results(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    max_rows: int = Query(default=500, ge=1, le=5000),
+    finished_before_hours: int = Query(default=1, ge=0, le=168),
+    lookback_days: Optional[int] = Query(default=None, ge=1, le=30),
+) -> Dict[str, Any]:
+    """
+    Preenche odds.audit_result usando core.fixtures para eventos auditados que ja terminaram.
+    """
+
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=int(finished_before_hours))
+
+    lookback_utc = (
+        now_utc - timedelta(days=int(lookback_days))
+        if lookback_days is not None
+        else None
+    )
+
+    sql_pick = """
+      WITH pending AS (
+        SELECT DISTINCT ON (p.event_id)
+          p.event_id,
+          p.fixture_id,
+          p.league_id,
+          p.season,
+          p.kickoff_utc,
+          f.goals_home,
+          f.goals_away
+        FROM odds.audit_predictions p
+        JOIN core.fixtures f
+          ON f.fixture_id = p.fixture_id
+        LEFT JOIN odds.audit_result r
+          ON r.event_id = p.event_id
+        WHERE p.fixture_id IS NOT NULL
+          AND r.event_id IS NULL
+          AND f.is_finished = TRUE
+          AND COALESCE(f.is_cancelled, FALSE) = FALSE
+          AND p.kickoff_utc IS NOT NULL
+          AND p.kickoff_utc <= %(cutoff)s
+          AND (%(lookback_utc)s IS NULL OR p.kickoff_utc >= %(lookback_utc)s)
+          AND (%(league_id)s::int IS NULL OR p.league_id = %(league_id)s::int)
+          AND (%(season)s::int IS NULL OR p.season = %(season)s::int)
+        ORDER BY p.event_id, p.updated_at_utc DESC NULLS LAST, p.created_at_utc DESC
+      )
+      SELECT
+        event_id,
+        fixture_id,
+        league_id,
+        season,
+        kickoff_utc,
+        goals_home,
+        goals_away
+      FROM pending
+      ORDER BY kickoff_utc DESC
+      LIMIT %(max_rows)s
+    """
+
+    sql_ins = """
+      INSERT INTO odds.audit_result (
+        event_id,
+        fixture_id,
+        league_id,
+        season,
+        kickoff_utc,
+        result_1x2,
+        home_goals,
+        away_goals,
+        finished_at_utc,
+        updated_at_utc
+      )
+      VALUES (
+        %(event_id)s,
+        %(fixture_id)s,
+        %(league_id)s,
+        %(season)s,
+        %(kickoff_utc)s,
+        %(result_1x2)s,
+        %(home_goals)s,
+        %(away_goals)s,
+        now(),
+        now()
+      )
+      ON CONFLICT (event_id) DO UPDATE SET
+        fixture_id = EXCLUDED.fixture_id,
+        league_id = EXCLUDED.league_id,
+        season = EXCLUDED.season,
+        kickoff_utc = EXCLUDED.kickoff_utc,
+        result_1x2 = EXCLUDED.result_1x2,
+        home_goals = EXCLUDED.home_goals,
+        away_goals = EXCLUDED.away_goals,
+        finished_at_utc = now(),
+        updated_at_utc = now()
+    """
+
+    inserted = 0
+    rows: List[Tuple[Any, ...]] = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql_pick,
+                    {
+                        "cutoff": cutoff,
+                        "lookback_utc": lookback_utc,
+                        "league_id": league_id,
+                        "season": season,
+                        "max_rows": max_rows,
+                    }
+            )
+            rows = cur.fetchall()
+
+        with conn.cursor() as cur:
+            for (event_id, fixture_id, league_id_db, season_db, kickoff_utc, goals_home, goals_away) in rows:
+                if goals_home is None or goals_away is None:
+                    continue
+
+                result_1x2 = _label_1x2(int(goals_home), int(goals_away))
+
+                cur.execute(
+                    sql_ins,
+                    {
+                        "event_id": event_id,
+                        "fixture_id": fixture_id,
+                        "league_id": league_id_db,
+                        "season": season_db,
+                        "kickoff_utc": kickoff_utc,
+                        "result_1x2": result_1x2,
+                        "home_goals": int(goals_home),
+                        "away_goals": int(goals_away),
+                    },
+                )
+                inserted += 1
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "inserted": inserted,
+        "scanned": len(rows),
+        "cutoff_utc": _iso_utc_or_none(cutoff),
+        "lookback_utc": _iso_utc_or_none(lookback_utc),
+    }
+
+
+@admin_odds_router.get("/audit/reliability")
+def admin_odds_audit_reliability(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    window_days: int = Query(default=30, ge=1, le=365),
+    cutoff_hours: int = Query(default=6, ge=0, le=168),
+    artifact_filename: Optional[str] = Query(default=None),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+    severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
+) -> Dict[str, Any]:
+    rows, start_utc, end_utc = _audit_pick_rows(
+        league_id=league_id,
+        season=season,
+        window_days=window_days,
+        cutoff_hours=cutoff_hours,
+        artifact_filename=artifact_filename,
+        min_confidence=min_confidence,
+    )
+
+    rollup = _audit_rollup(rows, severe_threshold=severe_threshold)
+
+    return {
         "meta": {
             "league_id": league_id,
             "season": season,
@@ -897,27 +1140,170 @@ def admin_odds_audit_reliability(
             "cutoff_hours": cutoff_hours,
             "artifact_filename": artifact_filename,
             "min_confidence": min_confidence,
-            "start_utc": start.isoformat(),
-            "end_utc": now_utc.isoformat(),
+            "start_utc": start_utc,
+            "end_utc": end_utc,
         },
-        "counts": {
-            "picked_games": n_total,
-            "with_model_probs": n_model,
-            "with_market_probs": n_market,
-            "with_both": n_both,
-        },
-        "model": {
-            "brier": _avg(sum_brier_model, n_model),
-            "logloss": _avg(sum_ll_model, n_model),
-            "top1_acc": (_avg(float(sum_top1_model), n_model)),
-        },
-        "market_novig": {
-            "brier": _avg(sum_brier_mkt, n_market),
-            "logloss": _avg(sum_ll_mkt, n_market),
-            "top1_acc": (_avg(float(sum_top1_mkt), n_market)),
-        },
+        **rollup,
     }
-    return out
+
+
+@admin_odds_router.get("/audit/reliability/by-league")
+def admin_odds_audit_reliability_by_league(
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    window_days: int = Query(default=30, ge=1, le=365),
+    cutoff_hours: int = Query(default=6, ge=0, le=168),
+    artifact_filename: Optional[str] = Query(default=None),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+    severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
+) -> Dict[str, Any]:
+    rows, start_utc, end_utc = _audit_pick_rows(
+        league_id=None,
+        season=season,
+        window_days=window_days,
+        cutoff_hours=cutoff_hours,
+        artifact_filename=artifact_filename,
+        min_confidence=min_confidence,
+    )
+
+    grouped: Dict[Tuple[Optional[int], Optional[int]], List[Dict[str, Any]]] = {}
+    for row in rows:
+        key = (row.get("league_id"), row.get("season"))
+        grouped.setdefault(key, []).append(row)
+
+    out_rows: List[Dict[str, Any]] = []
+    for (league_id_db, season_db), group_rows in sorted(
+        grouped.items(),
+        key=lambda item: (-len(item[1]), item[0][0] or 0, item[0][1] or 0),
+    ):
+        rollup = _audit_rollup(group_rows, severe_threshold=severe_threshold)
+        out_rows.append(
+            {
+                "league_id": league_id_db,
+                "season": season_db,
+                **rollup,
+            }
+        )
+
+    return {
+        "meta": {
+            "season": season,
+            "window_days": window_days,
+            "cutoff_hours": cutoff_hours,
+            "artifact_filename": artifact_filename,
+            "min_confidence": min_confidence,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+        },
+        "rows": out_rows,
+    }
+
+
+@admin_odds_router.get("/audit/reliability/events")
+def admin_odds_audit_reliability_events(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    window_days: int = Query(default=30, ge=1, le=365),
+    cutoff_hours: int = Query(default=6, ge=0, le=168),
+    artifact_filename: Optional[str] = Query(default=None),
+    min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
+    severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
+    only_severe: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> Dict[str, Any]:
+    rows, start_utc, end_utc = _audit_pick_rows(
+        league_id=league_id,
+        season=season,
+        window_days=window_days,
+        cutoff_hours=cutoff_hours,
+        artifact_filename=artifact_filename,
+        min_confidence=min_confidence,
+    )
+
+    event_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        outcome = row.get("result_1x2")
+        model_probs = row.get("model_probs")
+        market_probs = row.get("market_probs")
+        best_side = row.get("best_side")
+
+        if model_probs and best_side not in ("H", "D", "A"):
+            best_side = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
+
+        best_side_prob = _audit_best_side_prob(model_probs, best_side)
+
+        model_metrics = None
+        if model_probs and outcome in ("H", "D", "A"):
+            model_metrics = {
+                "brier": _brier_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome),
+                "logloss": _logloss_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome),
+                "top1_acc": 1.0 if _top1(model_probs["H"], model_probs["D"], model_probs["A"]) == outcome else 0.0,
+            }
+
+        market_metrics = None
+        if market_probs and outcome in ("H", "D", "A"):
+            market_metrics = {
+                "brier": _brier_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome),
+                "logloss": _logloss_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome),
+                "top1_acc": 1.0 if _top1(market_probs["H"], market_probs["D"], market_probs["A"]) == outcome else 0.0,
+            }
+
+        severe_miss = bool(
+            model_probs
+            and outcome in ("H", "D", "A")
+            and best_side in ("H", "D", "A")
+            and best_side_prob is not None
+            and best_side_prob >= float(severe_threshold)
+            and best_side != outcome
+        )
+
+        if only_severe and not severe_miss:
+            continue
+
+        event_rows.append(
+            {
+                "event_id": row["event_id"],
+                "artifact_filename": row["artifact_filename"],
+                "sport_key": row.get("sport_key"),
+                "kickoff_utc": row.get("kickoff_utc"),
+                "captured_at_utc": row.get("captured_at_utc"),
+                "home_name": row.get("home_name"),
+                "away_name": row.get("away_name"),
+                "league_id": row.get("league_id"),
+                "season": row.get("season"),
+                "match_confidence": row.get("match_confidence"),
+                "best_side": best_side,
+                "best_side_prob": best_side_prob,
+                "best_ev": row.get("best_ev"),
+                "model_probs": model_probs,
+                "market_probs": market_probs,
+                "result_1x2": outcome,
+                "home_goals": row.get("home_goals"),
+                "away_goals": row.get("away_goals"),
+                "severe_miss": severe_miss,
+                "model_metrics": model_metrics,
+                "market_metrics": market_metrics,
+            }
+        )
+
+    event_rows = event_rows[:limit]
+
+    return {
+        "meta": {
+            "league_id": league_id,
+            "season": season,
+            "window_days": window_days,
+            "cutoff_hours": cutoff_hours,
+            "artifact_filename": artifact_filename,
+            "min_confidence": min_confidence,
+            "severe_threshold": severe_threshold,
+            "only_severe": only_severe,
+            "limit": limit,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+            "returned": len(event_rows),
+        },
+        "rows": event_rows,
+    }
 
 @admin_router.get("/matchup/whatif")
 def admin_matchup_whatif(

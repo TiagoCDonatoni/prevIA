@@ -1,3 +1,9 @@
+import {
+  DEFAULT_ACCOUNT_PREFERENCES,
+  resolveAccountPreferences,
+  type ProductAccountPreferences,
+} from "./preferences/accountPreferences";
+
 import type { Lang } from "./i18n";
 import {
   PRODUCT_DEV_AUTO_LOGIN_EMAIL,
@@ -147,6 +153,7 @@ type PersistedState = {
   lang: Lang;
   auth: { is_logged_in: boolean; email?: string | null };
   credits: { date_key: string; used_today: number; revealed_today: Record<string, true> };
+  preferences: ProductAccountPreferences;
 };
 
 function dateKeyUtc(now = new Date()): string {
@@ -197,6 +204,7 @@ export function loadProductState(): PersistedState {
     lang: detectBrowserLang(),
     auth: { is_logged_in: false, email: null },
     credits: { date_key: today, used_today: 0, revealed_today: {} },
+    preferences: DEFAULT_ACCOUNT_PREFERENCES,
   };
 
   let state: PersistedState = fallback;
@@ -209,7 +217,8 @@ export function loadProductState(): PersistedState {
 
       parsed.lang = normalizeLang(parsed.lang);
       parsed.plan = normalizePlanId(parsed.plan);
-
+      parsed.preferences = resolveAccountPreferences(parsed.preferences);
+      
       if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
         parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
       }
@@ -230,6 +239,7 @@ export function loadProductState(): PersistedState {
         is_logged_in: true,
         email: PRODUCT_DEV_AUTO_LOGIN_EMAIL || "dev@previa.local",
       },
+      preferences: resolveAccountPreferences(state.preferences),
     };
 
     // se alguém habilitar dev auto-login mas deixar FREE_ANON, sobe para FREE

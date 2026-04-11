@@ -220,6 +220,120 @@ export type OddsIntelResponse = {
   items: OddsIntelItem[];
 };
 
+export type AdminOddsAuditMetrics = {
+  brier: number | null;
+  logloss: number | null;
+  top1_acc: number | null;
+};
+
+export type AdminOddsAuditCounts = {
+  picked_rows: number;
+  with_model_probs: number;
+  with_market_probs: number;
+  with_both: number;
+};
+
+export type AdminOddsAuditDiagnostics = {
+  severe_threshold: number;
+  severe_miss_count: number;
+  severe_miss_rate: number | null;
+};
+
+export type AdminOddsAuditSummaryResponse = {
+  meta: {
+    league_id: number | null;
+    season: number | null;
+    window_days: number;
+    cutoff_hours: number;
+    artifact_filename: string | null;
+    min_confidence: "NONE" | "ILIKE" | "EXACT";
+    start_utc: string;
+    end_utc: string;
+  };
+  counts: AdminOddsAuditCounts;
+  model: AdminOddsAuditMetrics;
+  market_novig: AdminOddsAuditMetrics;
+  comparison: {
+    model_minus_market: AdminOddsAuditMetrics;
+  };
+  diagnostics: AdminOddsAuditDiagnostics;
+};
+
+export type AdminOddsAuditByLeagueRow = {
+  league_id: number | null;
+  season: number | null;
+  counts: AdminOddsAuditCounts;
+  model: AdminOddsAuditMetrics;
+  market_novig: AdminOddsAuditMetrics;
+  comparison: {
+    model_minus_market: AdminOddsAuditMetrics;
+  };
+  diagnostics: AdminOddsAuditDiagnostics;
+};
+
+export type AdminOddsAuditByLeagueResponse = {
+  meta: {
+    season: number | null;
+    window_days: number;
+    cutoff_hours: number;
+    artifact_filename: string | null;
+    min_confidence: "NONE" | "ILIKE" | "EXACT";
+    start_utc: string;
+    end_utc: string;
+  };
+  rows: AdminOddsAuditByLeagueRow[];
+};
+
+export type AdminOddsAuditEventRow = {
+  event_id: string;
+  artifact_filename: string;
+  sport_key: string | null;
+  kickoff_utc: string | null;
+  captured_at_utc: string | null;
+  home_name: string | null;
+  away_name: string | null;
+  league_id: number | null;
+  season: number | null;
+  match_confidence: "NONE" | "ILIKE" | "EXACT" | null;
+  best_side: "H" | "D" | "A" | null;
+  best_side_prob: number | null;
+  best_ev: number | null;
+  model_probs: { H: number; D: number; A: number } | null;
+  market_probs: { H: number; D: number; A: number } | null;
+  result_1x2: "H" | "D" | "A" | null;
+  home_goals: number | null;
+  away_goals: number | null;
+  severe_miss: boolean;
+  model_metrics: AdminOddsAuditMetrics | null;
+  market_metrics: AdminOddsAuditMetrics | null;
+};
+
+export type AdminOddsAuditEventsResponse = {
+  meta: {
+    league_id: number | null;
+    season: number | null;
+    window_days: number;
+    cutoff_hours: number;
+    artifact_filename: string | null;
+    min_confidence: "NONE" | "ILIKE" | "EXACT";
+    severe_threshold: number;
+    only_severe: boolean;
+    limit: number;
+    start_utc: string;
+    end_utc: string;
+    returned: number;
+  };
+  rows: AdminOddsAuditEventRow[];
+};
+
+export type AdminOddsAuditSyncResultsResponse = {
+  ok: boolean;
+  inserted: number;
+  scanned: number;
+  cutoff_utc: string | null;
+  lookback_utc: string | null;
+};
+
 export type AdminOddsTotalsItem = {
   event_id: string;
   sport_key: string;

@@ -68,6 +68,7 @@ class Settings:
     app_env: str
 
     frontend_allowed_origins: List[str]
+    product_public_origin: str
 
     product_auth_enabled: bool
     admin_auth_enabled: bool
@@ -92,6 +93,10 @@ class Settings:
     stripe_checkout_success_url: str
     stripe_checkout_cancel_url: str
     stripe_portal_return_url: str
+
+    ops_mode: str
+    ops_manual_trigger_enabled: bool
+    ops_trigger_token: str
 
     sports_config: Dict[str, Any]
 
@@ -127,6 +132,7 @@ def load_settings() -> Settings:
         "FRONTEND_ALLOWED_ORIGINS",
         default=default_frontend_allowed_origins if app_env in {"dev", "development"} else [],
     )
+    product_public_origin = _env_str("PRODUCT_PUBLIC_ORIGIN", "http://localhost:5173").rstrip("/")
 
     product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
@@ -172,6 +178,13 @@ def load_settings() -> Settings:
     stripe_checkout_cancel_url = _env_str("STRIPE_CHECKOUT_CANCEL_URL")
     stripe_portal_return_url = _env_str("STRIPE_PORTAL_RETURN_URL")
 
+    ops_mode = _env_str("OPS_MODE", "manual").lower()
+    if ops_mode not in {"manual", "economic", "v1"}:
+        ops_mode = "manual"
+
+    ops_manual_trigger_enabled = _env_bool("OPS_MANUAL_TRIGGER_ENABLED", default=False)
+    ops_trigger_token = _env_str("OPS_TRIGGER_TOKEN")
+
     sports_config = _read_json(CONFIG_DIR / "sports.json")
     apifootball_endpoints = _read_json(CONFIG_DIR / "endpoints.apifootball.json")
     theodds_endpoints = _read_json(CONFIG_DIR / "endpoints.theodds.json")
@@ -187,6 +200,7 @@ def load_settings() -> Settings:
         supported_langs=supported_langs,
         app_env=app_env,
         frontend_allowed_origins=frontend_allowed_origins,
+        product_public_origin=product_public_origin,
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
         product_dev_auto_login_enabled=product_dev_auto_login_enabled,
@@ -208,6 +222,9 @@ def load_settings() -> Settings:
         stripe_checkout_success_url=stripe_checkout_success_url,
         stripe_checkout_cancel_url=stripe_checkout_cancel_url,
         stripe_portal_return_url=stripe_portal_return_url,
+        ops_mode=ops_mode,
+        ops_manual_trigger_enabled=ops_manual_trigger_enabled,
+        ops_trigger_token=ops_trigger_token,
         sports_config=sports_config,
         apifootball_endpoints=apifootball_endpoints,
         theodds_endpoints=theodds_endpoints,

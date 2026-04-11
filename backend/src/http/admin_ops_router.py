@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 
+from time import perf_counter
+from typing import Any, Callable, Dict
 import re
 import unicodedata
 
@@ -14,8 +16,138 @@ from src.ops.jobs.odds_league_gap_scan import odds_league_gap_scan
 from src.db.pg import pg_conn
 from src.ops.jobs.odds_league_autoclassify import odds_league_autoclassify
 from src.ops.jobs.update_pipeline import update_pipeline_run
+from src.internal_access.guards import require_admin_access
 
-router = APIRouter(prefix="/admin/ops", tags=["admin-ops"])
+router = APIRouter(
+    prefix="/admin/ops",
+    tags=["admin-ops"],
+    dependencies=[Depends(require_admin_access)],
+)
+
+def _format_job_response(
+    *,
+    ok: bool,
+    job_name: str,
+    elapsed_sec: float,
+    counters: Dict[str, Any] | None = None,
+    error: str | None = None,
+    run_id: int | None = None,
+    attempt_id: int | None = None,
+    status: str | None = None,
+    blocked_reason: str | None = None,
+    execution_mode: str = "job_runner",
+    fallback_reason: str | None = None,
+) -> Dict[str, Any]:
+    return {
+        "ok": ok,
+        "job": job_name,
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "status": status or ("completed" if ok else "failed"),
+        "elapsed_sec": elapsed_sec,
+        "counters": counters or {},
+        "error": error,
+        "blocked_reason": blocked_reason,
+        "execution_mode": execution_mode,
+        "fallback_reason": fallback_reason,
+    }
+
+
+def _should_fallback_to_direct_execution(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    fallback_tokens = [
+        'relation "ops.',
+        "ops.ops_job_definitions",
+        "ops.ops_job_scope_overrides",
+        "ops.ops_feature_flags",
+        "ops.ops_job_runs",
+        "ops.ops_job_attempts",
+        "ops.ops_job_events",
+    ]
+    return any(token in message for token in fallback_tokens)
+
+
+def _run_job_direct(
+    job_name: str,
+    job_fn: Callable[..., Dict[str, Any]],
+    *,
+    fallback_reason: str | None = None,
+    **job_kwargs: Any,
+) -> Dict[str, Any]:
+    t0 = perf_counter()
+
+    try:
+        raw_result = job_fn(**job_kwargs) or {}
+        counters = raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+        ok = bool(counters.get("ok", True))
+        error = None if ok else str(counters.get("error") or "job_returned_not_ok")
+        status = "completed_direct" if ok else "failed_direct"
+        return _format_job_response(
+            ok=ok,
+            job_name=job_name,
+            run_id=None,
+            attempt_id=None,
+            status=status,
+            elapsed_sec=round(perf_counter() - t0, 6),
+            counters=counters,
+            error=error,
+            blocked_reason=None,
+            execution_mode="direct_fallback",
+            fallback_reason=fallback_reason,
+        )
+    except Exception as exc:
+        return _format_job_response(
+            ok=False,
+            job_name=job_name,
+            run_id=None,
+            attempt_id=None,
+            status="failed_direct",
+            elapsed_sec=round(perf_counter() - t0, 6),
+            counters={},
+            error=f"direct_execution_failed: {exc}",
+            blocked_reason=None,
+            execution_mode="direct_fallback",
+            fallback_reason=fallback_reason or str(exc),
+        )
+
+
+def _run_admin_job(
+    job_name: str,
+    job_fn: Callable[..., Dict[str, Any]],
+    **job_kwargs: Any,
+) -> Dict[str, Any]:
+    try:
+        res = run_job(job_name, job_fn, **job_kwargs)
+    except Exception as exc:
+        if _should_fallback_to_direct_execution(exc):
+            return _run_job_direct(
+                job_name,
+                job_fn,
+                fallback_reason=f"job_runner_exception: {exc}",
+                **job_kwargs,
+            )
+        raise
+
+    if res.error == f"job_definition_not_found: {job_name}":
+        return _run_job_direct(
+            job_name,
+            job_fn,
+            fallback_reason=res.error,
+            **job_kwargs,
+        )
+
+    return _format_job_response(
+        ok=res.ok,
+        job_name=res.job_name,
+        run_id=res.run_id,
+        attempt_id=res.attempt_id,
+        status=res.status,
+        elapsed_sec=res.elapsed_sec,
+        counters=res.counters,
+        error=res.error,
+        blocked_reason=res.blocked_reason,
+        execution_mode="job_runner",
+    )
 
 def _norm_text(value: str | None) -> str:
     s = (value or "").strip().lower()
@@ -234,8 +366,7 @@ def admin_ops_odds_refresh(
     sport_key: str = Query(..., min_length=3),
     regions: str = Query(default="eu"),
 ):
-    res = run_job("odds_refresh", odds_refresh, sport_key=sport_key, regions=regions)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
+    return _run_admin_job("odds_refresh", odds_refresh, sport_key=sport_key, regions=regions)
 
 
 @router.post("/odds/resolve")
@@ -248,7 +379,7 @@ def admin_ops_odds_resolve(
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    res = run_job(
+    return _run_admin_job(
         "odds_resolve_batch",
         odds_resolve_batch,
         sport_key=sport_key,
@@ -259,7 +390,6 @@ def admin_ops_odds_resolve(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
 
 
 @router.post("/snapshots/materialize")
@@ -268,7 +398,7 @@ def admin_ops_snapshots_materialize(
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    res = run_job(
+    return _run_admin_job(
         "snapshots_materialize",
         snapshots_materialize,
         sport_key=sport_key,
@@ -276,34 +406,25 @@ def admin_ops_snapshots_materialize(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
 
 
 @router.post("/pipeline/run_all")
 def admin_ops_pipeline_run_all(
     only_sport_key: str | None = Query(default=None),
 ):
-    res = run_job("pipeline_run_all", pipeline_run_all, only_sport_key=only_sport_key)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
+    return _run_admin_job("pipeline_run_all", pipeline_run_all, only_sport_key=only_sport_key)
+
 
 @router.post("/pipeline/run")
 def admin_ops_pipeline_run(
     only_sport_key: str | None = Query(default=None),
 ):
-    res = run_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "elapsed_sec": res.elapsed_sec,
-        "result": res.counters,
-        "error": res.error,
-    }
+    return _run_admin_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
+
 
 @router.post("/odds/league_map/gap_scan")
 def admin_ops_league_map_gap_scan(default_enabled: bool = False):
-    res = run_job("odds_league_gap_scan", odds_league_gap_scan, default_enabled=default_enabled)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
-
+    return _run_admin_job("odds_league_gap_scan", odds_league_gap_scan, default_enabled=default_enabled)
 
 @router.get("/odds/league_map/pending")
 def admin_ops_league_map_pending(limit: int = 200):
@@ -373,8 +494,7 @@ def admin_ops_league_map_pending(limit: int = 200):
 
 @router.post("/odds/league_map/autoclassify")
 def admin_ops_league_map_autoclassify():
-    res = run_job("odds_league_autoclassify", odds_league_autoclassify)
-    return {"ok": res.ok, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters, "error": res.error}
+    return _run_admin_job("odds_league_autoclassify", odds_league_autoclassify)
 
 
 @router.post("/odds/league_map/approve")
@@ -382,6 +502,7 @@ def admin_ops_league_map_approve(
     sport_key: str,
     league_id: int,
     official_name: str,
+    official_country_code: str | None = None,
     regions: str = "eu",
     hours_ahead: int = 720,
     tol_hours: int = 6,
@@ -390,21 +511,28 @@ def admin_ops_league_map_approve(
     enabled: bool = True,
 ):
     """
-    Aprova um mapeamento: seta league_id + params e marca approved.
+    Aprova um mapeamento: seta league_id + metadados oficiais + params e marca approved.
     """
     if not sport_key or not isinstance(sport_key, str):
         return {"ok": False, "error": "sport_key_required"}
     if league_id is None or int(league_id) <= 0:
         return {"ok": False, "error": "league_id_must_be_positive"}
+
     official_name_clean = str(official_name or "").strip()
     if not official_name_clean:
         return {"ok": False, "error": "official_name_required"}
+
+    official_country_code_clean = None
+    if official_country_code is not None:
+        value = str(official_country_code).strip().upper()
+        official_country_code_clean = value if value else None
 
     sql = """
       update odds.odds_league_map
       set
         league_id = %(league_id)s,
         official_name = %(official_name)s,
+        official_country_code = %(official_country_code)s,
         regions = %(regions)s,
         hours_ahead = %(hours_ahead)s,
         tol_hours = %(tol_hours)s,
@@ -417,24 +545,32 @@ def admin_ops_league_map_approve(
         updated_at_utc = now()
       where sport_key = %(sport_key)s
         and mapping_status in ('pending','approved')
-      returning sport_key, league_id, official_name, mapping_status, enabled
+      returning
+        sport_key,
+        league_id,
+        official_name,
+        official_country_code,
+        mapping_status,
+        enabled
     """
 
     with pg_conn() as conn:
         conn.autocommit = False
         with conn.cursor() as cur:
             cur.execute(
+                sql,
                 {
                     "sport_key": sport_key,
                     "league_id": int(league_id),
                     "official_name": official_name_clean,
+                    "official_country_code": official_country_code_clean,
                     "regions": regions,
                     "hours_ahead": int(hours_ahead),
                     "tol_hours": int(tol_hours),
                     "season_policy": season_policy,
                     "fixed_season": fixed_season,
                     "enabled": bool(enabled),
-                };
+                },
             )
             row = cur.fetchone()
         conn.commit()
@@ -447,8 +583,9 @@ def admin_ops_league_map_approve(
         "sport_key": row[0],
         "league_id": row[1],
         "official_name": row[2],
-        "mapping_status": row[3],
-        "enabled": row[4],
+        "official_country_code": row[3],
+        "mapping_status": row[4],
+        "enabled": row[5],
     }
 
 @router.get("/leagues")
@@ -457,6 +594,7 @@ def admin_ops_list_leagues():
       select
         m.sport_key,
         m.official_name,
+        m.official_country_code,
         c.sport_title,
         c.sport_group,
         m.league_id,
@@ -471,14 +609,14 @@ def admin_ops_list_leagues():
         m.notes,
         m.updated_at_utc
       from odds.odds_league_map m
-      join odds.odds_sport_catalog c on c.sport_key = m.sport_key
+      left join odds.odds_sport_catalog c on c.sport_key = m.sport_key
       order by
         m.enabled desc,
         c.sport_group nulls last,
-        coalesce(nullif(btrim(m.official_name), ''), c.sport_title),
+        coalesce(nullif(btrim(m.official_name), ''), c.sport_title, m.sport_key),
         m.sport_key
     """
-    
+
     items = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -486,9 +624,9 @@ def admin_ops_list_leagues():
             rows = cur.fetchall() or []
 
     for r in rows:
-        league_id = int(r[3] or 0)
-        enabled = bool(r[9])
-        mapping_status = str(r[10] or "")
+        league_id = int(r[5] or 0)
+        enabled = bool(r[11])
+        mapping_status = str(r[12] or "")
 
         if enabled and mapping_status == "approved" and league_id > 0:
             computed_status = "approved"
@@ -503,19 +641,21 @@ def admin_ops_list_leagues():
             {
                 "sport_key": r[0],
                 "official_name": r[1],
-                "sport_title": r[2],
-                "sport_group": r[3],
-                "league_id": r[4],
-                "season_policy": r[5],
-                "fixed_season": r[6],
-                "regions": r[7],
-                "hours_ahead": r[8],
-                "tol_hours": r[9],
-                "enabled": r[10],
-                "mapping_status": r[11],
-                "confidence": float(r[12]) if r[12] is not None else None,
-                "notes": r[13],
-                "updated_at_utc": r[14].isoformat() if hasattr(r[14], "isoformat") else str(r[14]),
+                "official_country_code": r[2],
+                "sport_title": r[3] or r[0],
+                "sport_group": r[4],
+                "league_id": r[5],
+                "season_policy": r[6],
+                "fixed_season": r[7],
+                "regions": r[8],
+                "hours_ahead": r[9],
+                "tol_hours": r[10],
+                "enabled": r[11],
+                "mapping_status": r[12],
+                "computed_status": computed_status,
+                "confidence": float(r[13]) if r[13] is not None else None,
+                "notes": r[14],
+                "updated_at_utc": r[15].isoformat() if hasattr(r[15], "isoformat") else str(r[15]),
             }
         )
 

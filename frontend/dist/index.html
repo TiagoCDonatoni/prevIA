@@ -5,11 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>prevIA - Betting Intelligence</title>
     <link rel="icon" type="image/svg+xml" href="/assets/previa_favicon_IA-DkzXTa3Y.svg" />
-    <script type="module" crossorigin src="/assets/index-bypIKQwh.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Bd_K5Jtc.css">
+    <script type="module" crossorigin src="/assets/index-8dHXNItE.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-C3MgLUgQ.css">
   </head>
   <body>
     <div id="root"></div>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-6GKT7EFR27"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      window.gtag = gtag;
+      gtag('js', new Date());
+
+      // Page view manual: o React Router vai disparar só nas rotas públicas
+      gtag('config', 'G-6GKT7EFR27', {
+        send_page_view: false
+      });
+    </script>
+
   </body>
 </html>

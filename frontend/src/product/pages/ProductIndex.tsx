@@ -5,17 +5,22 @@ import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
 import { getLeagueDisplayName } from "../i18n/leagueCatalogHelpers";
-import { useProductStore } from "../state/productStore";
+import {
+  useProductStore,
+  type InternalNarrativeView,
+} from "../state/productStore";
+import type { NarrativeStyleId } from "../narrative/v2/core/types";
 import { PlanChangeModal } from "../components/PlanChangeModal";
 
 import { applyLeagueOverride } from "../config/leagueOverrides";
 
-import { generateNarrative } from "../narrative/generateNarrative";
-import type { NarrativeDepth } from "../narrative/types";
+import { generateNarrativesForSport } from "../narrative/v2";
 import type { PlanId } from "../entitlements";
 
 import { SearchableMultiSelect } from "../components/SearchableMultiSelect";
 import { ProductFiltersSheet } from "../components/ProductFiltersSheet";
+import { SearchableSingleSelect } from "../components/SearchableSingleSelect";
+
 import {
   buildBookOptions,
   buildCountryOptions,
@@ -42,6 +47,15 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
   oddsEdge: false,
 };
 
+function narrativeStyleFromInternalView(
+  view: InternalNarrativeView
+): NarrativeStyleId | undefined {
+  if (view === "RECREATIONAL") return "leve";
+  if (view === "PROFESSIONAL") return "equilibrado";
+  if (view === "CREATOR") return "pro";
+  return undefined;
+}
+
 function fmtPct(x: number | null | undefined) {
   const v = typeof x === "number" && Number.isFinite(x) ? x : 0;
   return `${(v * 100).toFixed(1)}%`;
@@ -60,12 +74,15 @@ function fmtOutcome(outcome: "H" | "D" | "A" | null | undefined, home: string, a
   return `Fora (${away})`;
 }
 
+const OPPORTUNITY_EDGE_THRESHOLD = 0.15;
+const POSITIVE_EDGE_THRESHOLD = 0.02;
+const NEUTRAL_EDGE_THRESHOLD = -0.02;
+
 function edgeTier(edge: number | null | undefined) {
   if (edge == null || !Number.isFinite(edge)) return "none";
-  // thresholds simples (ajustamos depois)
-  if (edge >= 0.05) return "hot";
-  if (edge >= 0.02) return "ok";
-  if (edge > -0.02) return "neutral";
+  if (edge >= OPPORTUNITY_EDGE_THRESHOLD) return "hot";
+  if (edge >= POSITIVE_EDGE_THRESHOLD) return "ok";
+  if (edge > NEUTRAL_EDGE_THRESHOLD) return "neutral";
   return "bad";
 }
 
@@ -356,11 +373,19 @@ function fmtKickoff(iso: string, lang: string) {
 }
 
 function hasOpportunityEdge(edge: number | null | undefined) {
-  return typeof edge === "number" && Number.isFinite(edge) && edge >= 0.02;
+  return (
+    typeof edge === "number" &&
+    Number.isFinite(edge) &&
+    edge >= OPPORTUNITY_EDGE_THRESHOLD
+  );
 }
 
 function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
   if (!league) return "";
+
+  const officialName = String(league.official_name ?? "").trim();
+  if (officialName) return officialName;
+
   return (
     getLeagueDisplayName(league.sport_key, lang as "pt" | "en" | "es") ||
     league.sport_title ||
@@ -399,19 +424,17 @@ function LockedPanel({
   );
 }
 
-function narrativeDepthForPlan(plan: PlanId): NarrativeDepth {
-  if (plan === "PRO") return 4;
-  if (plan === "LIGHT") return 3;
-  if (plan === "BASIC") return 2;
-  return 1; // FREE / FREE_ANON
-}
-
 export default function ProductIndex() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
   const vis = store.entitlements.visibility;
 
   const plan = store.entitlements.plan as PlanId;
+
+  const narrativeStyle = useMemo(
+    () => narrativeStyleFromInternalView(store.internalNarrativeView),
+    [store.internalNarrativeView]
+  );
 
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>("NO_CREDITS");
@@ -489,8 +512,11 @@ export default function ProductIndex() {
   const [selectedId, setSelectedId] = useState<string>("");
 
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const [analysisOpening, setAnalysisOpening] = useState(false);
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string>("");
+
+  const isAnalysisLoading = analysisOpening || quoteLoading;
 
   const [isMobileAnalysisView, setIsMobileAnalysisView] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -568,20 +594,33 @@ export default function ProductIndex() {
       lang === "en" ? "Window" : lang === "es" ? "Ventana" : "Janela";
 
     return (
-      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
-        <span className="pi-simple-filter-label">{label}</span>
-        <select
-          className="pi-simple-filter-select"
-          value={windowDays}
-          onChange={(e) => setWindowDays(Number(e.target.value))}
-          aria-label={t(lang, "odds.filterWindow")}
-        >
-          <option value={1}>{t(lang, "odds.windowToday")}</option>
-          <option value={3}>{t(lang, "odds.window3d")}</option>
-          <option value={7}>{t(lang, "odds.window7d")}</option>
-          <option value={30}>{t(lang, "odds.window30d")}</option>
-        </select>
-      </label>
+      <SearchableSingleSelect
+        className={extraClassName}
+        label={label}
+        placeholder={t(lang, "odds.filterWindow")}
+        searchPlaceholder={
+          lang === "en"
+            ? "Search window"
+            : lang === "es"
+            ? "Buscar ventana"
+            : "Buscar janela"
+        }
+        emptyText={
+          lang === "en"
+            ? "No options found"
+            : lang === "es"
+            ? "No se encontraron opciones"
+            : "Nenhuma opção encontrada"
+        }
+        selectedValue={String(windowDays)}
+        options={[
+          { value: "1", label: t(lang, "odds.windowToday") },
+          { value: "3", label: t(lang, "odds.window3d") },
+          { value: "7", label: t(lang, "odds.window7d") },
+          { value: "30", label: t(lang, "odds.window30d") },
+        ]}
+        onChange={(next) => setWindowDays(Number(next))}
+      />
     );
   }
 
@@ -590,38 +629,92 @@ export default function ProductIndex() {
       lang === "en" ? "Sort by" : lang === "es" ? "Ordenar por" : "Ordenar por";
 
     return (
-      <label className={`pi-simple-filter ${extraClassName}`.trim()}>
-        <span className="pi-simple-filter-label">{label}</span>
-        <select
-          className="pi-simple-filter-select"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortBy)}
-          aria-label={t(lang, "odds.sortBy")}
-        >
-          <option value="DATE">
-            {lang === "en"
-              ? "Closest date"
-              : lang === "es"
-              ? "Fecha más próxima"
-              : "Data mais próxima"}
-          </option>
-          <option value="CONFIDENCE">
-            {lang === "en"
-              ? "Highest confidence"
-              : lang === "es"
-              ? "Mayor confianza"
-              : "Maior confiança"}
-          </option>
-          <option value="EDGE">
-            {lang === "en"
-              ? "Highest edge"
-              : lang === "es"
-              ? "Mayor edge"
-              : "Maior edge"}
-          </option>
-        </select>
-      </label>
+      <SearchableSingleSelect
+        className={extraClassName}
+        label={label}
+        placeholder={t(lang, "odds.sortBy")}
+        searchPlaceholder={
+          lang === "en"
+            ? "Search sort"
+            : lang === "es"
+            ? "Buscar ordenación"
+            : "Buscar ordenação"
+        }
+        emptyText={
+          lang === "en"
+            ? "No options found"
+            : lang === "es"
+            ? "No se encontraron opciones"
+            : "Nenhuma opção encontrada"
+        }
+        selectedValue={sortBy}
+        options={[
+          {
+            value: "DATE",
+            label:
+              lang === "en"
+                ? "Closest date"
+                : lang === "es"
+                ? "Fecha más próxima"
+                : "Data mais próxima",
+          },
+          {
+            value: "CONFIDENCE",
+            label:
+              lang === "en"
+                ? "Highest confidence"
+                : lang === "es"
+                ? "Mayor confianza"
+                : "Maior confiança",
+          },
+          {
+            value: "EDGE",
+            label:
+              lang === "en"
+                ? "Highest edge"
+                : lang === "es"
+                ? "Mayor edge"
+                : "Maior edge",
+          },
+        ]}
+        onChange={(next) => setSortBy(next as SortBy)}
+      />
     );
+  }
+
+  function compactSelectedLabel(label: string) {
+    const cleaned = String(label ?? "")
+      .replace(/^\d+\.\s*/, "")
+      .trim();
+
+    if (cleaned.length <= 18) return cleaned;
+    return `${cleaned.slice(0, 18).trim()}…`;
+  }
+
+  function buildSelectedSummary(
+    type: "country" | "league" | "book" | "team",
+    selectedOptions: Array<{ label: string }>,
+    placeholder: string
+  ) {
+    if (!selectedOptions.length) return placeholder;
+
+    if (selectedOptions.length === 1) {
+      return compactSelectedLabel(selectedOptions[0].label);
+    }
+
+    if (type === "country") {
+      return `${selectedOptions.length} países`;
+    }
+
+    if (type === "league") {
+      return `${selectedOptions.length} ligas`;
+    }
+
+    if (type === "book") {
+      return `${selectedOptions.length} casas`;
+    }
+
+    return `${selectedOptions.length} times`;
   }
 
   useEffect(() => {
@@ -840,24 +933,30 @@ export default function ProductIndex() {
 
     const fixtureKey = String(selectedId);
 
-    const r = store.backendUsage.is_ready
-      ? await store.revealViaBackend(fixtureKey)
-      : store.tryReveal(fixtureKey);
+    setAnalysisOpening(true);
 
-    if (!r.ok) {
-      if (r.reason === "NO_CREDITS") {
-        setUpgradeReason("NO_CREDITS");
-        setUpgradeOpen(true);
-        return;
+    try {
+      const r = store.backendUsage.is_ready
+        ? await store.revealViaBackend(fixtureKey)
+        : store.tryReveal(fixtureKey);
+
+      if (!r.ok) {
+        if (r.reason === "NO_CREDITS") {
+          setUpgradeReason("NO_CREDITS");
+          setUpgradeOpen(true);
+          return;
+        }
+
+        if (r.reason !== "ALREADY_REVEALED") {
+          console.error("Reveal failed:", r.reason);
+          return;
+        }
       }
 
-      if (r.reason !== "ALREADY_REVEALED") {
-        console.error("Reveal failed:", r.reason);
-        return;
-      }
+      await runQuote(fixtureKey);
+    } finally {
+      setAnalysisOpening(false);
     }
-
-    await runQuote(fixtureKey);
   }
 
   useEffect(() => {
@@ -1034,7 +1133,7 @@ export default function ProductIndex() {
 
   const analysisOpened =
     alreadyRevealed ||
-    quoteLoading ||
+    isAnalysisLoading ||
     !!quote ||
     !!quoteError;
 
@@ -1082,10 +1181,16 @@ export default function ProductIndex() {
                 <button
                   className="pi-btn"
                   onClick={onRevealAndOpen}
-                  disabled={!selectedId || quoteLoading}
+                  disabled={!selectedId || isAnalysisLoading}
                   title={!canReveal && !alreadyRevealed ? t(lang, "errors.noCredits") : ""}
                 >
-                  {t(lang, "credits.viewAnalysis")}
+                  {isAnalysisLoading
+                    ? (lang === "en"
+                        ? "Loading analysis..."
+                        : lang === "es"
+                        ? "Cargando análisis..."
+                        : "Carregando análise...")
+                    : t(lang, "credits.viewAnalysis")}
                 </button>
 
                 {!alreadyRevealed ? (
@@ -1106,8 +1211,6 @@ export default function ProductIndex() {
               <>
                 {/* ===== Narrativa (destaque) ===== */}
                 {(() => {
-                  const depth = narrativeDepthForPlan(plan);
-
                   const oddsBest =
                     quote?.odds?.best
                       ? {
@@ -1123,28 +1226,47 @@ export default function ProductIndex() {
                         }
                       : null;
 
-                  const narrative = generateNarrative({
-                    meta: { version: "narrative.v1", lang, depth },
+                  const narrativeBundle = generateNarrativesForSport({
+                    sportKey: selected.sport_key || sportKey || "football",
+                    lang,
+                    plan,
+                    style: narrativeStyle,
+                    eventId: selected.event_id,
                     match: {
                       homeTeam: selected.home_name,
                       awayTeam: selected.away_name,
                     },
                     model: {
-                      probs: effectiveProbs,
+                      probs1x2: effectiveProbs,
                       status: effectiveMatchStatus,
                     },
                     market: {
-                      odds_1x2_best: oddsBest,
+                      odds1x2Best: oddsBest,
+                      totals: {
+                        line: totalsLine,
+                        pOver: totalsOver,
+                        pUnder: totalsUnder,
+                      },
+                      btts: {
+                        pYes: bttsYes,
+                        pNo: bttsNo,
+                      },
+                      inputs: {
+                        lambdaHome,
+                        lambdaAway,
+                        lambdaTotal,
+                      },
                     },
                   });
 
-                  const headline = narrative.blocks.find((b) => b.type === "headline");
-                  const summary = narrative.blocks.find((b) => b.type === "summary");
-                  const price = narrative.blocks.find((b) => b.type === "price");
-                  const pricePro = narrative.blocks.find((b) => b.type === "pricePro");
-                  const bullets = narrative.blocks.filter((b) => b.type === "bullet");
-                  const warning = narrative.blocks.find((b) => b.type === "warning");
-                  const disclaimer = narrative.blocks.find((b) => b.type === "disclaimer");
+                  const narrative = narrativeBundle.main;
+                  const headline = narrative?.blocks.find((b) => b.type === "headline");
+                  const summary = narrative?.blocks.find((b) => b.type === "summary");
+                  const price = narrative?.blocks.find((b) => b.type === "price");
+                  const pricePro = narrative?.blocks.find((b) => b.type === "pricePro");
+                  const bullets = narrative?.blocks.filter((b) => b.type === "bullet") ?? [];
+                  const warning = narrative?.blocks.find((b) => b.type === "warning");
+                  const disclaimer = narrative?.blocks.find((b) => b.type === "disclaimer");
 
                   return (
                     <div className="pi-narrative">
@@ -1257,17 +1379,73 @@ export default function ProductIndex() {
                               : "Mercados de Gols"}
                           </div>
 
-                          <div className="pi-panel-value">
-                            {hasTotalsInsight
-                              ? totalsInsightLabel(lang, totalsOver, totalsUnder)
-                              : bttsInsightLabel(lang, bttsYes)}
-                          </div>
+                          {(() => {
+                            const goalsNarrative = generateNarrativesForSport({
+                              sportKey: selected.sport_key || sportKey || "football",
+                              lang,
+                              plan,
+                              style: narrativeStyle,                              
+                              eventId: selected.event_id,
+                              match: {
+                                homeTeam: selected.home_name,
+                                awayTeam: selected.away_name,
+                              },
+                              model: {
+                                probs1x2: effectiveProbs,
+                                status: effectiveMatchStatus,
+                              },
+                              market: {
+                                odds1x2Best: quote?.odds?.best
+                                  ? {
+                                      H: quote.odds.best.H ?? null,
+                                      D: quote.odds.best.D ?? null,
+                                      A: quote.odds.best.A ?? null,
+                                    }
+                                  : selected.odds_best
+                                  ? {
+                                      H: selected.odds_best.H ?? null,
+                                      D: selected.odds_best.D ?? null,
+                                      A: selected.odds_best.A ?? null,
+                                    }
+                                  : null,
+                                totals: {
+                                  line: totalsLine,
+                                  pOver: totalsOver,
+                                  pUnder: totalsUnder,
+                                },
+                                btts: {
+                                  pYes: bttsYes,
+                                  pNo: bttsNo,
+                                },
+                                inputs: {
+                                  lambdaHome,
+                                  lambdaAway,
+                                  lambdaTotal,
+                                },
+                              },
+                            }).goals;
 
-                          <div className="pi-muted" style={{ marginTop: 6 }}>
-                            {hasTotalsInsight
-                              ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
-                              : bttsInsightHeadline(lang, bttsYes)}
-                          </div>
+                            const goalsHeadline = goalsNarrative?.blocks.find((b) => b.type === "headline")?.text;
+                            const goalsSummary = goalsNarrative?.blocks.find((b) => b.type === "summary")?.text;
+
+                            return (
+                              <>
+                                <div className="pi-panel-value">
+                                  {goalsHeadline ??
+                                    (hasTotalsInsight
+                                      ? totalsInsightLabel(lang, totalsOver, totalsUnder)
+                                      : bttsInsightLabel(lang, bttsYes))}
+                                </div>
+
+                                <div className="pi-muted" style={{ marginTop: 6 }}>
+                                  {goalsSummary ??
+                                    (hasTotalsInsight
+                                      ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
+                                      : bttsInsightHeadline(lang, bttsYes))}
+                                </div>
+                              </>
+                            );
+                          })()}
 
                           <div className="pi-goals-kpis">
                             {typeof totalsOver === "number" ? (
@@ -1561,6 +1739,7 @@ return (
     <div className="pi-filters pi-filters-desktop">
       <div className="pi-filters-grid-desktop">
         <SearchableMultiSelect
+          className="pi-filter-country"
           label={t(lang, "product.filterCountries")}
           placeholder={t(lang, "product.filterCountriesPlaceholder")}
           searchPlaceholder={t(lang, "product.searchCountryPlaceholder")}
@@ -1568,6 +1747,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedCountryCodes}
           options={countryOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "country",
+              selectedOptions,
+              t(lang, "product.filterCountriesPlaceholder")
+            )
+          }
           onChange={setSelectedCountryCodes}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
@@ -1774,6 +1960,7 @@ return (
         />
 
         <SearchableMultiSelect
+          className="pi-filter-league"
           label={t(lang, "product.filterLeagues")}
           placeholder={t(lang, "product.filterLeaguesPlaceholder")}
           searchPlaceholder={t(lang, "product.searchLeaguePlaceholder")}
@@ -1781,6 +1968,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedLeagueSportKeys}
           options={leagueOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "league",
+              selectedOptions,
+              t(lang, "product.filterLeaguesPlaceholder")
+            )
+          }
           onChange={setSelectedLeagueSportKeys}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
@@ -1788,6 +1982,7 @@ return (
         />
 
         <SearchableMultiSelect
+          className="pi-filter-book"
           label={t(lang, "product.filterBooks")}
           placeholder={t(lang, "product.filterBooksPlaceholder")}
           searchPlaceholder={t(lang, "product.searchBookPlaceholder")}
@@ -1795,10 +1990,18 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedBookKeys}
           options={bookOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "book",
+              selectedOptions,
+              t(lang, "product.filterBooksPlaceholder")
+            )
+          }
           onChange={setSelectedBookKeys}
         />
 
         <SearchableMultiSelect
+          className="pi-filter-team"
           label={t(lang, "product.filterTeams")}
           placeholder={t(lang, "product.filterTeamsPlaceholder")}
           searchPlaceholder={t(lang, "product.searchTeamPlaceholder")}
@@ -1806,6 +2009,13 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedTeams}
           options={teamOptions}
+          getSummaryText={(selectedOptions) =>
+            buildSelectedSummary(
+              "team",
+              selectedOptions,
+              t(lang, "product.filterTeamsPlaceholder")
+            )
+          }
           onChange={setSelectedTeams}
         />
 
@@ -1940,6 +2150,28 @@ return (
 
           <div className="pi-mobile-analysis-body">
             {renderAnalysisPane()}
+          </div>
+        </div>
+      </div>
+    ) : null}
+
+    {isAnalysisLoading ? (
+      <div className="pi-analysis-loading-overlay" aria-live="polite" aria-busy="true">
+        <div className="pi-analysis-loading-card">
+          <div className="pi-analysis-loading-spinner" aria-hidden="true" />
+          <div className="pi-analysis-loading-title">
+            {lang === "en"
+              ? "Loading analysis..."
+              : lang === "es"
+              ? "Cargando análisis..."
+              : "Carregando análise..."}
+          </div>
+          <div className="pi-analysis-loading-sub">
+            {lang === "en"
+              ? "Please wait while we prepare the match insights."
+              : lang === "es"
+              ? "Espera mientras preparamos el análisis del partido."
+              : "Aguarde enquanto preparamos a análise da partida."}
           </div>
         </div>
       </div>

@@ -18,6 +18,7 @@ def _require_database_url() -> str:
 
 def connect_pg(url: Optional[str] = None) -> psycopg.Connection:
     dsn = url or _require_database_url()
+    print("PG_DSN_USADA:", dsn)
     return psycopg.connect(dsn, connect_timeout=5)
 
 @contextmanager

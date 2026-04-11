@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom"; 
 
 import { PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
-import { fetchAccessUsage } from "../api/access";
+import { fetchAccessUsage, postAccessDevReset } from "../api/access";
 import {
   clearProductPlanOverride,
   fetchAuthMe,
@@ -13,12 +13,18 @@ import {
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
-import { useProductStore } from "../state/productStore";
+import {
+  useProductStore,
+  type InternalNarrativeView,
+} from "../state/productStore";
 import { ProductAuthModal } from "../auth/ProductAuthModal";
 import { PlanChangeModal } from "../components/PlanChangeModal";
 import BrandLogo from "../../shared/BrandLogo";
 
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
+
+import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
+import { resolveAccountPreferences } from "../preferences/accountPreferences";
 
   type FooterSocialId = "instagram" | "x" | "tiktok";
 
@@ -185,6 +191,16 @@ export type ProductLayoutOutletContext = {
   logout: () => Promise<void>;
 };
 
+const INTERNAL_NARRATIVE_VIEW_OPTIONS: Array<{
+  id: InternalNarrativeView;
+  label: string;
+}> = [
+  { id: "AUTO", label: "Auto" },
+  { id: "RECREATIONAL", label: "Recreativo" },
+  { id: "PROFESSIONAL", label: "Profissional" },
+  { id: "CREATOR", label: "Criador / Tipster" },
+];
+
 export function ProductLayout() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
@@ -203,6 +219,7 @@ export function ProductLayout() {
     "signup" | "login" | "forgot" | "reset" | "changePassword"
   >("signup");
   const [planOpen, setPlanOpen] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
 const [isMobileHeaderMenuOpen, setIsMobileHeaderMenuOpen] = useState(false);
 
@@ -289,6 +306,7 @@ React.useEffect(() => {
   );
   const selectedInternalPlan = normalizeBackendPlanCode(plan);
   const internalBillingRuntime = String(store.accessContext?.billing_runtime ?? "live").toUpperCase();
+  const selectedInternalNarrativeView = store.internalNarrativeView;
 
   const isDevAutoLoginSession =
     PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
@@ -402,15 +420,16 @@ React.useEffect(() => {
   }
 
   async function handleTestingReset(onAfterReset?: () => void) {
-    clearProductPlanOverride();
     store.resetForTesting();
     onAfterReset?.();
 
-    if (!PRODUCT_AUTH_ENABLED || !isAuthenticated) {
+    if (!PRODUCT_AUTH_ENABLED || !isAuthenticated || !canUseInternalTestingControls) {
       return;
     }
 
     try {
+      await postAccessDevReset();
+
       const data = await fetchAuthMe();
       await syncSessionFromAuthPayload(data);
     } catch (err) {
@@ -443,6 +462,7 @@ React.useEffect(() => {
 
       setAuthOpen(false);
       setPlanOpen(false);
+      setPreferencesOpen(false);
       setIsAccountMenuOpen(false);
       setIsMobileHeaderMenuOpen(false);
 
@@ -580,6 +600,27 @@ const mobileHeaderMenuContent = (
     ) : null}
 
     {canUseInternalTestingControls ? (
+      <div className="product-pill">
+        <span className="product-pill-label">NARRATIVE VIEW</span>
+        <select
+          className="product-select"
+          value={selectedInternalNarrativeView}
+          onChange={(e) => {
+            store.setInternalNarrativeView(
+              e.target.value as InternalNarrativeView
+            );
+          }}
+        >
+          {INTERNAL_NARRATIVE_VIEW_OPTIONS.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    ) : null}
+
+    {canUseInternalTestingControls ? (
       <button
         className="product-reset-btn"
         onClick={() => {
@@ -630,6 +671,27 @@ const mobileHeaderMenuContent = (
                     {internalPlanViewOptions.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : null}
+
+              {canUseInternalTestingControls ? (
+                <>
+                  <span className="product-pill-label">NARRATIVE VIEW</span>
+                  <select
+                    className="product-select"
+                    value={selectedInternalNarrativeView}
+                    onChange={(e) => {
+                      store.setInternalNarrativeView(
+                        e.target.value as InternalNarrativeView
+                      );
+                    }}
+                  >
+                    {INTERNAL_NARRATIVE_VIEW_OPTIONS.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
                       </option>
                     ))}
                   </select>
@@ -842,9 +904,72 @@ const mobileHeaderMenuContent = (
             authInitialMode === "signup" && Boolean(payload.is_authenticated);
 
           if (shouldOpenPostSignupOffer) {
+            const currentPreferences = resolveAccountPreferences(store.state.preferences);
+
+            if (!currentPreferences.completed_onboarding) {
+              setPreferencesOpen(true);
+              return;
+            }
+
             setPlanReason("POST_SIGNUP");
             setPlanOpen(true);
           }
+        }}
+      />
+
+      <AccountPreferencesModal
+        open={preferencesOpen}
+        lang={lang}
+        initialBettorProfile={resolveAccountPreferences(store.state.preferences).bettor_profile}
+        kicker={
+          lang === "pt"
+            ? "Primeiros ajustes"
+            : lang === "es"
+            ? "Primeros ajustes"
+            : "First setup"
+        }
+        title={
+          lang === "pt"
+            ? "Como você costuma apostar?"
+            : lang === "es"
+            ? "¿Cómo sueles apostar?"
+            : "How do you usually bet?"
+        }
+        subtitle={
+          lang === "pt"
+            ? "Isso ajuda a ajustar a forma como o produto fala com você logo no começo."
+            : lang === "es"
+            ? "Esto ayuda a ajustar la forma en que el producto te habla desde el inicio."
+            : "This helps tailor how the product speaks to you from the start."
+        }
+        confirmLabel={
+          lang === "pt"
+            ? "Continuar"
+            : lang === "es"
+            ? "Continuar"
+            : "Continue"
+        }
+        secondaryLabel={
+          lang === "pt"
+            ? "Agora não"
+            : lang === "es"
+            ? "Ahora no"
+            : "Not now"
+        }
+        onClose={() => {
+          store.applyAccountPreferencesUpdate({ completed_onboarding: true });
+          setPreferencesOpen(false);
+          setPlanReason("POST_SIGNUP");
+          setPlanOpen(true);
+        }}
+        onSave={(payload) => {
+          store.applyAccountPreferencesUpdate({
+            ...payload,
+            completed_onboarding: true,
+          });
+          setPreferencesOpen(false);
+          setPlanReason("POST_SIGNUP");
+          setPlanOpen(true);
         }}
       />
 

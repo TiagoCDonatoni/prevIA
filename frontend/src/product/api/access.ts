@@ -56,6 +56,23 @@ export async function fetchAccessUsage(): Promise<AccessUsageResponse> {
   return (await res.json()) as AccessUsageResponse;
 }
 
+export async function postAccessDevReset(): Promise<AccessUsageResponse> {
+  const res = await fetch(`${API_BASE_URL}/access/dev/reset-testing`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`access_dev_reset_failed:${res.status}`);
+  }
+
+  return (await res.json()) as AccessUsageResponse;
+}
+
 export async function postAccessReveal(fixtureKey: string): Promise<AccessRevealResponse> {
   const res = await fetch(`${API_BASE_URL}/access/reveal`, {
     method: "POST",

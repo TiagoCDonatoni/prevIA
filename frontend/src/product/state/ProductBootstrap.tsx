@@ -36,6 +36,7 @@ export default function ProductBootstrap({
           subscription_status: data.subscription?.status ?? null,
           subscription_provider: data.subscription?.provider ?? null,
           subscription_billing_cycle: data.subscription?.billing_cycle ?? null,
+          access_context: data.access ?? null,
         });
 
         if (!data.is_authenticated) {
