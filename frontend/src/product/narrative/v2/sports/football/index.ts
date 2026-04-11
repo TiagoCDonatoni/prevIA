@@ -1,3 +1,4 @@
+import type { NarrativeProfile } from "../../core/profiles";
 import type {
   NarrativeStyleId,
   SportNarrativeBundle,
@@ -9,7 +10,7 @@ import { generateFootballGoalsNarrative } from "./markets/goals";
 export function generateFootballNarratives(
   req: SportNarrativeRequest,
   profile: NarrativeProfile,
-  style: NarrativeStyleId
+  style: NarrativeStyleId | null
 ): SportNarrativeBundle {
   return {
     main: generateFootball1x2Narrative(req, profile, style),

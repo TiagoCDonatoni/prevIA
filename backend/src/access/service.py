@@ -141,6 +141,27 @@ def _resolve_current_actor(request: Request) -> Dict[str, Any]:
         )
     return payload
 
+def _require_testing_reset_access(actor: Dict[str, Any]) -> None:
+    access_context = actor.get("access") or {}
+
+    allowed = (
+        bool(access_context.get("is_internal"))
+        or bool(access_context.get("admin_access"))
+        or bool(access_context.get("product_internal_access"))
+        or bool(access_context.get("allow_plan_override"))
+    )
+
+    if allowed:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "ok": False,
+            "code": "TESTING_RESET_FORBIDDEN",
+            "message": "internal testing reset access required",
+        },
+    )
 
 def get_usage_payload(request: Request) -> Dict[str, Any]:
     actor = _resolve_current_actor(request)
@@ -368,3 +389,37 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
             "remaining": max(0, daily_limit - credits_used),
         },
     }
+
+def reset_testing_state(request: Request) -> Dict[str, Any]:
+    actor = _resolve_current_actor(request)
+    _require_testing_reset_access(actor)
+
+    user = actor["user"]
+    user_id = int(user["user_id"])
+    date_key = _today_date_key()
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM access.user_revealed_events
+                WHERE user_id = %(user_id)s
+                """,
+                {"user_id": user_id},
+            )
+
+            cur.execute(
+                """
+                DELETE FROM access.user_daily_usage
+                WHERE user_id = %(user_id)s
+                  AND date_key = %(date_key)s
+                """,
+                {
+                    "user_id": user_id,
+                    "date_key": date_key,
+                },
+            )
+
+        conn.commit()
+
+    return get_usage_payload(request)

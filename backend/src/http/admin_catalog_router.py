@@ -12,7 +12,15 @@ router = APIRouter(
 
 @router.post("/sync")
 def admin_sync_odds_catalog():
-  res = run_job("odds_catalog_sync", sync_odds_sport_catalog)
-  if not res.ok:
-    return {"ok": False, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "error": res.error}
-  return {"ok": True, "job": res.job_name, "elapsed_sec": res.elapsed_sec, "counters": res.counters}
+    res = run_job("odds_catalog_sync", sync_odds_sport_catalog)
+    return {
+        "ok": res.ok,
+        "job": res.job_name,
+        "run_id": res.run_id,
+        "attempt_id": res.attempt_id,
+        "status": res.status,
+        "elapsed_sec": res.elapsed_sec,
+        "counters": res.counters,
+        "error": res.error,
+        "blocked_reason": res.blocked_reason,
+    }

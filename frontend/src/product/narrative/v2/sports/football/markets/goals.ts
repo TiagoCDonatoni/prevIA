@@ -28,6 +28,41 @@ function choose(seed: string, options: string[], maxVariants: number, vars?: Rec
   return vars ? fill(picked, vars) : picked;
 }
 
+function applySummaryTone(
+  lang: Lang,
+  style: NarrativeStyleId | null,
+  text: string
+) {
+  if (style === "leve") {
+    return langText(
+      lang,
+      `Leitura leve: ${text}`,
+      `Lighter read: ${text}`,
+      `Lectura ligera: ${text}`
+    );
+  }
+
+  if (style === "equilibrado") {
+    return langText(
+      lang,
+      `Leitura estruturada: ${text}`,
+      `Structured read: ${text}`,
+      `Lectura estructurada: ${text}`
+    );
+  }
+
+  if (style === "pro") {
+    return langText(
+      lang,
+      `Recorte editorial: ${text}`,
+      `Editorial angle: ${text}`,
+      `Enfoque editorial: ${text}`
+    );
+  }
+
+  return text;
+}
+
 function fmtLine(line: number | null | undefined) {
   if (typeof line !== "number" || !Number.isFinite(line)) return "2.5";
   return line.toFixed(1);
@@ -469,7 +504,7 @@ function teamGoalsOptions(lang: Lang) {
 export function generateFootballGoalsNarrative(
   req: SportNarrativeRequest,
   profile: NarrativeProfile,
-  _style: NarrativeStyleId
+  style: NarrativeStyleId | null
 ): NarrativeResponse | null {
   const totals = classifyTotals(req.market?.totals?.pOver, req.market?.totals?.pUnder);
   const btts = classifyBtts(req.market?.btts?.pYes, req.market?.btts?.pNo);
@@ -496,11 +531,15 @@ export function generateFootballGoalsNarrative(
 
     blocks.push({
       type: "summary",
-      text: choose(
-        `${req.eventId}:goals:totals:${totals.direction}:${strength}:headline`,
-        totalsHeadlineOptions(req.lang, totals.direction, strength),
-        profile.maxSummaryVariants,
-        { line }
+      text: applySummaryTone(
+        req.lang,
+        style,
+        choose(
+          `${req.eventId}:goals:totals:${totals.direction}:${strength}:headline`,
+          totalsHeadlineOptions(req.lang, totals.direction, strength),
+          profile.maxSummaryVariants,
+          { line }
+        )
       ),
     });
 

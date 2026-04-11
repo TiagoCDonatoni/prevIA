@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 
+from time import perf_counter
+from typing import Any, Callable, Dict
 import re
 import unicodedata
 
@@ -21,6 +23,131 @@ router = APIRouter(
     tags=["admin-ops"],
     dependencies=[Depends(require_admin_access)],
 )
+
+def _format_job_response(
+    *,
+    ok: bool,
+    job_name: str,
+    elapsed_sec: float,
+    counters: Dict[str, Any] | None = None,
+    error: str | None = None,
+    run_id: int | None = None,
+    attempt_id: int | None = None,
+    status: str | None = None,
+    blocked_reason: str | None = None,
+    execution_mode: str = "job_runner",
+    fallback_reason: str | None = None,
+) -> Dict[str, Any]:
+    return {
+        "ok": ok,
+        "job": job_name,
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "status": status or ("completed" if ok else "failed"),
+        "elapsed_sec": elapsed_sec,
+        "counters": counters or {},
+        "error": error,
+        "blocked_reason": blocked_reason,
+        "execution_mode": execution_mode,
+        "fallback_reason": fallback_reason,
+    }
+
+
+def _should_fallback_to_direct_execution(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    fallback_tokens = [
+        'relation "ops.',
+        "ops.ops_job_definitions",
+        "ops.ops_job_scope_overrides",
+        "ops.ops_feature_flags",
+        "ops.ops_job_runs",
+        "ops.ops_job_attempts",
+        "ops.ops_job_events",
+    ]
+    return any(token in message for token in fallback_tokens)
+
+
+def _run_job_direct(
+    job_name: str,
+    job_fn: Callable[..., Dict[str, Any]],
+    *,
+    fallback_reason: str | None = None,
+    **job_kwargs: Any,
+) -> Dict[str, Any]:
+    t0 = perf_counter()
+
+    try:
+        raw_result = job_fn(**job_kwargs) or {}
+        counters = raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+        ok = bool(counters.get("ok", True))
+        error = None if ok else str(counters.get("error") or "job_returned_not_ok")
+        status = "completed_direct" if ok else "failed_direct"
+        return _format_job_response(
+            ok=ok,
+            job_name=job_name,
+            run_id=None,
+            attempt_id=None,
+            status=status,
+            elapsed_sec=round(perf_counter() - t0, 6),
+            counters=counters,
+            error=error,
+            blocked_reason=None,
+            execution_mode="direct_fallback",
+            fallback_reason=fallback_reason,
+        )
+    except Exception as exc:
+        return _format_job_response(
+            ok=False,
+            job_name=job_name,
+            run_id=None,
+            attempt_id=None,
+            status="failed_direct",
+            elapsed_sec=round(perf_counter() - t0, 6),
+            counters={},
+            error=f"direct_execution_failed: {exc}",
+            blocked_reason=None,
+            execution_mode="direct_fallback",
+            fallback_reason=fallback_reason or str(exc),
+        )
+
+
+def _run_admin_job(
+    job_name: str,
+    job_fn: Callable[..., Dict[str, Any]],
+    **job_kwargs: Any,
+) -> Dict[str, Any]:
+    try:
+        res = run_job(job_name, job_fn, **job_kwargs)
+    except Exception as exc:
+        if _should_fallback_to_direct_execution(exc):
+            return _run_job_direct(
+                job_name,
+                job_fn,
+                fallback_reason=f"job_runner_exception: {exc}",
+                **job_kwargs,
+            )
+        raise
+
+    if res.error == f"job_definition_not_found: {job_name}":
+        return _run_job_direct(
+            job_name,
+            job_fn,
+            fallback_reason=res.error,
+            **job_kwargs,
+        )
+
+    return _format_job_response(
+        ok=res.ok,
+        job_name=res.job_name,
+        run_id=res.run_id,
+        attempt_id=res.attempt_id,
+        status=res.status,
+        elapsed_sec=res.elapsed_sec,
+        counters=res.counters,
+        error=res.error,
+        blocked_reason=res.blocked_reason,
+        execution_mode="job_runner",
+    )
 
 def _norm_text(value: str | None) -> str:
     s = (value or "").strip().lower()
@@ -239,18 +366,8 @@ def admin_ops_odds_refresh(
     sport_key: str = Query(..., min_length=3),
     regions: str = Query(default="eu"),
 ):
-    res = run_job("odds_refresh", odds_refresh, sport_key=sport_key, regions=regions)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
+    return _run_admin_job("odds_refresh", odds_refresh, sport_key=sport_key, regions=regions)
+
 
 @router.post("/odds/resolve")
 def admin_ops_odds_resolve(
@@ -262,7 +379,7 @@ def admin_ops_odds_resolve(
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    res = run_job(
+    return _run_admin_job(
         "odds_resolve_batch",
         odds_resolve_batch,
         sport_key=sport_key,
@@ -273,17 +390,6 @@ def admin_ops_odds_resolve(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
 
 
 @router.post("/snapshots/materialize")
@@ -292,7 +398,7 @@ def admin_ops_snapshots_materialize(
     hours_ahead: int = Query(default=720, ge=1, le=24 * 60),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    res = run_job(
+    return _run_admin_job(
         "snapshots_materialize",
         snapshots_materialize,
         sport_key=sport_key,
@@ -300,64 +406,25 @@ def admin_ops_snapshots_materialize(
         hours_ahead=hours_ahead,
         limit=limit,
     )
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
+
+
+@router.post("/pipeline/run_all")
+def admin_ops_pipeline_run_all(
+    only_sport_key: str | None = Query(default=None),
+):
+    return _run_admin_job("pipeline_run_all", pipeline_run_all, only_sport_key=only_sport_key)
 
 
 @router.post("/pipeline/run")
 def admin_ops_pipeline_run(
     only_sport_key: str | None = Query(default=None),
 ):
-    res = run_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
+    return _run_admin_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
 
-
-@router.post("/pipeline/run")
-def admin_ops_pipeline_run(
-    only_sport_key: str | None = Query(default=None),
-):
-    res = run_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "elapsed_sec": res.elapsed_sec,
-        "result": res.counters,
-        "error": res.error,
-    }
 
 @router.post("/odds/league_map/gap_scan")
 def admin_ops_league_map_gap_scan(default_enabled: bool = False):
-    res = run_job("odds_league_gap_scan", odds_league_gap_scan, default_enabled=default_enabled)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
+    return _run_admin_job("odds_league_gap_scan", odds_league_gap_scan, default_enabled=default_enabled)
 
 @router.get("/odds/league_map/pending")
 def admin_ops_league_map_pending(limit: int = 200):
@@ -427,18 +494,7 @@ def admin_ops_league_map_pending(limit: int = 200):
 
 @router.post("/odds/league_map/autoclassify")
 def admin_ops_league_map_autoclassify():
-    res = run_job("odds_league_autoclassify", odds_league_autoclassify)
-    return {
-        "ok": res.ok,
-        "job": res.job_name,
-        "run_id": res.run_id,
-        "attempt_id": res.attempt_id,
-        "status": res.status,
-        "elapsed_sec": res.elapsed_sec,
-        "counters": res.counters,
-        "error": res.error,
-        "blocked_reason": res.blocked_reason,
-    }
+    return _run_admin_job("odds_league_autoclassify", odds_league_autoclassify)
 
 
 @router.post("/odds/league_map/approve")

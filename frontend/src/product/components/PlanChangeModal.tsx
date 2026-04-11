@@ -289,23 +289,19 @@ useEffect(() => {
 
   if (!props.open) return null;
 
-  const nextPlanForCopy = recommendedPlan ?? fallbackPlan ?? getNextPlan(currentPlan);
-  const nextLimit = nextPlanForCopy ? dailyLimitForPlan(nextPlanForCopy) : currentLimit;
-  const delta = Math.max(0, nextLimit - currentLimit);
+  const subtitlePlan = selectedPlan ?? recommendedPlan ?? fallbackPlan ?? getNextPlan(currentPlan);
+  const subtitleLimit = subtitlePlan ? dailyLimitForPlan(subtitlePlan) : currentLimit;
+  const subtitleDelta = Math.max(0, subtitleLimit - currentLimit);
 
   const title = getModalTitle(tr, props.reason);
   const subtitle = getModalSubtitle(tr, props.reason, {
-    delta,
-    total: nextLimit,
+    delta: subtitleDelta,
+    total: subtitleLimit,
   });
 
   const isPostSignupOffer = props.reason === "POST_SIGNUP";
 
   const showPlans = higherPlans.length > 0;
-
-  const selectedLimit = selectedPlan ? dailyLimitForPlan(selectedPlan) : null;
-  const selectedPlus =
-    selectedPlan && selectedLimit != null ? Math.max(0, selectedLimit - currentLimit) : 0;
 
   const selectedCatalogEntry = selectedPlan
     ? billingCatalog[selectedPlan]?.[selectedCycle] ?? buildFallbackCatalogEntry(selectedPlan, selectedCycle)
@@ -499,7 +495,7 @@ useEffect(() => {
               <div className={`product-plan-grid ${higherPlans.length >= 4 ? "is-balanced" : ""}`}>
                 {higherPlans.map((pid) => {
                   const limit = dailyLimitForPlan(pid);
-                  const plus = Math.max(0, limit - currentLimit);
+                  const planKey = pid === "FREE_ANON" ? "freeAnon" : pid.toLowerCase();
                   const isRecommended = recommendedPlan != null && pid === recommendedPlan;
                   const isSelected = selectedPlan === pid;
                   const catalog =
@@ -547,24 +543,12 @@ useEffect(() => {
                       </div>
 
                       <div className="product-plan-feature-list">
-                        <div className="product-plan-feature-item">
-                          <span className="product-plan-feature-dot">•</span>
-                          <span>
-                            <strong>{limit}</strong> {tr("plans.units.creditsPerDay")}
-                          </span>
-                        </div>
-
-                        {plus > 0 ? (
-                          <div className="product-plan-feature-item">
+                        {[0, 1, 2].map((idx) => (
+                          <div key={idx} className="product-plan-feature-item">
                             <span className="product-plan-feature-dot">•</span>
-                            <span>{tr("plans.copy.moreCredits", { plus })}</span>
+                            <span>{tr(`plans.${planKey}.bullets.${idx}`, { limit })}</span>
                           </div>
-                        ) : null}
-
-                        <div className="product-plan-feature-item">
-                          <span className="product-plan-feature-dot">•</span>
-                          <span>{tr("plans.copy.lessInterruptions")}</span>
-                        </div>
+                        ))}
                       </div>
 
                       <div className="product-plan-price-block">

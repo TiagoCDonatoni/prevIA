@@ -3,9 +3,11 @@ import { resolveNarrativeStyle } from "./style";
 import type { SportNarrativeBundle, SportNarrativeRequest } from "./types";
 import { generateFootballNarratives } from "../sports/football";
 
-export function generateNarrativesForSport(req: SportNarrativeRequest): SportNarrativeBundle {
+export function generateNarrativesForSport(
+  req: SportNarrativeRequest
+): SportNarrativeBundle {
   const profile = narrativeProfileForPlan(req.plan);
-  const style = resolveNarrativeStyle(req.style);
+  const style = req.style ? resolveNarrativeStyle(req.style) : null;
 
   if (
     req.sportKey === "soccer" ||
@@ -15,5 +17,9 @@ export function generateNarrativesForSport(req: SportNarrativeRequest): SportNar
     return generateFootballNarratives(req, profile, style);
   }
 
-  return generateFootballNarratives({ ...req, sportKey: "football" }, profile, style);
+  return generateFootballNarratives(
+    { ...req, sportKey: "football" },
+    profile,
+    style
+  );
 }

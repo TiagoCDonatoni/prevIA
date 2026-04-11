@@ -166,6 +166,41 @@ function choose(
   return interpolate(pickVariant(options, seed, maxVariants), vars);
 }
 
+function applySummaryTone(
+  lang: Lang,
+  style: NarrativeStyleId | null,
+  text: string
+) {
+  if (style === "leve") {
+    return langText(
+      lang,
+      `Leitura leve: ${text}`,
+      `Lighter read: ${text}`,
+      `Lectura ligera: ${text}`
+    );
+  }
+
+  if (style === "equilibrado") {
+    return langText(
+      lang,
+      `Leitura estruturada: ${text}`,
+      `Structured read: ${text}`,
+      `Lectura estructurada: ${text}`
+    );
+  }
+
+  if (style === "pro") {
+    return langText(
+      lang,
+      `Recorte editorial: ${text}`,
+      `Editorial angle: ${text}`,
+      `Enfoque editorial: ${text}`
+    );
+  }
+
+  return text;
+}
+
 function describeOutcome(lang: Lang, outcome: OutcomeKey, home: string, away: string) {
   if (lang === "en") {
     if (outcome === "H") return `home (${home})`;
@@ -599,7 +634,7 @@ function lowConfidenceOptions(lang: Lang) {
 export function generateFootball1x2Narrative(
   req: SportNarrativeRequest,
   profile: NarrativeProfile,
-  _style: NarrativeStyleId
+  style: NarrativeStyleId | null
 ): NarrativeResponse {
   const blocks: NarrativeBlock[] = [];
   const tags: string[] = [];
@@ -681,11 +716,20 @@ export function generateFootball1x2Narrative(
 
   blocks.push({
     type: "summary",
-    text: choose(
-      `${req.eventId}:1x2:summary:${strength}:${confidence}`,
-      summaryOptions(req.lang, strength === "balanced", confidence, pct(state.topP)),
-      profile.maxSummaryVariants,
-      vars
+    text: applySummaryTone(
+      req.lang,
+      style,
+      choose(
+        `${req.eventId}:1x2:summary:${strength}:${confidence}`,
+        summaryOptions(
+          req.lang,
+          strength === "balanced",
+          confidence,
+          pct(state.topP)
+        ),
+        profile.maxSummaryVariants,
+        vars
+      )
     ),
   });
 

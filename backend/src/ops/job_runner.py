@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
+import json
 import time
 import traceback
 
@@ -22,6 +23,10 @@ class JobRunResult:
     error: Optional[str] = None
     blocked_reason: Optional[str] = None
 
+def _jsonb_param(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 def _infer_scope(job_kwargs: Dict[str, Any]) -> Dict[str, Optional[str]]:
     sport_key = job_kwargs.get("sport_key") or job_kwargs.get("only_sport_key")
@@ -73,8 +78,8 @@ def _append_event(
                 "event_type": event_type,
                 "event_level": event_level,
                 "message": message,
-                "payload": payload or {},
-            },
+                "payload": _jsonb_param(payload or {}),
+            }
         )
 
 
@@ -171,12 +176,12 @@ def run_job(
                     "sport_key": sport_key,
                     "status": "blocked" if block_reason else "queued",
                     "block_reason": block_reason,
-                    "requested_payload_json": requested_payload,
-                    "effective_payload_json": effective_job_kwargs,
+                    "requested_payload_json": _jsonb_param(requested_payload),
+                    "effective_payload_json": _jsonb_param(effective_job_kwargs),
                     "parent_run_id": parent_run_id,
                     "correlation_id": correlation_id,
                     "idempotency_key": idempotency_key,
-                },
+                }
             )
             run_id = int(cur.fetchone()[0])
 
@@ -302,11 +307,11 @@ def run_job(
                 {
                     "status": status,
                     "duration_ms": duration_ms,
-                    "result_json": raw_result or {},
-                    "counters_json": counters or {},
-                    "error_json": {"message": error_text} if error_text else None,
+                    "result_json": _jsonb_param(raw_result or {}),
+                    "counters_json": _jsonb_param(counters or {}),
+                    "error_json": _jsonb_param({"message": error_text}) if error_text else None,
                     "attempt_id": attempt_id,
-                },
+                }
             )
 
             cur.execute(
@@ -323,12 +328,12 @@ def run_job(
                 """,
                 {
                     "status": status,
-                    "result_json": raw_result or {},
-                    "counters_json": counters or {},
-                    "error_json": {"message": error_text} if error_text else None,
+                    "result_json": _jsonb_param(raw_result or {}),
+                    "counters_json": _jsonb_param(counters or {}),
+                    "error_json": _jsonb_param({"message": error_text}) if error_text else None,
                     "duration_ms": duration_ms,
                     "run_id": run_id,
-                },
+                }
             )
 
         _append_event(

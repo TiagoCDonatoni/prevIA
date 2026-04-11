@@ -1,3 +1,11 @@
+import {
+  DEFAULT_ACCOUNT_PREFERENCES,
+  resolveAccountPreferences,
+  type AccountNarrativeStyleId,
+  type BettorProfileId,
+  type ProductAccountPreferences,
+} from "../preferences/accountPreferences";
+
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { normalizeBackendPlanCode, type AuthAccessResponse } from "../api/auth";
@@ -25,6 +33,9 @@ export type AccountSnapshot = {
   preferred_lang: string | null;
   status: string | null;
   email_verified: boolean | null;
+  bettor_profile: BettorProfileId | null;
+  narrative_style: AccountNarrativeStyleId;
+  preferences_completed: boolean;
   subscription: {
     plan_code: string | null;
     status: string | null;
@@ -72,6 +83,51 @@ export type ProductAccessContext = {
   } | null;
 };
 
+export type InternalNarrativeView =
+  | "AUTO"
+  | "RECREATIONAL"
+  | "PROFESSIONAL"
+  | "CREATOR";
+
+const INTERNAL_NARRATIVE_VIEW_SESSION_KEY =
+  "previa_internal_narrative_view_v1";
+
+function normalizeInternalNarrativeView(
+  raw: string | null | undefined
+): InternalNarrativeView {
+  const value = String(raw ?? "").trim().toUpperCase();
+
+  if (
+    value === "AUTO" ||
+    value === "RECREATIONAL" ||
+    value === "PROFESSIONAL" ||
+    value === "CREATOR"
+  ) {
+    return value as InternalNarrativeView;
+  }
+
+  return "AUTO";
+}
+
+function readInternalNarrativeView(): InternalNarrativeView {
+  try {
+    return normalizeInternalNarrativeView(
+      sessionStorage.getItem(INTERNAL_NARRATIVE_VIEW_SESSION_KEY)
+    );
+  } catch {
+    return "AUTO";
+  }
+}
+
+function writeInternalNarrativeView(next: InternalNarrativeView) {
+  try {
+    sessionStorage.setItem(
+      INTERNAL_NARRATIVE_VIEW_SESSION_KEY,
+      normalizeInternalNarrativeView(next)
+    );
+  } catch {}
+}
+
 export type ProductStore = {
   state: ProductPersistedState;
   entitlements: Entitlements;
@@ -79,10 +135,12 @@ export type ProductStore = {
   backendUsage: BackendUsageState;
   accountSnapshot: AccountSnapshot;
   accessContext: ProductAccessContext;
+  internalNarrativeView: InternalNarrativeView;
 
   promoteCurrentSessionToDeviceAnonShadow: () => void;
   consumeDeviceAnonShadowCredit: () => void;
   resetDeviceAnonShadow: () => void;
+  setInternalNarrativeView: (view: InternalNarrativeView) => void;
 
   setPlan: (plan: PlanId) => void;
   setLang: (lang: Lang) => void;
@@ -92,6 +150,8 @@ export type ProductStore = {
     full_name: string | null;
     preferred_lang: Lang | null;
   }) => void;
+
+  applyAccountPreferencesUpdate: (payload: Partial<ProductAccountPreferences>) => void;
 
   applyBackendBootstrap: (payload: {
     is_authenticated: boolean;
@@ -203,6 +263,9 @@ const DEFAULT_ACCOUNT_SNAPSHOT: AccountSnapshot = {
   preferred_lang: null,
   status: null,
   email_verified: null,
+  bettor_profile: DEFAULT_ACCOUNT_PREFERENCES.bettor_profile,
+  narrative_style: DEFAULT_ACCOUNT_PREFERENCES.narrative_style,
+  preferences_completed: DEFAULT_ACCOUNT_PREFERENCES.completed_onboarding,
   subscription: {
     plan_code: null,
     status: null,
@@ -249,8 +312,19 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
     subscription_provider: null,
   });
   const [backendUsage, setBackendUsage] = useState<BackendUsageState>(DEFAULT_BACKEND_USAGE);
-  const [accountSnapshot, setAccountSnapshot] = useState<AccountSnapshot>(DEFAULT_ACCOUNT_SNAPSHOT);
+  const [accountSnapshot, setAccountSnapshot] = useState<AccountSnapshot>(() => {
+    const initialPreferences = resolveAccountPreferences(state.preferences);
+
+    return {
+      ...DEFAULT_ACCOUNT_SNAPSHOT,
+      bettor_profile: initialPreferences.bettor_profile,
+      narrative_style: initialPreferences.narrative_style,
+      preferences_completed: initialPreferences.completed_onboarding,
+    };
+  });
   const [accessContext, setAccessContext] = useState<ProductAccessContext>(DEFAULT_ACCESS_CONTEXT);
+  const [internalNarrativeView, setInternalNarrativeViewState] =
+    useState<InternalNarrativeView>(() => readInternalNarrativeView());
   const [resetNonce, setResetNonce] = useState(0);
   const [i18nNonce, setI18nNonce] = useState(0);
 
@@ -293,7 +367,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         plan,
       }));
     },
-    [persistWith]
+    [persistWith, state.preferences]
   );
 
   const setLang = useCallback(
@@ -303,7 +377,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         lang,
       }));
     },
-    [persistWith]
+    [persistWith, state.preferences]
   );
 
   const setAuth = useCallback(
@@ -316,7 +390,16 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         },
       }));
     },
-    [persistWith]
+    [persistWith, state.preferences]
+  );
+
+  const setInternalNarrativeView = useCallback(
+    (view: InternalNarrativeView) => {
+      const next = normalizeInternalNarrativeView(view);
+      setInternalNarrativeViewState(next);
+      writeInternalNarrativeView(next);
+    },
+    []
   );
 
   const applyProfileUpdate = useCallback(
@@ -342,7 +425,29 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         preferred_lang: nextLang ?? prev.preferred_lang,
       }));
     },
-    [persistWith]
+    [persistWith, state.preferences]
+  );
+
+  const applyAccountPreferencesUpdate = useCallback(
+    (payload: Partial<ProductAccountPreferences>) => {
+      const merged = resolveAccountPreferences({
+        ...resolveAccountPreferences(state.preferences),
+        ...payload,
+      });
+
+      persistWith((prev) => ({
+        ...prev,
+        preferences: merged,
+      }));
+
+      setAccountSnapshot((prev) => ({
+        ...prev,
+        bettor_profile: merged.bettor_profile,
+        narrative_style: merged.narrative_style,
+        preferences_completed: merged.completed_onboarding,
+      }));
+    },
+    [persistWith, state.preferences]
   );
 
   const applyBackendBootstrap = useCallback(
@@ -362,6 +467,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       subscription_billing_cycle?: "monthly" | "quarterly" | "semiannual" | "annual" | null;
       access_context?: AuthAccessResponse | null;
     }) => {
+      const localPreferences = resolveAccountPreferences(state.preferences);
       persistWith((prev) => {
         if (payload.is_authenticated) {
           const nextLang =
@@ -429,6 +535,9 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
           preferred_lang: payload.preferred_lang ?? null,
           status: payload.user_status ?? null,
           email_verified: payload.email_verified ?? null,
+          bettor_profile: localPreferences.bettor_profile,
+          narrative_style: localPreferences.narrative_style,
+          preferences_completed: localPreferences.completed_onboarding,
           subscription: {
             plan_code: payload.subscription_plan_code ?? payload.plan ?? null,
             status: payload.subscription_status ?? null,
@@ -437,7 +546,12 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
           },
         });
       } else {
-        setAccountSnapshot(DEFAULT_ACCOUNT_SNAPSHOT);
+        setAccountSnapshot({
+          ...DEFAULT_ACCOUNT_SNAPSHOT,
+          bettor_profile: localPreferences.bettor_profile,
+          narrative_style: localPreferences.narrative_style,
+          preferences_completed: localPreferences.completed_onboarding,
+        });
         setAccessContext(DEFAULT_ACCESS_CONTEXT);
       }
 
@@ -454,7 +568,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         subscription_provider: payload.is_authenticated ? payload.subscription_provider ?? null : null,
       });
     },
-    [persistWith]
+    [persistWith, state.preferences]
   );
 
   const promoteCurrentSessionToDeviceAnonShadow = useCallback(() => {
@@ -703,6 +817,9 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       resetNonce,
       i18nNonce,
       clearBackendUsage,
+      applyAccountPreferencesUpdate,
+      internalNarrativeView,
+      setInternalNarrativeView,
     }),
     [
       state,
@@ -728,6 +845,9 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       resetNonce,
       i18nNonce,
       clearBackendUsage,
+      applyAccountPreferencesUpdate,
+      internalNarrativeView,
+      setInternalNarrativeView,
     ]
   );
 

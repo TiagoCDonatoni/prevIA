@@ -1,7 +1,7 @@
 import type { Lang } from "../../../i18n";
 import type { PlanId } from "../../../entitlements";
 
-export type NarrativePlanProfileId = "free" | "basic" | "light" | "pro";
+export type NarrativeStyleId = "leve" | "equilibrado" | "pro";
 
 export type NarrativeBlockType =
   | "headline"
@@ -23,6 +23,7 @@ export type NarrativeResponse = {
   blocks: NarrativeBlock[];
   tags: string[];
   state?: string | null;
+  style?: NarrativeStyleId | null;
 };
 
 export type Narrative1x2Probs = {
@@ -74,4 +75,5 @@ export type SportNarrativeBundle = {
   goals: NarrativeResponse | null;
   sportKey: string;
   profile: NarrativePlanProfileId;
+  style: NarrativeStyleId | null;
 };

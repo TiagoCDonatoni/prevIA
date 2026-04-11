@@ -5,31 +5,21 @@ from fastapi.responses import HTMLResponse
 from src.core.settings import load_settings, BASE_DIR
 from src.routes.debug_db import router as debug_db_router
 
-# Admin (DB/metrics/matchup etc.)
 from src.http.admin_router import admin_router, admin_odds_router
-
 from src.http.odds_router import router as odds_router
-
-# Public site
 from src.http.public_router import router as public_router
-
-# Odds admin (legado, se ainda existir e for necessário)
 from src.http.admin_odds_router import router as legacy_admin_odds_router
-
-# Backward-compat shim (re-exporta router real)
 from src.http.admin_matchup_router import router as admin_matchup_router
-
-# Novos endpoints
 from src.http.admin_catalog_router import router as admin_catalog_router
 from src.http.product_leagues_router import router as product_leagues_router
 from src.http.product_index_router import router as product_index_router
 from src.http.auth_router import router as auth_router
 from src.http.access_router import router as access_router
-
-# Ops (jobs via botões agora, cron-ready depois)
 from src.http.admin_ops_router import router as admin_ops_router
+from src.http.internal_ops_router import router as internal_ops_router
 from src.http.admin_users_router import router as admin_users_router
 from src.http.billing_router import router as billing_router
+
 
 def create_app() -> FastAPI:
     settings = load_settings()
@@ -39,6 +29,13 @@ def create_app() -> FastAPI:
 
     if settings.app_env in {"prod", "production"} and settings.product_dev_auto_login_enabled:
         raise RuntimeError("PRODUCT_DEV_AUTO_LOGIN_ENABLED must be false in production.")
+
+    if (
+        settings.app_env in {"prod", "production"}
+        and settings.ops_manual_trigger_enabled
+        and not settings.ops_trigger_token
+    ):
+        raise RuntimeError("OPS_TRIGGER_TOKEN must be set when OPS_MANUAL_TRIGGER_ENABLED=true in production.")
 
     api = FastAPI(title="prevIA", version="v0")
 
@@ -50,7 +47,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Routers
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
     api.include_router(public_router)
@@ -67,6 +63,7 @@ def create_app() -> FastAPI:
     api.include_router(auth_router)
     api.include_router(billing_router)
     api.include_router(admin_ops_router)
+    api.include_router(internal_ops_router)
     api.include_router(admin_users_router)
 
     @api.get("/", response_class=HTMLResponse)
@@ -92,6 +89,9 @@ def create_app() -> FastAPI:
             "apifootball_key_set": bool(settings.apifootball_key),
             "the_odds_api_base_url_set": bool(settings.the_odds_api_base_url),
             "the_odds_api_key_set": bool(settings.the_odds_api_key),
+            "ops_mode": settings.ops_mode,
+            "ops_manual_trigger_enabled": settings.ops_manual_trigger_enabled,
+            "ops_trigger_token_set": bool(settings.ops_trigger_token),
         }
 
     return api

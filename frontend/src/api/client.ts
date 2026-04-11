@@ -28,6 +28,10 @@ import type {
   AdminCreateUserResponse,
   AdminUserDetailResponse,
   AdminUsersListResponse,
+  AdminOddsAuditSummaryResponse,
+  AdminOddsAuditByLeagueResponse,
+  AdminOddsAuditEventsResponse,
+  AdminOddsAuditSyncResultsResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -299,6 +303,105 @@ export async function getOddsQueueIntel(params: {
   const url = new URL("/admin/odds/queue/intel", API_BASE_URL);
   url.search = qs.toString();
   return fetchJson<OddsIntelResponse>(url.toString());
+}
+
+export async function getAdminOddsAuditSummary(params?: {
+  league_id?: number | null;
+  season?: number | null;
+  window_days?: number;
+  cutoff_hours?: number;
+  artifact_filename?: string | null;
+  min_confidence?: "NONE" | "ILIKE" | "EXACT";
+  severe_threshold?: number;
+}): Promise<AdminOddsAuditSummaryResponse> {
+  const url = new URL("/admin/odds/audit/reliability", API_BASE_URL);
+
+  if (params?.league_id != null) url.searchParams.set("league_id", String(params.league_id));
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.window_days != null) url.searchParams.set("window_days", String(params.window_days));
+  if (params?.cutoff_hours != null) url.searchParams.set("cutoff_hours", String(params.cutoff_hours));
+  if (params?.artifact_filename) url.searchParams.set("artifact_filename", params.artifact_filename);
+  if (params?.min_confidence) url.searchParams.set("min_confidence", params.min_confidence);
+  if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
+
+  return fetchJson<AdminOddsAuditSummaryResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function getAdminOddsAuditByLeague(params?: {
+  season?: number | null;
+  window_days?: number;
+  cutoff_hours?: number;
+  artifact_filename?: string | null;
+  min_confidence?: "NONE" | "ILIKE" | "EXACT";
+  severe_threshold?: number;
+}): Promise<AdminOddsAuditByLeagueResponse> {
+  const url = new URL("/admin/odds/audit/reliability/by-league", API_BASE_URL);
+
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.window_days != null) url.searchParams.set("window_days", String(params.window_days));
+  if (params?.cutoff_hours != null) url.searchParams.set("cutoff_hours", String(params.cutoff_hours));
+  if (params?.artifact_filename) url.searchParams.set("artifact_filename", params.artifact_filename);
+  if (params?.min_confidence) url.searchParams.set("min_confidence", params.min_confidence);
+  if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
+
+  return fetchJson<AdminOddsAuditByLeagueResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function getAdminOddsAuditEvents(params?: {
+  league_id?: number | null;
+  season?: number | null;
+  window_days?: number;
+  cutoff_hours?: number;
+  artifact_filename?: string | null;
+  min_confidence?: "NONE" | "ILIKE" | "EXACT";
+  severe_threshold?: number;
+  only_severe?: boolean;
+  limit?: number;
+}): Promise<AdminOddsAuditEventsResponse> {
+  const url = new URL("/admin/odds/audit/reliability/events", API_BASE_URL);
+
+  if (params?.league_id != null) url.searchParams.set("league_id", String(params.league_id));
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.window_days != null) url.searchParams.set("window_days", String(params.window_days));
+  if (params?.cutoff_hours != null) url.searchParams.set("cutoff_hours", String(params.cutoff_hours));
+  if (params?.artifact_filename) url.searchParams.set("artifact_filename", params.artifact_filename);
+  if (params?.min_confidence) url.searchParams.set("min_confidence", params.min_confidence);
+  if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
+  if (params?.only_severe != null) url.searchParams.set("only_severe", String(params.only_severe));
+  if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+
+  return fetchJson<AdminOddsAuditEventsResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function postAdminOddsAuditSyncResults(params?: {
+  league_id?: number | null;
+  season?: number | null;
+  max_rows?: number;
+  finished_before_hours?: number;
+  lookback_days?: number;
+}): Promise<AdminOddsAuditSyncResultsResponse> {
+  const url = new URL("/admin/odds/audit/sync-results", API_BASE_URL);
+
+  if (params?.league_id != null) url.searchParams.set("league_id", String(params.league_id));
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.max_rows != null) url.searchParams.set("max_rows", String(params.max_rows));
+  if (params?.finished_before_hours != null) {
+    url.searchParams.set("finished_before_hours", String(params.finished_before_hours));
+  }
+  if (params?.lookback_days != null) {
+    url.searchParams.set("lookback_days", String(params.lookback_days));
+  }
+
+  return fetchJson<AdminOddsAuditSyncResultsResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
 }
 
 export async function getAdminOddsTotals(params: {

@@ -1,6 +1,13 @@
 import React from "react";
 import { Link, useOutletContext } from "react-router-dom";
 
+import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
+import {
+  mapBettorProfileLabel,
+  mapNarrativeStyleLabel,
+  resolveAccountPreferences,
+} from "../preferences/accountPreferences";
+
 import { fetchAccessUsage } from "../api/access";
 import { fetchAuthMe, normalizeBackendPlanCode, patchAuthProfile } from "../api/auth";
 import {
@@ -148,6 +155,7 @@ export default function ProductAccountPage() {
   const [billingActionMessage, setBillingActionMessage] = React.useState<string | null>(null);
   const [isBillingLoading, setIsBillingLoading] = React.useState(false);
   const [isBillingActionLoading, setIsBillingActionLoading] = React.useState(false);
+  const [preferencesOpen, setPreferencesOpen] = React.useState(false);
   const snapshotPlan = account.subscription.plan_code;
   const plan =
     snapshotPlan === "FREE_ANON" ||
@@ -193,6 +201,56 @@ export default function ProductAccountPage() {
     lang,
     account.subscription.provider
   );
+
+  const accountPreferences = React.useMemo(
+    () => resolveAccountPreferences(store.state.preferences),
+    [store.state.preferences]
+  );
+
+  const displayBettorProfile = mapBettorProfileLabel(lang, accountPreferences.bettor_profile);
+  const displayNarrativeStyle = mapNarrativeStyleLabel(lang, accountPreferences.narrative_style);
+
+  const preferencesSectionTitle =
+    lang === "pt"
+      ? "Perfil e preferências"
+      : lang === "es"
+      ? "Perfil y preferencias"
+      : "Profile and preferences";
+
+  const preferencesSectionSubtitle =
+    lang === "pt"
+      ? "Esse modal já nasce genérico para, no futuro, guardar outras informações da conta também."
+      : lang === "es"
+      ? "Este modal ya nace genérico para, en el futuro, guardar también otras informaciones de la cuenta."
+      : "This modal is intentionally generic so it can later hold other account information too.";
+
+  const preferencesProfileLabel =
+    lang === "pt"
+      ? "Tipo de apostador"
+      : lang === "es"
+      ? "Tipo de apostador"
+      : "Bettor profile";
+
+  const preferencesStyleLabel =
+    lang === "pt"
+      ? "Estilo atual da análise"
+      : lang === "es"
+      ? "Estilo actual del análisis"
+      : "Current analysis style";
+
+  const preferencesHint =
+    lang === "pt"
+      ? "Se nada tiver sido escolhido ainda, o estilo padrão continua sendo Leve."
+      : lang === "es"
+      ? "Si aún no se ha elegido nada, el estilo por defecto sigue siendo Ligero."
+      : "If nothing has been chosen yet, the default style remains Light.";
+
+  const preferencesButtonLabel =
+    lang === "pt"
+      ? "Alterar preferências"
+      : lang === "es"
+      ? "Cambiar preferencias"
+      : "Change preferences";
 
   const billingSubscription = billingState?.subscription ?? null;
   const billingActions = billingState?.actions ?? {
@@ -462,111 +520,16 @@ export default function ProductAccountPage() {
   }, [isStripeSubscriptionMaterialized, lang, syncAccountFromBackend]);
 
   React.useEffect(() => {
-    void loadBilling();
-  }, [loadBilling]);
-
-    React.useEffect(() => {
     if (typeof window === "undefined") return;
 
     const url = new URL(window.location.href);
-    if (url.searchParams.get("billing") !== "updated") return;
+    if (url.searchParams.get("debugPrefsModal") !== "1") return;
 
-    const rawCheckoutSessionId = url.searchParams.get("session_id");
-    const storedCheckoutSessionId = window.sessionStorage.getItem(
-      "billing_last_checkout_session_id"
-    );
+    setPreferencesOpen(true);
 
-    const checkoutSessionId =
-      rawCheckoutSessionId &&
-      !rawCheckoutSessionId.includes("{") &&
-      !rawCheckoutSessionId.includes("CHECKOUT_SESSION_ID")
-        ? rawCheckoutSessionId
-        : storedCheckoutSessionId;
-
-    let cancelled = false;
-    let slowTimerId: number | null = null;
-
-    setIsFinalizingCheckout(true);
-    setCheckoutFinalizeSlow(false);
-    setCheckoutFinalizeError(null);
-
-    async function syncCheckoutReturn() {
-      setBillingActionMessage(t(lang, "auth.billingCheckoutSuccess"));
-      setBillingError(null);
-      setIsBillingLoading(true);
-
-      slowTimerId = window.setTimeout(() => {
-        if (!cancelled) {
-          setCheckoutFinalizeSlow(true);
-        }
-      }, 8000);
-
-      try {
-        if (checkoutSessionId) {
-          try {
-            const checkoutSync = await fetchBillingCheckoutSessionStatus(checkoutSessionId);
-
-            if (cancelled) return;
-
-            setBillingState(checkoutSync);
-
-            if (isStripeSubscriptionMaterialized(null, checkoutSync)) {
-              setCheckoutFinalizeSlow(false);
-              setIsFinalizingCheckout(false);
-              return;
-            }
-          } catch (error) {
-            console.error("checkout session immediate sync failed", error);
-          }
-        }
-
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          const authData = await syncAccountFromBackend();
-          const billingData = await fetchBillingSubscription();
-
-          if (cancelled) return;
-
-          setBillingState(billingData);
-
-          if (isStripeSubscriptionMaterialized(authData, billingData)) {
-            setCheckoutFinalizeSlow(false);
-            setIsFinalizingCheckout(false);
-            break;
-          }
-
-          if (attempt < 5) {
-            await new Promise((resolve) => window.setTimeout(resolve, 1500));
-          }
-        }
-      } catch (error) {
-        console.error("checkout return billing sync failed", error);
-        setBillingError(t(lang, "auth.billingLoadError"));
-        setCheckoutFinalizeError(t(lang, "auth.billingCheckoutFinalizingSlow"));
-      } finally {
-        if (slowTimerId != null) {
-          window.clearTimeout(slowTimerId);
-        }
-
-        if (!cancelled) {
-          setIsBillingLoading(false);
-          setIsFinalizingCheckout(false);
-        }
-      }
-    }
-
-    url.searchParams.delete("billing");
-    url.searchParams.delete("session_id");
+    url.searchParams.delete("debugPrefsModal");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-
-    void syncCheckoutReturn();
-
-    return () => {
-      cancelled = true;
-      if (slowTimerId != null) {
-        window.clearTimeout(slowTimerId);
-      }
-    };
-  }, [lang, syncAccountFromBackend]);
+  }, []);
 
   async function handleBillingAction(action: "cancel" | "resume") {
     try {
@@ -625,7 +588,8 @@ export default function ProductAccountPage() {
   }  
   
   return (
-    <section className="account-page">
+    <>
+      <section className="account-page">
       {isFinalizingCheckout ? (
         <div className="account-finalizing-overlay" role="status" aria-live="polite">
           <div className="account-finalizing-card">
@@ -701,7 +665,40 @@ export default function ProductAccountPage() {
         </div>
       ) : null}
 
-      <div className="account-grid">        
+      <div className="account-grid">     
+
+        {isAuthenticated ? (
+          <article className="account-card">
+            <div className="account-card-head">
+              <h2>{preferencesSectionTitle}</h2>
+              <p>{preferencesSectionSubtitle}</p>
+            </div>
+
+            <dl className="account-meta">
+              <div>
+                <dt>{preferencesProfileLabel}</dt>
+                <dd>{displayBettorProfile}</dd>
+              </div>
+
+              <div>
+                <dt>{preferencesStyleLabel}</dt>
+                <dd>{displayNarrativeStyle}</dd>
+              </div>
+            </dl>
+
+            <div className="account-note">{preferencesHint}</div>
+
+            <div className="account-actions-list">
+              <button
+                type="button"
+                className="product-secondary"
+                onClick={() => setPreferencesOpen(true)}
+              >
+                {preferencesButtonLabel}
+              </button>
+            </div>
+          </article>
+        ) : null}   
 
         <article className="account-card">
           <div className="account-card-head">
@@ -910,5 +907,55 @@ export default function ProductAccountPage() {
         </article>
       </div>
     </section>
-  );
+
+    <AccountPreferencesModal
+      open={preferencesOpen}
+      lang={lang}
+      initialBettorProfile={accountPreferences.bettor_profile}
+      kicker={
+        lang === "pt"
+          ? "Preferências"
+          : lang === "es"
+          ? "Preferencias"
+          : "Preferences"
+      }
+      title={
+        lang === "pt"
+          ? "Ajuste seu perfil"
+          : lang === "es"
+          ? "Ajusta tu perfil"
+          : "Adjust your profile"
+      }
+      subtitle={
+        lang === "pt"
+          ? "Você pode mudar isso a qualquer momento. Isso ajuda a ajustar o jeito como as análises são explicadas."
+          : lang === "es"
+          ? "Puedes cambiar esto cuando quieras. Esto ayuda a ajustar la forma en que se explican los análisis."
+          : "You can change this anytime. It helps tailor how the analysis is explained."
+      }
+      confirmLabel={
+        lang === "pt"
+          ? "Salvar perfil"
+          : lang === "es"
+          ? "Guardar perfil"
+          : "Save profile"
+      }
+      secondaryLabel={
+        lang === "pt"
+          ? "Fechar"
+          : lang === "es"
+          ? "Cerrar"
+          : "Close"
+      }
+      onClose={() => setPreferencesOpen(false)}
+      onSave={(payload) => {
+        store.applyAccountPreferencesUpdate({
+          ...payload,
+          completed_onboarding: true,
+        });
+        setPreferencesOpen(false);
+      }}
+    />
+  </>
+);
 }

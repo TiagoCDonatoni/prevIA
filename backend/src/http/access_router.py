@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Request
 
-from src.access.service import get_usage_payload, reveal_fixture
+from src.access.service import (
+    get_usage_payload,
+    reset_testing_state,
+    reveal_fixture,
+)
 
 router = APIRouter(prefix="/access", tags=["access"])
 
@@ -16,3 +20,8 @@ def access_usage(request: Request):
 def access_reveal(request: Request, payload: dict = Body(...)):
     fixture_key = str(payload.get("fixture_key") or "").strip()
     return reveal_fixture(request, fixture_key=fixture_key)
+
+
+@router.post("/dev/reset-testing")
+def access_dev_reset_testing(request: Request):
+    return reset_testing_state(request)

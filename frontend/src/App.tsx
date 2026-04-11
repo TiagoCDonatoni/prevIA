@@ -13,6 +13,7 @@ import TeamExplorer from "./views/TeamExplorer";
 import OddsIntel from "./views/OddsIntel";
 import OddsMarketTotals from "./views/OddsMarketTotals";
 import OddsMarketBtts from "./views/OddsMarketBtts";
+import OddsAudit from "./views/OddsAudit";
 import AdminLeagues from "./views/AdminLeagues";
 import AdminUsers from "./views/AdminUsers";
 
@@ -28,6 +29,7 @@ type Page =
   | "odds"
   | "odds_totals"
   | "odds_btts"
+  | "odds_audit"
   | "users"
   | "leagues";
 
@@ -57,6 +59,7 @@ const NAV_SECTIONS: NavSection[] = [
       { key: "odds", label: "Odds Intel" },
       { key: "odds_totals", label: "Odds Totais" },
       { key: "odds_btts", label: "Odds BTTS" },
+
       { key: "leagues", label: "Ligas" },
     ],
   },
@@ -66,6 +69,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { key: "matchup", label: "Matchup" },
       { key: "team", label: "Team Explorer" },
+      { key: "odds_audit", label: "Odds Audit" },
     ],
   },
   {
@@ -149,6 +153,7 @@ export default function App() {
           {page === "odds" && <OddsIntel />}
           {page === "odds_totals" && <OddsMarketTotals />}
           {page === "odds_btts" && <OddsMarketBtts />}
+          {page === "odds_audit" && <OddsAudit />}
           {page === "users" && <AdminUsers />}
           {page === "leagues" && <AdminLeagues />}
         </div>

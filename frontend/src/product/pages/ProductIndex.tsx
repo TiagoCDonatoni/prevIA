@@ -5,7 +5,11 @@ import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
 import { getLeagueDisplayName } from "../i18n/leagueCatalogHelpers";
-import { useProductStore } from "../state/productStore";
+import {
+  useProductStore,
+  type InternalNarrativeView,
+} from "../state/productStore";
+import type { NarrativeStyleId } from "../narrative/v2/core/types";
 import { PlanChangeModal } from "../components/PlanChangeModal";
 
 import { applyLeagueOverride } from "../config/leagueOverrides";
@@ -43,6 +47,15 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
   oddsEdge: false,
 };
 
+function narrativeStyleFromInternalView(
+  view: InternalNarrativeView
+): NarrativeStyleId | undefined {
+  if (view === "RECREATIONAL") return "leve";
+  if (view === "PROFESSIONAL") return "equilibrado";
+  if (view === "CREATOR") return "pro";
+  return undefined;
+}
+
 function fmtPct(x: number | null | undefined) {
   const v = typeof x === "number" && Number.isFinite(x) ? x : 0;
   return `${(v * 100).toFixed(1)}%`;
@@ -61,12 +74,15 @@ function fmtOutcome(outcome: "H" | "D" | "A" | null | undefined, home: string, a
   return `Fora (${away})`;
 }
 
+const OPPORTUNITY_EDGE_THRESHOLD = 0.15;
+const POSITIVE_EDGE_THRESHOLD = 0.02;
+const NEUTRAL_EDGE_THRESHOLD = -0.02;
+
 function edgeTier(edge: number | null | undefined) {
   if (edge == null || !Number.isFinite(edge)) return "none";
-  // thresholds simples (ajustamos depois)
-  if (edge >= 0.05) return "hot";
-  if (edge >= 0.02) return "ok";
-  if (edge > -0.02) return "neutral";
+  if (edge >= OPPORTUNITY_EDGE_THRESHOLD) return "hot";
+  if (edge >= POSITIVE_EDGE_THRESHOLD) return "ok";
+  if (edge > NEUTRAL_EDGE_THRESHOLD) return "neutral";
   return "bad";
 }
 
@@ -357,7 +373,11 @@ function fmtKickoff(iso: string, lang: string) {
 }
 
 function hasOpportunityEdge(edge: number | null | undefined) {
-  return typeof edge === "number" && Number.isFinite(edge) && edge >= 0.05;
+  return (
+    typeof edge === "number" &&
+    Number.isFinite(edge) &&
+    edge >= OPPORTUNITY_EDGE_THRESHOLD
+  );
 }
 
 function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
@@ -410,6 +430,11 @@ export default function ProductIndex() {
   const vis = store.entitlements.visibility;
 
   const plan = store.entitlements.plan as PlanId;
+
+  const narrativeStyle = useMemo(
+    () => narrativeStyleFromInternalView(store.internalNarrativeView),
+    [store.internalNarrativeView]
+  );
 
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>("NO_CREDITS");
@@ -1205,6 +1230,7 @@ export default function ProductIndex() {
                     sportKey: selected.sport_key || sportKey || "football",
                     lang,
                     plan,
+                    style: narrativeStyle,
                     eventId: selected.event_id,
                     match: {
                       homeTeam: selected.home_name,
@@ -1358,6 +1384,7 @@ export default function ProductIndex() {
                               sportKey: selected.sport_key || sportKey || "football",
                               lang,
                               plan,
+                              style: narrativeStyle,                              
                               eventId: selected.event_id,
                               match: {
                                 homeTeam: selected.home_name,

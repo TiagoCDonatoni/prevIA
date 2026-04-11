@@ -66,6 +66,14 @@ INSERT INTO ops.ops_job_definitions (
   'Autoclassifica mapeamentos pendentes.',
   TRUE, TRUE, TRUE, 900, 1, 85,
   '["catalog","autoclassify"]'::jsonb
+),
+(
+  'odds_catalog_sync',
+  'Odds Catalog Sync',
+  'src.ops.jobs.odds_catalog_sync.sync_odds_sport_catalog',
+  'Sincroniza o catálogo de esportes/ligas da Odds API.',
+  TRUE, TRUE, TRUE, 900, 1, 70,
+  '["catalog","sync"]'::jsonb
 )
 ON CONFLICT (job_key) DO UPDATE SET
   display_name = EXCLUDED.display_name,
