@@ -484,12 +484,34 @@ export type ProductOdds1x2 = { H: number; D: number; A: number };
 export type ProductEdgeSummary = {
   best_outcome: "H" | "D" | "A" | null;
   best_edge: number | null;
+
   best_odd: number | null;
   best_book_key: string | null;
   best_book_name: string | null;
+
+  best_ev?: number | null;
+  best_ev_outcome?: "H" | "D" | "A" | null;
+  best_ev_odd?: number | null;
+  best_ev_book_key?: string | null;
+  best_ev_book_name?: string | null;
+
+  opportunity_outcome?: "H" | "D" | "A" | null;
+  opportunity_edge?: number | null;
+  opportunity_ev?: number | null;
+  opportunity_odd?: number | null;
+  opportunity_book_key?: string | null;
+  opportunity_book_name?: string | null;
+  opportunity_book_captured_at_utc?: string | null;
+  opportunity_book_freshness_seconds?: number | null;
+
   market_books_count: number;
+  market_complete_books_count?: number;
   market_min_odd: number | null;
   market_max_odd: number | null;
+
+  consensus_probs?: ProductOdds1x2 | null;
+  consensus_edges?: ProductOdds1x2 | null;
+  market_source?: string | null;
 };
 
 export type ProductOddsEvent = {
@@ -536,6 +558,7 @@ export type ProductOddsBook = {
   name: string;
   is_affiliate?: boolean;
   url?: string | null;
+  captured_at_utc?: string | null;
   odds_1x2?: ProductOdds1x2 | null;
 };
 
@@ -559,6 +582,7 @@ export type ProductLeagueItem = {
   regions: string | null;
   hours_ahead: number | null;
   tol_hours: number | null;
+  next_kickoff_utc?: string | null;
 };
 
 export type ProductLeaguesResponse = {
@@ -603,9 +627,18 @@ export type ProductOddsQuoteResponse = {
     books?: ProductOddsBook[] | null;
   };
   value?: {
-    market?: string;
+    market?: {
+      raw?: ProductOdds1x2 | null;
+      novig?: ProductOdds1x2 | null;
+      overround?: number | null;
+      books_count?: number;
+      source?: string | null;
+    } | null;
     edge?: ProductOdds1x2 | null;
-  };
+    ev_decimal?: ProductOdds1x2 | null;
+    best_ev?: number | null;
+    best_side?: "H" | "D" | "A" | null;
+  } | null;
 };
 
 // -------------------------
@@ -694,9 +727,92 @@ export type TeamResolutionApproveResponse = {
 export type AdminOpsJobResponse = {
   ok: boolean;
   job: string;
+  run_id?: number | null;
+  attempt_id?: number | null;
+  status?: string | null;
   elapsed_sec: number;
   counters: Record<string, any>;
   error: string | null;
+  blocked_reason?: string | null;
+  execution_mode?: string | null;
+  fallback_reason?: string | null;
+};
+
+export type AdminOpsPipelineHealthResponse = {
+  ok: boolean;
+  generated_at_utc: string | null;
+  freshness: {
+    raw_fixtures_last_ok_at_utc: string | null;
+    core_fixtures_last_updated_at_utc: string | null;
+    odds_events_last_updated_at_utc: string | null;
+    odds_snapshots_last_captured_at_utc: string | null;
+  };
+  core_checks: {
+    lookback_days: number;
+    fixtures_total: number;
+    fixtures_finished: number;
+    fixtures_with_goals: number;
+    fixtures_past_due_ns: number;
+  };
+  failed_runs: {
+    last_24h: number;
+    last_7d: number;
+  };
+  last_runs: Record<
+    string,
+    | {
+        run_id: number;
+        status: string;
+        scope_key: string | null;
+        sport_key: string | null;
+        started_at_utc: string | null;
+        finished_at_utc: string | null;
+        duration_ms: number | null;
+        error: any | null;
+      }
+    | null
+  >;
+};
+
+export type AdminOpsRunRow = {
+  run_id: number;
+  job_key: string;
+  trigger_source: string | null;
+  requested_by: string | null;
+  scope_type: string | null;
+  scope_key: string | null;
+  sport_key: string | null;
+  status: string;
+  block_reason: string | null;
+  result: any | null;
+  counters: any | null;
+  error: any | null;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  duration_ms: number | null;
+  updated_at_utc: string | null;
+};
+
+export type AdminOpsRunsRecentResponse = {
+  ok: boolean;
+  items: AdminOpsRunRow[];
+  count: number;
+};
+
+export type AdminOpsRunEvent = {
+  attempt_id: number | null;
+  event_type: string;
+  event_level: string;
+  message: string | null;
+  payload: any | null;
+  created_at_utc: string | null;
+};
+
+export type AdminOpsRunEventsResponse = {
+  ok: boolean;
+  run_id: number;
+  items: AdminOpsRunEvent[];
+  count: number;
 };
 
 export type AdminUserSummary = {

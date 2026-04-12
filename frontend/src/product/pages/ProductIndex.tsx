@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 
-import type { ProductOddsBook, ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
+import type {
+  ProductEdgeSummary,
+  ProductOddsBook,
+  ProductOddsEvent,
+  ProductOddsQuoteResponse,
+} from "../../api/contracts";
 import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
@@ -38,6 +43,12 @@ type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE" | "EDGE";
 
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
+const OPPORTUNITY_EDGE_THRESHOLD = 0.05;
+const OPPORTUNITY_EV_THRESHOLD = 0.03;
+const OPPORTUNITY_MIN_BOOKS = 4;
+const OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60;
+const POSITIVE_EDGE_THRESHOLD = 0.02;
+const NEUTRAL_EDGE_THRESHOLD = -0.02;
 
 type AnalysisSectionKey = "probabilities" | "goals" | "oddsEdge";
 
@@ -74,10 +85,6 @@ function fmtOutcome(outcome: "H" | "D" | "A" | null | undefined, home: string, a
   return `Fora (${away})`;
 }
 
-const OPPORTUNITY_EDGE_THRESHOLD = 0.15;
-const POSITIVE_EDGE_THRESHOLD = 0.02;
-const NEUTRAL_EDGE_THRESHOLD = -0.02;
-
 function edgeTier(edge: number | null | undefined) {
   if (edge == null || !Number.isFinite(edge)) return "none";
   if (edge >= OPPORTUNITY_EDGE_THRESHOLD) return "hot";
@@ -103,6 +110,51 @@ function fmtOdds(x: number | null | undefined) {
 function fmtPctNullable(x: number | null | undefined) {
   if (x == null || !Number.isFinite(x)) return "—";
   return `${(x * 100).toFixed(1)}%`;
+}
+
+function probForOutcome(
+  probs:
+    | ProductOdds1x2
+    | { H: number | null; D: number | null; A: number | null }
+    | null
+    | undefined,
+  outcome: "H" | "D" | "A" | null | undefined
+) {
+  if (!probs || !outcome) return null;
+  const value = probs[outcome];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function fairOddFromProb(prob: number | null | undefined) {
+  if (prob == null || !Number.isFinite(prob) || prob <= 0) return null;
+  return 1 / prob;
+}
+
+function fmtFreshnessSeconds(
+  seconds: number | null | undefined,
+  lang: "pt" | "en" | "es"
+) {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+
+  const total = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(total / 60);
+  const hours = Math.floor(mins / 60);
+
+  if (hours >= 1) {
+    if (lang === "en") return `${hours}h ago`;
+    if (lang === "es") return `hace ${hours} h`;
+    return `há ${hours} h`;
+  }
+
+  if (mins >= 1) {
+    if (lang === "en") return `${mins} min ago`;
+    if (lang === "es") return `hace ${mins} min`;
+    return `há ${mins} min`;
+  }
+
+  if (lang === "en") return "just now";
+  if (lang === "es") return "justo ahora";
+  return "agora";
 }
 
 function poissonProbAtLeastGoals(lam: number | null | undefined, minGoals: number) {
@@ -372,11 +424,26 @@ function fmtKickoff(iso: string, lang: string) {
   }).format(d);
 }
 
-function hasOpportunityEdge(edge: number | null | undefined) {
+function hasOpportunity(summary: ProductEdgeSummary | null | undefined) {
+  const side = summary?.opportunity_outcome;
+  const edge = summary?.opportunity_edge;
+  const ev = summary?.opportunity_ev;
+  const books =
+    summary?.market_complete_books_count ??
+    summary?.market_books_count ??
+    0;
+  const freshness = summary?.opportunity_book_freshness_seconds;
+
   return (
+    (side === "H" || side === "D" || side === "A") &&
     typeof edge === "number" &&
     Number.isFinite(edge) &&
-    edge >= OPPORTUNITY_EDGE_THRESHOLD
+    typeof ev === "number" &&
+    Number.isFinite(ev) &&
+    edge >= OPPORTUNITY_EDGE_THRESHOLD &&
+    ev >= OPPORTUNITY_EV_THRESHOLD &&
+    books >= OPPORTUNITY_MIN_BOOKS &&
+    (freshness == null || freshness <= OPPORTUNITY_MAX_FRESHNESS_SECONDS)
   );
 }
 
@@ -461,7 +528,7 @@ export default function ProductIndex() {
     return new Map(leagues.map((item) => [item.sport_key, item]));
   }, [leagues]);
 
-  const [windowDays, setWindowDays] = useState<number>(7);
+  const [windowDays, setWindowDays] = useState<number>(1);
   const [sortBy, setSortBy] = useState<SortBy>("DATE");
   const [onlyOpportunities, setOnlyOpportunities] = useState(false);
 
@@ -543,22 +610,19 @@ export default function ProductIndex() {
       const res = await productListLeagues();
       const items = (res?.items ?? []).map((l) => applyLeagueOverride(l));
       setLeagues(items);
-      if (!sportKey && items.length) setSportKey(items[0].sport_key);
+      setSportKey((prev) => {
+        if (prev && items.some((item) => item.sport_key === prev)) return prev;
+        return items[0]?.sport_key ?? "";
+      });
     } catch (e: any) {
       setLeaguesError(e?.message ?? "Failed to load leagues");
     } finally {
       setLeaguesLoading(false);
     }
-  }, [sportKey]);
+  }, []);
 
-  function resetWindowDaysFromLeague(
-    nextLeague: (ProductLeagueItem & { assume_season: number; artifact_filename: string | null }) | null
-  ) {
-    const days = Math.max(
-      1,
-      Math.round((nextLeague?.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback) / 24)
-    );
-    setWindowDays(Math.min(days, 30));
+  function resetWindowDaysToDefault() {
+    setWindowDays(1);
   }
 
   function clearAdvancedFilters() {
@@ -568,7 +632,7 @@ export default function ProductIndex() {
     setSelectedTeams([]);
     setOnlyOpportunities(false);
     setSortBy("DATE");
-    resetWindowDaysFromLeague(league);
+    resetWindowDaysToDefault();
   }
 
   function renderOnlyOpportunitiesToggle(extraClassName = "") {
@@ -741,9 +805,14 @@ export default function ProductIndex() {
     try {
       const batches = await Promise.all(
         fetchLeagues.map(async (cfg) => {
+          const fetchHoursAhead = Math.max(
+            cfg.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback,
+            24 * 30
+          );
+
           const res = await productListOddsEvents({
             sport_key: cfg.sport_key,
-            hours_ahead: cfg.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback,
+            hours_ahead: fetchHoursAhead,
             limit: UI_DEFAULTS.limit,
             assume_league_id: cfg.league_id,
             assume_season: cfg.assume_season,
@@ -968,26 +1037,25 @@ export default function ProductIndex() {
     const firstLeague = fetchLeagues[0] ?? null;
     if (!firstLeague) return;
 
-    if (!windowDays) {
-      resetWindowDaysFromLeague(firstLeague);
-    }
-
     loadEvents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchLeagues.map((item) => item.sport_key).join("|")]);
 
-  // lista visível (filtro client-side)
-  const visibleEvents = useMemo(() => {
+   // lista visível (filtro client-side)
+  const visibleEventsState = useMemo(() => {
     const now = new Date();
     const max = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
 
     const selectedBookSet = selectedBookKeys.length ? new Set(selectedBookKeys) : null;
     const selectedTeamSet = selectedTeams.length ? new Set(selectedTeams) : null;
 
-    let list = events.filter((e) => {
-      const kickoff = new Date(e.commence_time_utc);
+    const futureFiltered = events.filter((e) => {
+      const kickoffRaw = e.commence_time_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoff = new Date(kickoffRaw);
       if (Number.isNaN(kickoff.getTime())) return false;
-      if (kickoff < now || kickoff > max) return false;
+      if (kickoff < now) return false;
 
       if (selectedTeamSet) {
         const home = String(e.home_name ?? "");
@@ -1001,19 +1069,31 @@ export default function ProductIndex() {
         if (!hasSelectedBook) return false;
       }
 
-      if (onlyOpportunities) {
-        const edge = e.edge_summary?.best_edge;
-        if (!hasOpportunityEdge(edge)) return false;
+      if (onlyOpportunities && !hasOpportunity(e.edge_summary)) {
+        return false;
       }
 
       return true;
     });
 
-    if (sortBy === "DATE") {
+    const inWindow = futureFiltered.filter((e) => {
+      const kickoffRaw = e.commence_time_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoff = new Date(kickoffRaw);
+      if (Number.isNaN(kickoff.getTime())) return false;
+      return kickoff <= max;
+    });
+
+    const useUpcomingFallback = windowDays === 1 && inWindow.length === 0 && futureFiltered.length > 0;
+    const effectiveSortBy: SortBy = useUpcomingFallback ? "DATE" : sortBy;
+    const list = [...(useUpcomingFallback ? futureFiltered : inWindow)];
+
+    if (effectiveSortBy === "DATE") {
       list.sort(
-        (a, b) => new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime()
+        (a, b) => new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime()
       );
-    } else if (sortBy === "CONFIDENCE") {
+    } else if (effectiveSortBy === "CONFIDENCE") {
       list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
     } else {
       list.sort((a, b) => {
@@ -1025,12 +1105,18 @@ export default function ProductIndex() {
 
         if (safeA !== safeB) return safeB - safeA;
 
-        return new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime();
+        return new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime();
       });
     }
 
-    return list;
+    return {
+      items: list,
+      useUpcomingFallback,
+    };
   }, [events, windowDays, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
+
+  const visibleEvents = visibleEventsState.items;
+  const isTodayWindowFallbackActive = visibleEventsState.useUpcomingFallback;
 
   // só mantém a seleção se o usuário já tinha uma seleção anterior.
   // Não auto-seleciona no primeiro load.
@@ -1164,9 +1250,8 @@ export default function ProductIndex() {
                   ) : null}
 
                   {(() => {
-                    const edge = selected.edge_summary?.best_edge;
-                    const hasOpportunity = hasOpportunityEdge(edge);
-                    if (!hasOpportunity) return null;
+                    const hasOpportunityFlag = hasOpportunity(selected.edge_summary);
+                    if (!hasOpportunityFlag) return null;
 
                     return (
                       <span className="pi-opportunity">
@@ -1302,10 +1387,10 @@ export default function ProductIndex() {
                     >
                       <span className="pi-accordion-title">
                         {lang === "en"
-                          ? "Probabilities & confidence"
+                          ? "Odds & opportunity"
                           : lang === "es"
-                          ? "Probabilidades y confianza"
-                          : "Probabilidades e confiança"}
+                          ? "Cuotas y oportunidad"
+                          : "Odds e oportunidade"}
                       </span>
                       <span className="pi-accordion-icon" aria-hidden="true">
                         {analysisSectionsOpen.probabilities ? "−" : "+"}
@@ -1677,50 +1762,186 @@ export default function ProductIndex() {
                           )}
                         </div>
 
-                        {vis.value.show_edge_percent ? (
-                          quote?.value?.edge ? (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-panel-value">
-                                H {fmtPct(quote.value.edge.H)} <br />
-                                D {fmtPct(quote.value.edge.D)} <br />
-                                A {fmtPct(quote.value.edge.A)}
-                              </div>
-
-                              {vis.value.show_value_detected ? (
-                                <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
-                              ) : null}
-                            </div>
-                          ) : selected?.edge_summary?.best_edge != null ? (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-panel-value">
-                                {fmtEdge(selected.edge_summary.best_edge)}
-                              </div>
-                              <div className="pi-muted">
-                                {fmtOutcome(
-                                  selected.edge_summary.best_outcome,
-                                  selected.home_name,
-                                  selected.away_name,
-                                  lang
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
-                            </div>
-                          )
-                        ) : (
+                        {!vis.value.show_edge_percent ? (
                           <LockedPanel
-                            title={t(lang, "matchup.edge")}
+                            title={t(lang, "matchup.opportunityView")}
                             lang={lang}
                             onUnlock={() => {
                               setUpgradeReason("FEATURE_LOCKED");
                               setUpgradeOpen(true);
                             }}
                           />
+                        ) : (
+                          (() => {
+                            const summary = selected?.edge_summary ?? null;
+
+                            const edgeOutcome = summary?.best_outcome ?? null;
+                            const bestEvOutcome = summary?.best_ev_outcome ?? null;
+
+                            const opportunitySide = summary?.opportunity_outcome ?? null;
+                            const opportunityEdge = summary?.opportunity_edge ?? null;
+                            const opportunityEv = summary?.opportunity_ev ?? null;
+                            const opportunityOdd = summary?.opportunity_odd ?? null;
+                            const opportunityBook = summary?.opportunity_book_name ?? null;
+                            const opportunityFreshness = summary?.opportunity_book_freshness_seconds ?? null;
+
+                            const fairOdd = fairOddFromProb(probForOutcome(effectiveProbs, edgeOutcome));
+
+                            const marketBooksCount =
+                              summary?.market_complete_books_count ??
+                              summary?.market_books_count ??
+                              0;
+
+                            const isProView = vis.model.show_metrics;
+                            const hasOpportunityFlag = hasOpportunity(summary);
+
+                            if (summary?.best_edge == null) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, isProView ? "matchup.marketRead" : "matchup.opportunityView")}
+                                  </div>
+                                  <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                                </div>
+                              );
+                            }
+
+                            if (!isProView) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, "matchup.opportunityView")}
+                                  </div>
+
+                                  <div className="pi-panel-value">
+                                    {fmtOutcome(edgeOutcome, selected.home_name, selected.away_name, lang)}
+                                  </div>
+
+                                  <div className="pi-muted" style={{ marginTop: 8 }}>
+                                    {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(summary.best_edge)}</strong>
+                                  </div>
+
+                                  {vis.value.show_fair_odds ? (
+                                    <div className="pi-muted">
+                                      {t(lang, "matchup.fairOdds")}: <strong>{fmtOdds(fairOdd)}</strong>
+                                    </div>
+                                  ) : null}
+
+                                  <div className="pi-muted">
+                                    {hasOpportunityFlag
+                                      ? t(lang, "matchup.strongSignalNow")
+                                      : t(lang, "matchup.noClearOpportunity")}
+                                  </div>
+
+                                  <div
+                                    className="pi-locked-cta"
+                                    style={{ marginTop: 10 }}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => {
+                                      setUpgradeReason("FEATURE_LOCKED");
+                                      setUpgradeOpen(true);
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setUpgradeReason("FEATURE_LOCKED");
+                                        setUpgradeOpen(true);
+                                      }
+                                    }}
+                                  >
+                                    {t(lang, "matchup.proUnlockCta")} →
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (hasOpportunityFlag) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, "matchup.validatedOpportunity")}
+                                  </div>
+
+                                  <div className="pi-panel-value">
+                                    {fmtOutcome(opportunitySide, selected.home_name, selected.away_name, lang)}
+                                  </div>
+
+                                  <div className="pi-muted" style={{ marginTop: 8 }}>
+                                    {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(opportunityEdge)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.executableValue")}: <strong>{fmtPctNullable(opportunityEv)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.validOdd")}: <strong>{fmtOdds(opportunityOdd)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.book")}: <strong>{opportunityBook ?? "—"}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.marketBooks")}:{" "}
+                                    <strong>{t(lang, "matchup.marketBooksValue", { count: marketBooksCount })}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.executionUpdated")}:{" "}
+                                    <strong>{fmtFreshnessSeconds(opportunityFreshness, lang)}</strong>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="pi-panel">
+                                <div className="pi-panel-label">
+                                  {t(lang, "matchup.marketRead")}
+                                </div>
+
+                                <div className="pi-panel-value">
+                                  {fmtOutcome(edgeOutcome, selected.home_name, selected.away_name, lang)}
+                                </div>
+
+                                <div className="pi-muted" style={{ marginTop: 8 }}>
+                                  {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(summary.best_edge)}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.bestExecutableValue")}:{" "}
+                                  <strong>{fmtPctNullable(summary.best_ev)}</strong>
+                                  {bestEvOutcome ? (
+                                    <>
+                                      {" "}•{" "}
+                                      {fmtOutcome(bestEvOutcome, selected.home_name, selected.away_name, lang)}
+                                    </>
+                                  ) : null}
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.validOdd")}:{" "}
+                                  <strong>{fmtOdds(summary.best_ev_odd ?? summary.best_odd)}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.book")}:{" "}
+                                  <strong>{summary.best_ev_book_name ?? summary.best_book_name ?? "—"}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.marketBooks")}:{" "}
+                                  <strong>{t(lang, "matchup.marketBooksValue", { count: marketBooksCount })}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.noValidatedOpportunity")}
+                                </div>
+                              </div>
+                            );
+                          })()
                         )}
                       </div>
                     </div>
@@ -1839,6 +2060,16 @@ return (
           : ""}
       </button>
     </div>
+
+    {isTodayWindowFallbackActive ? (
+      <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
+        {lang === "en"
+          ? "No matches found for today in the current selection. Showing the next available matches."
+          : lang === "es"
+          ? "No se encontraron partidos para hoy en la selección actual. Mostrando los próximos partidos disponibles."
+          : "Nenhum jogo encontrado para hoje na seleção atual. Exibindo os próximos jogos disponíveis."}
+      </div>
+    ) : null}
 
     {hasActiveFilters ? (
       <div className="pi-active-filters">
@@ -2038,8 +2269,7 @@ return (
             const eventKey = String(e.event_id);
             const active = eventKey === String(selectedId);
             const es = e.edge_summary ?? null;
-            const edge = es?.best_edge;
-            const hasOpportunity = hasOpportunityEdge(edge);
+            const hasOpportunityFlag = hasOpportunity(es);
 
             return (
               <button
@@ -2078,7 +2308,7 @@ return (
                       ) : null}
                     </div>
 
-                    {hasOpportunity ? (
+                    {hasOpportunityFlag ? (
                       <div className="pi-row-actions-inline">
                         <span className="pi-opportunity">
                           {t(lang, "odds.opportunityDetected")}
