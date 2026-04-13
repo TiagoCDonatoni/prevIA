@@ -5,6 +5,7 @@ import type {
   ProductOddsBook,
   ProductOddsEvent,
   ProductOddsQuoteResponse,
+  ProductOdds1x2,
 } from "../../api/contracts";
 import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
@@ -41,8 +42,11 @@ const UI_DEFAULTS = {
 
 type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE" | "EDGE";
+type WindowMode = "UPCOMING" | "TODAY" | "3" | "7" | "30";
 
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
+const UPCOMING_WINDOW_HOURS = 24;
+const UPCOMING_FALLBACK_MAX_LEAGUES = 12;
 const OPPORTUNITY_EDGE_THRESHOLD = 0.05;
 const OPPORTUNITY_EV_THRESHOLD = 0.03;
 const OPPORTUNITY_MIN_BOOKS = 4;
@@ -57,6 +61,32 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
   goals: false,
   oddsEdge: false,
 };
+
+function getCalendarDayBounds(reference = new Date()) {
+  const start = new Date(reference);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(reference);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+function getUpcomingHorizonMs(nowMs: number) {
+  return nowMs + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000;
+}
+
+function getFetchHoursAheadForWindowMode(mode: WindowMode) {
+  if (mode === "UPCOMING") return UI_DEFAULTS.hoursAheadFallback;
+
+  if (mode === "TODAY") {
+    const { end } = getCalendarDayBounds(new Date());
+    const diffMs = Math.max(0, end.getTime() - Date.now());
+    return Math.max(1, Math.ceil(diffMs / (60 * 60 * 1000)));
+  }
+
+  return Number(mode) * 24;
+}
 
 function narrativeStyleFromInternalView(
   view: InternalNarrativeView
@@ -114,7 +144,6 @@ function fmtPctNullable(x: number | null | undefined) {
 
 function probForOutcome(
   probs:
-    | ProductOdds1x2
     | { H: number | null; D: number | null; A: number | null }
     | null
     | undefined,
@@ -528,7 +557,7 @@ export default function ProductIndex() {
     return new Map(leagues.map((item) => [item.sport_key, item]));
   }, [leagues]);
 
-  const [windowDays, setWindowDays] = useState<number>(1);
+  const [windowMode, setWindowMode] = useState<WindowMode>("UPCOMING");
   const [sortBy, setSortBy] = useState<SortBy>("DATE");
   const [onlyOpportunities, setOnlyOpportunities] = useState(false);
 
@@ -557,11 +586,12 @@ export default function ProductIndex() {
 
     if (!leagues.length) return [];
 
-    const nowMs = Date.now();
-    const horizonMs = nowMs + windowDays * 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const nowMs = now.getTime();
+    const { start: todayStart, end: todayEnd } = getCalendarDayBounds(now);
 
-    const inWindowLeagueKeys: string[] = [];
-    const futureLeagueKeys: string[] = [];
+    const eligible: string[] = [];
+    const future: string[] = [];
 
     for (const item of leagues) {
       const kickoffRaw = item.next_kickoff_utc;
@@ -571,23 +601,36 @@ export default function ProductIndex() {
       if (!Number.isFinite(kickoffMs)) continue;
       if (kickoffMs < nowMs) continue;
 
-      futureLeagueKeys.push(item.sport_key);
+      future.push(item.sport_key);
 
+      if (windowMode === "UPCOMING") {
+        if (kickoffMs <= getUpcomingHorizonMs(nowMs)) {
+          eligible.push(item.sport_key);
+        }
+        continue;
+      }
+
+      if (windowMode === "TODAY") {
+        if (kickoffMs >= todayStart.getTime() && kickoffMs <= todayEnd.getTime()) {
+          eligible.push(item.sport_key);
+        }
+        continue;
+      }
+
+      const horizonMs = nowMs + Number(windowMode) * 24 * 60 * 60 * 1000;
       if (kickoffMs <= horizonMs) {
-        inWindowLeagueKeys.push(item.sport_key);
+        eligible.push(item.sport_key);
       }
     }
 
-    if (inWindowLeagueKeys.length) return inWindowLeagueKeys;
+    if (eligible.length) return eligible;
 
-    // fallback:
-    // se não houver jogos dentro da janela atual,
-    // buscamos as próximas ligas com jogos futuros
-    if (futureLeagueKeys.length) return futureLeagueKeys;
+    if (windowMode === "UPCOMING") {
+      return future.slice(0, UPCOMING_FALLBACK_MAX_LEAGUES);
+    }
 
-    // último fallback defensivo
-    return leagues.map((item) => item.sport_key);
-  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowDays]);
+    return [];
+  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowMode]);
 
   const fetchLeagues = useMemo(() => {
     return activeLeagueSportKeys
@@ -652,10 +695,6 @@ export default function ProductIndex() {
     }
   }, []);
 
-  function resetWindowDaysToDefault() {
-    setWindowDays(1);
-  }
-
   function clearAdvancedFilters() {
     setSelectedCountryCodes([]);
     setSelectedLeagueSportKeys([]);
@@ -663,7 +702,7 @@ export default function ProductIndex() {
     setSelectedTeams([]);
     setOnlyOpportunities(false);
     setSortBy("DATE");
-    resetWindowDaysToDefault();
+    setWindowMode("UPCOMING");
   }
 
   function renderOnlyOpportunitiesToggle(extraClassName = "") {
@@ -707,14 +746,15 @@ export default function ProductIndex() {
             ? "No se encontraron opciones"
             : "Nenhuma opção encontrada"
         }
-        selectedValue={String(windowDays)}
+        selectedValue={windowMode}
         options={[
-          { value: "1", label: t(lang, "odds.windowToday") },
+          { value: "UPCOMING", label: t(lang, "odds.windowUpcoming") },
+          { value: "TODAY", label: t(lang, "odds.windowToday") },
           { value: "3", label: t(lang, "odds.window3d") },
           { value: "7", label: t(lang, "odds.window7d") },
           { value: "30", label: t(lang, "odds.window30d") },
         ]}
-        onChange={(next) => setWindowDays(Number(next))}
+        onChange={(next) => setWindowMode(next as WindowMode)}
       />
     );
   }
@@ -797,18 +837,23 @@ export default function ProductIndex() {
       return compactSelectedLabel(selectedOptions[0].label);
     }
 
-    if (type === "country") {
-      return `${selectedOptions.length} países`;
+    if (lang === "en") {
+      if (type === "country") return `${selectedOptions.length} countries`;
+      if (type === "league") return `${selectedOptions.length} leagues`;
+      if (type === "book") return `${selectedOptions.length} books`;
+      return `${selectedOptions.length} teams`;
     }
 
-    if (type === "league") {
-      return `${selectedOptions.length} ligas`;
+    if (lang === "es") {
+      if (type === "country") return `${selectedOptions.length} países`;
+      if (type === "league") return `${selectedOptions.length} ligas`;
+      if (type === "book") return `${selectedOptions.length} casas`;
+      return `${selectedOptions.length} equipos`;
     }
 
-    if (type === "book") {
-      return `${selectedOptions.length} casas`;
-    }
-
+    if (type === "country") return `${selectedOptions.length} países`;
+    if (type === "league") return `${selectedOptions.length} ligas`;
+    if (type === "book") return `${selectedOptions.length} casas`;
     return `${selectedOptions.length} times`;
   }
 
@@ -828,22 +873,26 @@ export default function ProductIndex() {
   }, [teamOptions]);
 
   const loadEvents = useCallback(async () => {
-    if (!fetchLeagues.length) return;
+    if (!fetchLeagues.length) {
+      setEvents([]);
+      setSelectedId("");
+      setQuote(null);
+      setQuoteError("");
+      setLastLoadedAt(Date.now());
+      return;
+    }
 
     setLoadingEvents(true);
     setEventsError("");
 
     try {
+      const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
+
       const batches = await Promise.all(
         fetchLeagues.map(async (cfg) => {
-          const fetchHoursAhead = Math.max(
-            cfg.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback,
-            24 * 30
-          );
-
           const res = await productListOddsEvents({
             sport_key: cfg.sport_key,
-            hours_ahead: fetchHoursAhead,
+            hours_ahead: hoursAhead,
             limit: UI_DEFAULTS.limit,
             assume_league_id: cfg.league_id,
             assume_season: cfg.assume_season,
@@ -869,7 +918,7 @@ export default function ProductIndex() {
     } finally {
       setLoadingEvents(false);
     }
-  }, [fetchLeagues]);
+  }, [fetchLeagues, windowMode]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -1065,17 +1114,14 @@ export default function ProductIndex() {
   }, []);
 
   useEffect(() => {
-    const firstLeague = fetchLeagues[0] ?? null;
-    if (!firstLeague) return;
-
     loadEvents();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchLeagues.map((item) => item.sport_key).join("|")]);
+  }, [loadEvents]);
 
-   // lista visível (filtro client-side)
+  // lista visível (filtro client-side)
   const visibleEventsState = useMemo(() => {
     const now = new Date();
-    const max = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+    const nowMs = now.getTime();
+    const { start: todayStart, end: todayEnd } = getCalendarDayBounds(now);
 
     const selectedBookSet = selectedBookKeys.length ? new Set(selectedBookKeys) : null;
     const selectedTeamSet = selectedTeams.length ? new Set(selectedTeams) : null;
@@ -1086,7 +1132,7 @@ export default function ProductIndex() {
 
       const kickoff = new Date(kickoffRaw);
       if (Number.isNaN(kickoff.getTime())) return false;
-      if (kickoff < now) return false;
+      if (kickoff.getTime() < nowMs) return false;
 
       if (selectedTeamSet) {
         const home = String(e.home_name ?? "");
@@ -1107,18 +1153,43 @@ export default function ProductIndex() {
       return true;
     });
 
-    const inWindow = futureFiltered.filter((e) => {
-      const kickoffRaw = e.commence_time_utc;
-      if (!kickoffRaw) return false;
+    let scoped = futureFiltered;
+    let useUpcomingFallback = false;
 
-      const kickoff = new Date(kickoffRaw);
-      if (Number.isNaN(kickoff.getTime())) return false;
-      return kickoff <= max;
-    });
+    if (windowMode === "UPCOMING") {
+      const horizonMs = getUpcomingHorizonMs(nowMs);
+      const withinUpcoming = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs <= horizonMs;
+      });
 
-    const useUpcomingFallback = windowDays === 1 && inWindow.length === 0 && futureFiltered.length > 0;
+      if (withinUpcoming.length) {
+        scoped = withinUpcoming;
+      } else {
+        scoped = futureFiltered;
+        useUpcomingFallback = futureFiltered.length > 0;
+      }
+    } else if (windowMode === "TODAY") {
+      scoped = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs >= todayStart.getTime() && kickoffMs <= todayEnd.getTime();
+      });
+    } else {
+      const horizonMs = nowMs + Number(windowMode) * 24 * 60 * 60 * 1000;
+      scoped = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs <= horizonMs;
+      });
+    }
+
     const effectiveSortBy: SortBy = useUpcomingFallback ? "DATE" : sortBy;
-    const list = [...(useUpcomingFallback ? futureFiltered : inWindow)];
+    const list = [...scoped];
 
     if (effectiveSortBy === "DATE") {
       list.sort(
@@ -1144,10 +1215,25 @@ export default function ProductIndex() {
       items: list,
       useUpcomingFallback,
     };
-  }, [events, windowDays, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
+  }, [events, windowMode, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
 
   const visibleEvents = visibleEventsState.items;
-  const isTodayWindowFallbackActive = visibleEventsState.useUpcomingFallback;
+  const isUpcomingFallbackActive = visibleEventsState.useUpcomingFallback;
+
+  const showTodayEmptyNotice = useMemo(() => {
+    if (windowMode !== "TODAY") return false;
+    if (loadingEvents || !!eventsError || visibleEvents.length > 0) return false;
+
+    const { end } = getCalendarDayBounds(new Date());
+
+    return leagues.some((item) => {
+      const kickoffRaw = item.next_kickoff_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoffMs = new Date(kickoffRaw).getTime();
+      return Number.isFinite(kickoffMs) && kickoffMs > end.getTime();
+    });
+  }, [windowMode, loadingEvents, eventsError, visibleEvents.length, leagues]);
 
   // só mantém a seleção se o usuário já tinha uma seleção anterior.
   // Não auto-seleciona no primeiro load.
@@ -2092,13 +2178,13 @@ return (
       </button>
     </div>
 
-    {isTodayWindowFallbackActive ? (
+    {isUpcomingFallbackActive ? (
       <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
-        {lang === "en"
-          ? "No matches found for today in the current selection. Showing the next available matches."
-          : lang === "es"
-          ? "No se encontraron partidos para hoy en la selección actual. Mostrando los próximos partidos disponibles."
-          : "Nenhum jogo encontrado para hoje na seleção atual. Exibindo os próximos jogos disponíveis."}
+        {t(lang, "odds.upcomingFallbackNotice")}
+      </div>
+    ) : showTodayEmptyNotice ? (
+      <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
+        {t(lang, "odds.todayEmptyNotice")}
       </div>
     ) : null}
 
