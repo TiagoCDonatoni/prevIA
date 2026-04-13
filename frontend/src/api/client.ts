@@ -32,6 +32,9 @@ import type {
   AdminOddsAuditByLeagueResponse,
   AdminOddsAuditEventsResponse,
   AdminOddsAuditSyncResultsResponse,
+  AdminOpsPipelineHealthResponse,
+  AdminOpsRunsRecentResponse,
+  AdminOpsRunEventsResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -313,6 +316,7 @@ export async function getAdminOddsAuditSummary(params?: {
   artifact_filename?: string | null;
   min_confidence?: "NONE" | "ILIKE" | "EXACT";
   severe_threshold?: number;
+  offset_windows?: number;
 }): Promise<AdminOddsAuditSummaryResponse> {
   const url = new URL("/admin/odds/audit/reliability", API_BASE_URL);
 
@@ -323,6 +327,7 @@ export async function getAdminOddsAuditSummary(params?: {
   if (params?.artifact_filename) url.searchParams.set("artifact_filename", params.artifact_filename);
   if (params?.min_confidence) url.searchParams.set("min_confidence", params.min_confidence);
   if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
+  if (params?.offset_windows != null) url.searchParams.set("offset_windows", String(params.offset_windows));
 
   return fetchJson<AdminOddsAuditSummaryResponse>(url.toString(), {
     headers: { Accept: "application/json" },
@@ -336,6 +341,7 @@ export async function getAdminOddsAuditByLeague(params?: {
   artifact_filename?: string | null;
   min_confidence?: "NONE" | "ILIKE" | "EXACT";
   severe_threshold?: number;
+  offset_windows?: number;
 }): Promise<AdminOddsAuditByLeagueResponse> {
   const url = new URL("/admin/odds/audit/reliability/by-league", API_BASE_URL);
 
@@ -345,6 +351,7 @@ export async function getAdminOddsAuditByLeague(params?: {
   if (params?.artifact_filename) url.searchParams.set("artifact_filename", params.artifact_filename);
   if (params?.min_confidence) url.searchParams.set("min_confidence", params.min_confidence);
   if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
+  if (params?.offset_windows != null) url.searchParams.set("offset_windows", String(params.offset_windows));
 
   return fetchJson<AdminOddsAuditByLeagueResponse>(url.toString(), {
     headers: { Accept: "application/json" },
@@ -361,6 +368,7 @@ export async function getAdminOddsAuditEvents(params?: {
   severe_threshold?: number;
   only_severe?: boolean;
   limit?: number;
+  offset_windows?: number;
 }): Promise<AdminOddsAuditEventsResponse> {
   const url = new URL("/admin/odds/audit/reliability/events", API_BASE_URL);
 
@@ -373,6 +381,7 @@ export async function getAdminOddsAuditEvents(params?: {
   if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
   if (params?.only_severe != null) url.searchParams.set("only_severe", String(params.only_severe));
   if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+  if (params?.offset_windows != null) url.searchParams.set("offset_windows", String(params.offset_windows));
 
   return fetchJson<AdminOddsAuditEventsResponse>(url.toString(), {
     headers: { Accept: "application/json" },
@@ -508,6 +517,57 @@ export async function adminOpsPipelineRun(params?: {
   });
 }
 
+export async function adminOpsPipelineHealth(params?: {
+  lookback_days?: number;
+}): Promise<AdminOpsPipelineHealthResponse> {
+  const url = new URL("/admin/ops/pipeline/health", API_BASE_URL);
+
+  if (params?.lookback_days != null) {
+    url.searchParams.set("lookback_days", String(params.lookback_days));
+  }
+
+  return fetchJson<AdminOpsPipelineHealthResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsRunsRecent(params?: {
+  limit?: number;
+  job_key?: string | null;
+  status?: string | null;
+}): Promise<AdminOpsRunsRecentResponse> {
+  const url = new URL("/admin/ops/runs/recent", API_BASE_URL);
+
+  if (params?.limit != null) {
+    url.searchParams.set("limit", String(params.limit));
+  }
+  if (params?.job_key) {
+    url.searchParams.set("job_key", params.job_key);
+  }
+  if (params?.status) {
+    url.searchParams.set("status", params.status);
+  }
+
+  return fetchJson<AdminOpsRunsRecentResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsRunEvents(params: {
+  run_id: number;
+  limit?: number;
+}): Promise<AdminOpsRunEventsResponse> {
+  const url = new URL(`/admin/ops/runs/${params.run_id}/events`, API_BASE_URL);
+
+  if (params.limit != null) {
+    url.searchParams.set("limit", String(params.limit));
+  }
+
+  return fetchJson<AdminOpsRunEventsResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
 export async function adminTeamResolutionPending(params?: {
   sport_key?: string | null;
   limit?: number;
@@ -634,13 +694,14 @@ export async function adminOpsListLeagues(): Promise<{
     sport_title: string | null;
     sport_group: string | null;
     league_id: number | null;
-    season_policy: string | null;
+    season_policy: "current" | "fixed" | null;
     fixed_season: number | null;
     regions: string | null;
     hours_ahead: number | null;
     tol_hours: number | null;
     enabled: boolean;
-    mapping_status: string;
+    mapping_status: string | null;
+    computed_status: "approved" | "incomplete" | "pending" | "disabled";
     confidence: number | null;
     notes: string | null;
     updated_at_utc: string | null;
@@ -693,6 +754,170 @@ export async function adminOpsAutoResolveLeagues(params?: {
 
   return fetchJson(url.toString(), {
     method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsDiscoverLeagueCandidates(params?: {
+  default_enabled?: boolean;
+  auto_resolve?: boolean;
+}): Promise<{
+  ok: boolean;
+  steps: {
+    catalog_sync: {
+      ok: boolean;
+      counters?: {
+        sports_seen?: number;
+        catalog_upserted?: number;
+        skipped?: number;
+      };
+      error?: string | null;
+    };
+    gap_scan: {
+      ok: boolean;
+      counters?: {
+        inserted?: number;
+        inserted_pending?: number;
+        inserted_ignored?: number;
+      };
+      error?: string | null;
+    };
+    autoclassify: {
+      ok: boolean;
+      counters?: {
+        ignored?: number;
+      };
+      error?: string | null;
+    };
+    auto_resolve: {
+      ok: boolean;
+      skipped?: boolean;
+      count: number;
+      resolved_count: number;
+      already_resolved_count: number;
+      failed_count: number;
+    };
+  };
+  summary: {
+    catalog_upserted: number;
+    sports_seen: number;
+    inserted: number;
+    inserted_pending: number;
+    inserted_ignored: number;
+    ignored: number;
+    resolved_count: number;
+    already_resolved_count: number;
+    failed_count: number;
+  };
+}> {
+  const url = new URL("/admin/ops/odds/league_map/discover_candidates", API_BASE_URL);
+  url.searchParams.set("default_enabled", String(params?.default_enabled ?? false));
+  url.searchParams.set("auto_resolve", String(params?.auto_resolve ?? true));
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsDiscoverLeagueCandidates(params?: {
+  default_enabled?: boolean;
+  auto_resolve?: boolean;
+}): Promise<{
+  ok: boolean;
+  steps: {
+    catalog_sync: {
+      ok: boolean;
+      counters?: {
+        sports_seen?: number;
+        catalog_upserted?: number;
+        skipped?: number;
+      };
+      error?: string | null;
+    };
+    gap_scan: {
+      ok: boolean;
+      counters?: {
+        inserted?: number;
+        inserted_pending?: number;
+        inserted_ignored?: number;
+      };
+      error?: string | null;
+    };
+    autoclassify: {
+      ok: boolean;
+      counters?: {
+        ignored?: number;
+      };
+      error?: string | null;
+    };
+    auto_resolve: {
+      ok: boolean;
+      skipped?: boolean;
+      count: number;
+      resolved_count: number;
+      already_resolved_count: number;
+      failed_count: number;
+    };
+  };
+  summary: {
+    catalog_upserted: number;
+    sports_seen: number;
+    inserted: number;
+    inserted_pending: number;
+    inserted_ignored: number;
+    ignored: number;
+    resolved_count: number;
+    already_resolved_count: number;
+    failed_count: number;
+  };
+}> {
+  const url = new URL("/admin/ops/odds/league_map/discover_candidates", API_BASE_URL);
+  url.searchParams.set("default_enabled", String(params?.default_enabled ?? false));
+  url.searchParams.set("auto_resolve", String(params?.auto_resolve ?? true));
+
+  return fetchJson(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOpsLeagueSuggestions(params: {
+  sport_key: string;
+  limit?: number;
+}): Promise<{
+  ok: boolean;
+  sport_key: string;
+  sport_title?: string | null;
+  sport_group?: string | null;
+  current_league_id: number;
+  current_mapping_status?: string | null;
+  competition_candidates: string[];
+  country_hint?: string | null;
+  reason: string;
+  can_auto_resolve: boolean;
+  suggested_candidate?: {
+    league_id: number;
+    name?: string | null;
+    country_name?: string | null;
+    country_code?: string | null;
+    match_reason?: string | null;
+    rank?: number | null;
+  } | null;
+  candidates: Array<{
+    league_id: number;
+    name: string;
+    country_name?: string | null;
+    country_code?: string | null;
+    match_reason?: string | null;
+    rank?: number | null;
+  }>;
+}> {
+  const url = new URL("/admin/ops/odds/league_map/suggestions", API_BASE_URL);
+  url.searchParams.set("sport_key", params.sport_key);
+  url.searchParams.set("limit", String(params.limit ?? 5));
+
+  return fetchJson(url.toString(), {
     headers: { Accept: "application/json" },
   });
 }
