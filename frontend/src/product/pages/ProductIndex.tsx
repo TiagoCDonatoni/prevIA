@@ -555,8 +555,39 @@ export default function ProductIndex() {
       return leagueOptions.map((item) => item.value);
     }
 
-    return sportKey ? [sportKey] : [];
-  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, sportKey]);
+    if (!leagues.length) return [];
+
+    const nowMs = Date.now();
+    const horizonMs = nowMs + windowDays * 24 * 60 * 60 * 1000;
+
+    const inWindowLeagueKeys: string[] = [];
+    const futureLeagueKeys: string[] = [];
+
+    for (const item of leagues) {
+      const kickoffRaw = item.next_kickoff_utc;
+      if (!kickoffRaw) continue;
+
+      const kickoffMs = new Date(kickoffRaw).getTime();
+      if (!Number.isFinite(kickoffMs)) continue;
+      if (kickoffMs < nowMs) continue;
+
+      futureLeagueKeys.push(item.sport_key);
+
+      if (kickoffMs <= horizonMs) {
+        inWindowLeagueKeys.push(item.sport_key);
+      }
+    }
+
+    if (inWindowLeagueKeys.length) return inWindowLeagueKeys;
+
+    // fallback:
+    // se não houver jogos dentro da janela atual,
+    // buscamos as próximas ligas com jogos futuros
+    if (futureLeagueKeys.length) return futureLeagueKeys;
+
+    // último fallback defensivo
+    return leagues.map((item) => item.sport_key);
+  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowDays]);
 
   const fetchLeagues = useMemo(() => {
     return activeLeagueSportKeys
