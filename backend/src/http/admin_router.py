@@ -723,6 +723,14 @@ def _audit_best_side_prob(probs: Optional[Dict[str, float]], best_side: Optional
     return float(probs[best_side])
 
 
+def _audit_window_bounds(window_days: int, offset_windows: int = 0) -> Tuple[datetime, datetime]:
+    now_utc = datetime.now(timezone.utc)
+    offset = max(0, int(offset_windows))
+    end_utc = now_utc - timedelta(days=int(window_days) * offset)
+    start_utc = end_utc - timedelta(days=int(window_days))
+    return start_utc, end_utc
+
+
 def _audit_pick_rows(
     league_id: Optional[int],
     season: Optional[int],
@@ -730,9 +738,9 @@ def _audit_pick_rows(
     cutoff_hours: int,
     artifact_filename: Optional[str],
     min_confidence: str,
+    offset_windows: int = 0,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
-    now_utc = datetime.now(timezone.utc)
-    start_utc = now_utc - timedelta(days=int(window_days))
+    start_utc, end_utc = _audit_window_bounds(window_days=window_days, offset_windows=offset_windows)
     confs = _audit_conf_values(min_confidence)
 
     sql = """
@@ -812,7 +820,7 @@ def _audit_pick_rows(
                 sql,
                 {
                     "start_utc": start_utc,
-                    "end_utc": now_utc,
+                    "end_utc": end_utc,
                     "league_id": league_id,
                     "season": season,
                     "artifact_filename": artifact_filename,
@@ -868,7 +876,7 @@ def _audit_pick_rows(
             }
         )
 
-    return out, _iso_utc_or_none(start_utc) or "", _iso_utc_or_none(now_utc) or ""
+    return out, _iso_utc_or_none(start_utc) or "", _iso_utc_or_none(end_utc) or ""
 
 
 def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[str, Any]:
@@ -1120,6 +1128,7 @@ def admin_odds_audit_reliability(
     artifact_filename: Optional[str] = Query(default=None),
     min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
     severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
+    offset_windows: int = Query(default=0, ge=0, le=24),
 ) -> Dict[str, Any]:
     rows, start_utc, end_utc = _audit_pick_rows(
         league_id=league_id,
@@ -1128,6 +1137,7 @@ def admin_odds_audit_reliability(
         cutoff_hours=cutoff_hours,
         artifact_filename=artifact_filename,
         min_confidence=min_confidence,
+        offset_windows=offset_windows,
     )
 
     rollup = _audit_rollup(rows, severe_threshold=severe_threshold)
@@ -1142,6 +1152,7 @@ def admin_odds_audit_reliability(
             "min_confidence": min_confidence,
             "start_utc": start_utc,
             "end_utc": end_utc,
+            "offset_windows": offset_windows,
         },
         **rollup,
     }
@@ -1155,6 +1166,7 @@ def admin_odds_audit_reliability_by_league(
     artifact_filename: Optional[str] = Query(default=None),
     min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
     severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
+    offset_windows: int = Query(default=0, ge=0, le=24),
 ) -> Dict[str, Any]:
     rows, start_utc, end_utc = _audit_pick_rows(
         league_id=None,
@@ -1163,6 +1175,7 @@ def admin_odds_audit_reliability_by_league(
         cutoff_hours=cutoff_hours,
         artifact_filename=artifact_filename,
         min_confidence=min_confidence,
+        offset_windows=offset_windows,
     )
 
     grouped: Dict[Tuple[Optional[int], Optional[int]], List[Dict[str, Any]]] = {}
@@ -1193,6 +1206,7 @@ def admin_odds_audit_reliability_by_league(
             "min_confidence": min_confidence,
             "start_utc": start_utc,
             "end_utc": end_utc,
+            "offset_windows": offset_windows,
         },
         "rows": out_rows,
     }
@@ -1209,6 +1223,7 @@ def admin_odds_audit_reliability_events(
     severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
     only_severe: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=1000),
+    offset_windows: int = Query(default=0, ge=0, le=24),
 ) -> Dict[str, Any]:
     rows, start_utc, end_utc = _audit_pick_rows(
         league_id=league_id,
@@ -1217,6 +1232,7 @@ def admin_odds_audit_reliability_events(
         cutoff_hours=cutoff_hours,
         artifact_filename=artifact_filename,
         min_confidence=min_confidence,
+        offset_windows=offset_windows,
     )
 
     event_rows: List[Dict[str, Any]] = []
@@ -1301,6 +1317,7 @@ def admin_odds_audit_reliability_events(
             "start_utc": start_utc,
             "end_utc": end_utc,
             "returned": len(event_rows),
+            "offset_windows": offset_windows,
         },
         "rows": event_rows,
     }

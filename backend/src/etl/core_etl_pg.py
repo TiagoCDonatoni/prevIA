@@ -260,6 +260,26 @@ def _apply_upserts(upsert_sql: str, rows: List[dict]) -> int:
                     n += 1
                 return n
 
+def _dedupe_rows_keep_first(rows: List[dict], key_field: str) -> List[dict]:
+    seen = set()
+    out: List[dict] = []
+
+    for row in rows:
+        if not row:
+            continue
+
+        key = row.get(key_field)
+        if key is None:
+            continue
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        out.append(row)
+
+    return out
+
 def run_core_etl(
     *,
     provider: str,
@@ -284,6 +304,7 @@ def run_core_etl(
             allow = set(int(x) for x in league_ids)
             mapped = [m for m in mapped if int(m["league_id"]) in allow]
 
+        mapped = _dedupe_rows_keep_first(mapped, "league_id")
         upserts = _apply_upserts(LEAGUES_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 
@@ -304,6 +325,7 @@ def run_core_etl(
         if seasons:
             allow_seasons = set(int(x) for x in seasons)
             mapped = [m for m in mapped if int(m["season"]) in allow_seasons]
+        mapped = _dedupe_rows_keep_first(mapped, "fixture_id")
         upserts = _apply_upserts(FIXTURES_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 

@@ -14,6 +14,7 @@
   "filterStatus": "Status",
   "sortBy": "Ordenar",
 
+  "windowUpcoming": "Próximos jogos",
   "windowToday": "Hoje",
   "window3d": "3 dias",
   "window7d": "7 dias",
@@ -34,5 +35,7 @@
   "filterLeague": "Filtrar por liga",
   "opportunityDetected": "🔥 Oportunidade",
   "sortEdge": "Ordenar por edge",
-  "onlyOpportunities": "🔥 Só oportunidades"
+  "onlyOpportunities": "🔥 Só oportunidades",
+  "upcomingFallbackNotice": "Nenhum jogo encontrado nas próximas 24h. Exibindo os próximos jogos disponíveis.",
+  "todayEmptyNotice": "Nenhum jogo encontrado para hoje na seleção atual."
 }

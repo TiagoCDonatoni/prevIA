@@ -249,6 +249,7 @@ export type AdminOddsAuditSummaryResponse = {
     min_confidence: "NONE" | "ILIKE" | "EXACT";
     start_utc: string;
     end_utc: string;
+    offset_windows?: number;
   };
   counts: AdminOddsAuditCounts;
   model: AdminOddsAuditMetrics;
@@ -280,6 +281,7 @@ export type AdminOddsAuditByLeagueResponse = {
     min_confidence: "NONE" | "ILIKE" | "EXACT";
     start_utc: string;
     end_utc: string;
+    offset_windows?: number;
   };
   rows: AdminOddsAuditByLeagueRow[];
 };
@@ -322,6 +324,7 @@ export type AdminOddsAuditEventsResponse = {
     start_utc: string;
     end_utc: string;
     returned: number;
+    offset_windows?: number;
   };
   rows: AdminOddsAuditEventRow[];
 };

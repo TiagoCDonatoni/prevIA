@@ -153,7 +153,9 @@ export function buildBookOptions(
     const eventId = String(event?.event_id ?? "").trim();
     if (!eventId) continue;
 
-    const books = safeBooksByEventId[eventId] ?? [];
+    const books =
+      safeBooksByEventId[eventId] ??
+      (Array.isArray(event.odds_books) ? event.odds_books : []);
     for (const book of books) {
       const label = String(book?.name ?? book?.key ?? "").trim();
       const value = String(book?.key ?? label).trim();

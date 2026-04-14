@@ -121,8 +121,12 @@ export function visibilityForPlan(plan: PlanId): Entitlements["visibility"] {
     },
   };
 
+  if (plan === "BASIC") {
+    base.odds.books_count = 2;
+  }
+
   if (plan === "LIGHT" || plan === "PRO") {
-    base.odds.books_count = plan === "LIGHT" ? 3 : 999;
+    base.odds.books_count = 3;
     base.value.show_value_explained = true;
     base.value.show_fair_odds = true;
     base.value.show_edge_percent = true;
@@ -132,7 +136,6 @@ export function visibilityForPlan(plan: PlanId): Entitlements["visibility"] {
   }
 
   if (plan === "PRO") {
-    base.odds.sort_mode = "best_odds";
     base.context.show_head_to_head = true;
     base.model.show_metrics = true;
   }

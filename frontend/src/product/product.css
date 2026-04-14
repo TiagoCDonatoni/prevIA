@@ -2224,6 +2224,220 @@
   margin-left: auto;
 }
 
+.pi-row-books-preview {
+  margin-top: 10px;
+}
+
+.pi-row-books-preview .pi-books-row {
+  flex-wrap: wrap !important;
+  overflow: visible;
+}
+
+.pi-book-preview-chip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.pi-book-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pi-book-preview-name {
+  font-size: 12px;
+  line-height: 1.1;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.pi-book-preview-odds {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.pi-book-partner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  color: #2563eb;
+}
+
+.pi-book-more-btn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pi-book-more-btn:hover {
+  background: #f8fafc;
+}
+
+.pi-books-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pi-books-modal-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.pi-books-modal-row:last-child {
+  border-bottom: none;
+}
+
+.pi-books-modal-book {
+  min-width: 0;
+}
+
+.pi-books-modal-book-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pi-books-modal-book-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pi-books-modal-book-time {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pi-books-modal-odds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(56px, 1fr));
+  gap: 8px;
+}
+
+.pi-books-modal-odd {
+  min-width: 56px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  text-align: center;
+}
+
+.pi-books-modal-odd span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pi-books-modal-odd strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.pi-books-modal.um-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-width: 720px;
+  max-height: calc(100dvh - 32px);
+}
+
+.pi-analysis-books {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+.pi-books-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.pi-book-analysis-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.pi-book-more-btn-inline {
+  align-self: flex-start;
+}
+
+.pi-books-modal {
+  color: #0f172a;
+}
+
+.pi-books-modal .product-modal-title,
+.pi-books-modal .product-modal-subtitle,
+.pi-books-modal .pi-books-modal-book-name,
+.pi-books-modal .pi-books-modal-odd strong {
+  color: #0f172a;
+}
+
+.pi-books-modal .pi-books-modal-book-time,
+.pi-books-modal .pi-books-modal-odd span {
+  color: #475569;
+}
+
+.pi-books-modal .product-modal-close {
+  color: #64748b;
+}
+
+.pi-books-modal .product-modal-close:hover {
+  color: #0f172a;
+}
+
+@media (max-width: 640px) {
+  .pi-books-modal-row {
+    grid-template-columns: 1fr;
+  }
+
+  .pi-books-modal-odds {
+    width: 100%;
+  }
+
+  .pi-books-modal.um-modal {
+    width: min(100vw - 20px, 720px);
+    max-height: calc(100dvh - 20px);
+  }
+}
+
 /* PlanChangeModal */
 .pcm-grid{
   display:grid;
@@ -4189,5 +4403,129 @@
 
   .account-preferences-card-visual {
     height: 104px;
+  }
+}
+
+.product-auth-gate {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background:
+    radial-gradient(circle at top, rgba(72, 92, 255, 0.12), transparent 36%),
+    linear-gradient(180deg, #0f1117 0%, #121623 100%);
+}
+
+.product-auth-gate-card {
+  width: 100%;
+  max-width: 560px;
+  padding: 28px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 22, 35, 0.92);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  color: #f4f7fb;
+}
+
+.product-auth-gate-brand {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  margin-bottom: 18px;
+}
+
+.product-auth-gate-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.62);
+  margin-bottom: 10px;
+}
+
+.product-auth-gate-title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+}
+
+.product-auth-gate-body {
+  margin: 14px 0 0;
+  font-size: 15px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.product-auth-gate-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.product-auth-gate-secondary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.product-auth-gate-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.76);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.product-auth-gate-link:hover {
+  color: #ffffff;
+}
+
+.product-auth-gate-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.product-auth-gate-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-top-color: rgba(255, 255, 255, 0.92);
+  animation: product-auth-gate-spin 0.8s linear infinite;
+}
+
+@keyframes product-auth-gate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .product-auth-gate-card {
+    padding: 22px;
+    border-radius: 20px;
+  }
+
+  .product-auth-gate-title {
+    font-size: 26px;
+  }
+
+  .product-auth-gate-actions {
+    flex-direction: column;
+  }
+
+  .product-auth-gate-actions > button {
+    width: 100%;
   }
 }

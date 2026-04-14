@@ -461,6 +461,19 @@ export function ProductAuthModal(props: {
             </label>
           ) : null}
 
+          {mode === "signup" ? (
+            <label className="product-field">
+              <span>{tr("auth.fullName")}</span>
+              <input
+                type="text"
+                autoComplete="name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder={tr("auth.fullNamePlaceholder")}
+              />
+            </label>
+          ) : null}
+
           {mode !== "reset" && mode !== "changePassword" ? (
             <label className="product-field">
               <span>{tr("auth.email")}</span>

@@ -820,68 +820,6 @@ export async function adminOpsDiscoverLeagueCandidates(params?: {
   });
 }
 
-export async function adminOpsDiscoverLeagueCandidates(params?: {
-  default_enabled?: boolean;
-  auto_resolve?: boolean;
-}): Promise<{
-  ok: boolean;
-  steps: {
-    catalog_sync: {
-      ok: boolean;
-      counters?: {
-        sports_seen?: number;
-        catalog_upserted?: number;
-        skipped?: number;
-      };
-      error?: string | null;
-    };
-    gap_scan: {
-      ok: boolean;
-      counters?: {
-        inserted?: number;
-        inserted_pending?: number;
-        inserted_ignored?: number;
-      };
-      error?: string | null;
-    };
-    autoclassify: {
-      ok: boolean;
-      counters?: {
-        ignored?: number;
-      };
-      error?: string | null;
-    };
-    auto_resolve: {
-      ok: boolean;
-      skipped?: boolean;
-      count: number;
-      resolved_count: number;
-      already_resolved_count: number;
-      failed_count: number;
-    };
-  };
-  summary: {
-    catalog_upserted: number;
-    sports_seen: number;
-    inserted: number;
-    inserted_pending: number;
-    inserted_ignored: number;
-    ignored: number;
-    resolved_count: number;
-    already_resolved_count: number;
-    failed_count: number;
-  };
-}> {
-  const url = new URL("/admin/ops/odds/league_map/discover_candidates", API_BASE_URL);
-  url.searchParams.set("default_enabled", String(params?.default_enabled ?? false));
-  url.searchParams.set("auto_resolve", String(params?.auto_resolve ?? true));
-
-  return fetchJson(url.toString(), {
-    method: "POST",
-    headers: { Accept: "application/json" },
-  });
-}
-
 export async function adminOpsLeagueSuggestions(params: {
   sport_key: string;
   limit?: number;

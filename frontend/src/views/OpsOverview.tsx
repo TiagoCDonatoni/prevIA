@@ -93,7 +93,7 @@ export default function OpsOverview() {
         });
       }, 450);
 
-      setRunAllStepLabel("Atualizando ligas autorizadas");
+      setRunAllStepLabel("Executando pipeline completo");
 
       const out = await adminOpsPipelineRun({});
 
@@ -122,11 +122,13 @@ export default function OpsOverview() {
 
       <Card title="Monitoramento operacional">
         <div className="note" style={{ marginBottom: 10 }}>
-          Esta área passa a concentrar ações operacionais provisórias e, no próximo passo,
-          o monitoramento de jobs em Cloud.
+          Esta ação executa o pipeline completo: esportes/raw/core + stats + odds + resolve + modelos + snapshots.
         </div>
         <div className="note">
-          O botão de <span className="mono">Atualizar ligas autorizadas</span> fica aqui como
+          O passo de esportes agora deve ser tratado como retryable e soft-fail: falha é registrada, mas o restante continua.
+        </div>
+        <div className="note">
+          O botão de <span className="mono">Executar pipeline completo</span> fica aqui como
           legado temporário, até ser substituído pela observabilidade dos jobs cloud.
         </div>
       </Card>

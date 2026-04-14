@@ -314,29 +314,10 @@ function pickBooksForDisplay(
   const list = Array.isArray(books) ? books : [];
   if (!list.length) return { shown: [], extra: 0 };
 
-  const UI_MAX = 6;
+  const UI_MAX = 3;
   const planLimit = Math.max(1, planMax || 1);
 
-  const bestOdd = (b: ProductOddsBook) => {
-    const o = b.odds_1x2 || {};
-    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
-    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
-    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
-    return Math.max(H, D, A);
-  };
-
-  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
-  const sorted = [...list].sort((a, b) => {
-    const aa = a.is_affiliate ? 1 : 0;
-    const bb = b.is_affiliate ? 1 : 0;
-    if (aa !== bb) return bb - aa;
-
-    const oa = bestOdd(a);
-    const ob = bestOdd(b);
-    if (oa !== ob) return ob - oa;
-
-    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
-  });
+  const sorted = sortBooksForSurface(list);
 
   // Respeita o que o plano permite (não “conta” books fora do entitlement)
   const allowed = sorted.slice(0, planLimit);
@@ -368,26 +349,7 @@ function pickBooksForAnalysis(
   const UI_MAX = 5; // análise: 5 casas + 1 chip "+x"
   const planLimit = Math.max(1, planMax || 1);
 
-  const bestOdd = (b: ProductOddsBook) => {
-    const o = b.odds_1x2 || {};
-    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
-    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
-    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
-    return Math.max(H, D, A);
-  };
-
-  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
-  const sorted = [...list].sort((a, b) => {
-    const aa = a.is_affiliate ? 1 : 0;
-    const bb = b.is_affiliate ? 1 : 0;
-    if (aa !== bb) return bb - aa;
-
-    const oa = bestOdd(a);
-    const ob = bestOdd(b);
-    if (oa !== ob) return ob - oa;
-
-    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
-  });
+  const sorted = sortBooksForSurface(list);
 
   // respeita entitlement do plano
   const allowed = sorted.slice(0, planLimit);
@@ -415,6 +377,43 @@ function fmtMoreBooks(extra: number, lang: Lang) {
   return `+${extra} casas`;
 }
 
+function averageValidOdds(values: Array<number | null | undefined>) {
+  const valid = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+
+  if (!valid.length) return -Infinity;
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+}
+
+function averageBookOdds(book: ProductOddsBook | null | undefined) {
+  const odds = book?.odds_1x2;
+  return averageValidOdds([odds?.H, odds?.D, odds?.A]);
+}
+
+function compareBooksForSurface(a: ProductOddsBook, b: ProductOddsBook) {
+  const aPartner = a.is_affiliate ? 1 : 0;
+  const bPartner = b.is_affiliate ? 1 : 0;
+
+  if (aPartner !== bPartner) return bPartner - aPartner;
+
+  const avgA = averageBookOdds(a);
+  const avgB = averageBookOdds(b);
+
+  if (avgA !== avgB) return avgB - avgA;
+
+  return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
+}
+
+function sortBooksForSurface(books: ProductOddsBook[] | null | undefined) {
+  const list = Array.isArray(books) ? books : [];
+  return [...list].sort(compareBooksForSurface);
+}
+
+function canOpenBooksModalForPlan(plan: PlanId) {
+  return plan === "BASIC" || plan === "LIGHT" || plan === "PRO";
+}
+
 function fmtAgo(ts: number, lang: Lang, now: number) {
   const diffMs = now - ts;
   const diffSec = Math.max(0, Math.floor(diffMs / 1000));
@@ -439,6 +438,24 @@ function fmtAgo(ts: number, lang: Lang, now: number) {
   if (lang === "pt") return `há ${diffDay} d`;
   if (lang === "es") return `hace ${diffDay} d`;
   return `${diffDay}d ago`;
+}
+
+function fmtCountdownToIso(
+  iso: string | null | undefined,
+  nowMs: number
+) {
+  if (!iso) return "00:00";
+
+  const targetMs = new Date(iso).getTime();
+  if (!Number.isFinite(targetMs)) return "00:00";
+
+  const diffMs = Math.max(0, targetMs - nowMs);
+  const totalMinutes = Math.ceil(diffMs / 60000);
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function fmtKickoff(iso: string, lang: string) {
@@ -517,6 +534,14 @@ function LockedPanel({
         {t(lang, "credits.featureLockedCta")} →
       </div>
     </div>
+  );
+}
+
+function hasUsableAnalysisStatus(status: string | null | undefined) {
+  return (
+    status === "MODEL_FOUND" ||
+    status === "EXACT" ||
+    status === "PROBABLE"
   );
 }
 
@@ -649,6 +674,9 @@ export default function ProductIndex() {
 
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
+  const creditsResetCountdown = useMemo(() => {
+    return fmtCountdownToIso(store.entitlements.credits.resets_at_iso, nowTick);
+  }, [store.entitlements.credits.resets_at_iso, nowTick]);
 
   const [selectedId, setSelectedId] = useState<string>("");
 
@@ -665,6 +693,22 @@ export default function ProductIndex() {
   });
 
   const [mobileAnalysisOpen, setMobileAnalysisOpen] = useState(false);
+  const [booksModalEventId, setBooksModalEventId] = useState<string>("");
+
+  const canOpenBooksModal = canOpenBooksModalForPlan(plan);
+
+  function handleOpenBooksModal(eventItem: ProductOddsEvent) {
+    setSelectedId(String(eventItem.event_id));
+    clearQuoteUI();
+
+    if (!canOpenBooksModal) {
+      setUpgradeReason("FEATURE_LOCKED");
+      setUpgradeOpen(true);
+      return;
+    }
+
+    setBooksModalEventId(String(eventItem.event_id));
+  }
 
   const [analysisSectionsOpen, setAnalysisSectionsOpen] = useState<Record<AnalysisSectionKey, boolean>>(
     () => ({ ...DEFAULT_ANALYSIS_SECTIONS_OPEN })
@@ -1134,6 +1178,8 @@ export default function ProductIndex() {
       if (Number.isNaN(kickoff.getTime())) return false;
       if (kickoff.getTime() < nowMs) return false;
 
+      if (!hasUsableAnalysisStatus(e.match_status)) return false;
+
       if (selectedTeamSet) {
         const home = String(e.home_name ?? "");
         const away = String(e.away_name ?? "");
@@ -1220,6 +1266,21 @@ export default function ProductIndex() {
   const visibleEvents = visibleEventsState.items;
   const isUpcomingFallbackActive = visibleEventsState.useUpcomingFallback;
 
+  const booksModalEvent = useMemo(() => {
+    const targetId = String(booksModalEventId ?? "").trim();
+    if (!targetId) return null;
+
+    return (
+      visibleEvents.find((item) => String(item.event_id) === targetId) ??
+      events.find((item) => String(item.event_id) === targetId) ??
+      null
+    );
+  }, [booksModalEventId, visibleEvents, events]);
+
+  const booksModalList = useMemo(() => {
+    return sortBooksForSurface(booksModalEvent?.odds_books);
+  }, [booksModalEvent]);
+
   const showTodayEmptyNotice = useMemo(() => {
     if (windowMode !== "TODAY") return false;
     if (loadingEvents || !!eventsError || visibleEvents.length > 0) return false;
@@ -1266,6 +1327,22 @@ export default function ProductIndex() {
     () => visibleEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
     [visibleEvents, selectedId]
   );
+
+  const selectedAllBooks = useMemo(() => {
+    return sortBooksForSurface(selected?.odds_books);
+  }, [selected]);
+
+  const { shown: analysisPreviewBooks } = useMemo(() => {
+    return pickBooksForAnalysis(
+      selectedAllBooks,
+      vis.odds.books_count,
+      vis.odds.show_affiliate_link
+    );
+  }, [selectedAllBooks, vis.odds.books_count, vis.odds.show_affiliate_link]);
+
+  const analysisHiddenBooksCount = useMemo(() => {
+    return Math.max(0, selectedAllBooks.length - analysisPreviewBooks.length);
+  }, [selectedAllBooks.length, analysisPreviewBooks.length]);
 
   const selectedProbs = useMemo(() => {
     if (!selected?.probs_1x2) return null;
@@ -1494,6 +1571,8 @@ export default function ProductIndex() {
                 })()}
 
                 {/* ===== Painéis técnicos com accordions no mobile ===== */}
+
+
                 <div className="pi-technical-sections">
                   <section className={`pi-accordion ${analysisSectionsOpen.probabilities ? "is-open" : ""}`}>
                     <button
@@ -1839,6 +1918,48 @@ export default function ProductIndex() {
                     </section>
                   ) : null}
 
+                  {analysisPreviewBooks.length ? (
+                    <div className="pi-panel pi-analysis-books">
+                      <div className="pi-panel-label">
+                        {lang === "en"
+                          ? "Bookmakers"
+                          : lang === "es"
+                          ? "Casas de apuestas"
+                          : "Casas de aposta"}
+                      </div>
+
+                      <div className="pi-books-stack">
+                        {analysisPreviewBooks.map((book) => (
+                          <div key={`${selected.event_id}-${book.key}`} className="pi-book-analysis-card">
+                            <div className="pi-book-preview-head">
+                              <span className="pi-book-preview-name">{book.name}</span>
+
+                              {vis.odds.show_partner_label && book.is_affiliate ? (
+                                <span className="pi-book-partner-badge">{t(lang, "odds.partner")}</span>
+                              ) : null}
+                            </div>
+
+                            <div className="pi-book-preview-odds">
+                              H {fmtOdds(book.odds_1x2?.H)} • D {fmtOdds(book.odds_1x2?.D)} • A {fmtOdds(book.odds_1x2?.A)}
+                            </div>
+                          </div>
+                        ))}
+
+                        {analysisHiddenBooksCount > 0 ? (
+                          <button
+                            type="button"
+                            className="pi-book-more-btn pi-book-more-btn-inline"
+                            aria-label={`${t(lang, "odds.seeAllBooks")} (+${analysisHiddenBooksCount})`}
+                            title={t(lang, "odds.seeAllBooks")}
+                            onClick={() => handleOpenBooksModal(selected)}
+                          >
+                            +{analysisHiddenBooksCount}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <section className={`pi-accordion ${analysisSectionsOpen.oddsEdge ? "is-open" : ""}`}>
                     <button
                       type="button"
@@ -2158,6 +2279,15 @@ return (
             : `${visibleEvents.length} jogos`}
         </span>
 
+        <span className="pi-subsep">•</span>
+        <span>
+        {lang === "en"
+          ? `Credits reset in ${creditsResetCountdown}`
+          : lang === "es"
+          ? `Reset de créditos en ${creditsResetCountdown}`
+          : `Reset de créditos em ${creditsResetCountdown}`}
+        </span>
+
         {lastLoadedAt ? (
           <>
             <span className="pi-subsep">•</span>
@@ -2387,13 +2517,22 @@ return (
             const active = eventKey === String(selectedId);
             const es = e.edge_summary ?? null;
             const hasOpportunityFlag = hasOpportunity(es);
+            const isProbableOnly = e.match_status === "PROBABLE";
 
             return (
-              <button
+              <div
                 key={e.event_id}
                 className={`pi-row ${active ? "is-active" : ""}`}
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   handleSelectEvent(String(e.event_id));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleSelectEvent(String(e.event_id));
+                  }
                 }}
               >
                 <div className="pi-row-main">
@@ -2425,16 +2564,28 @@ return (
                       ) : null}
                     </div>
 
-                    {hasOpportunityFlag ? (
+                    {hasOpportunityFlag || isProbableOnly ? (
                       <div className="pi-row-actions-inline">
-                        <span className="pi-opportunity">
-                          {t(lang, "odds.opportunityDetected")}
-                        </span>
+                        {isProbableOnly ? (
+                          <span className="pi-chip pi-chip-muted">
+                            {lang === "en"
+                              ? "Moderate confidence"
+                              : lang === "es"
+                              ? "Confianza moderada"
+                              : "Confiança moderada"}
+                          </span>
+                        ) : null}
+
+                        {hasOpportunityFlag ? (
+                          <span className="pi-opportunity">
+                            {t(lang, "odds.opportunityDetected")}
+                          </span>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -2449,6 +2600,117 @@ return (
         </aside>
       ) : null}
     </div>
+
+    {booksModalEvent ? (
+      <div
+        className="um-overlay"
+        onClick={() => setBooksModalEventId("")}
+      >
+        <div
+          className="um-modal pi-books-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={
+            lang === "en"
+              ? "Bookmakers"
+              : lang === "es"
+              ? "Casas de apuestas"
+              : "Casas de aposta"
+          }
+          onClick={(event) => event.stopPropagation()}
+          style={{ maxWidth: 720 }}
+        >
+          <div className="product-modal-head">
+            <div className="product-modal-head-copy">
+              <div className="product-modal-kicker">prevIA</div>
+              <div className="product-modal-title">
+                {lang === "en"
+                  ? "Bookmakers"
+                  : lang === "es"
+                  ? "Casas de apuestas"
+                  : "Casas de aposta"}
+              </div>
+
+              <div className="product-modal-subtitle">
+                {booksModalEvent.home_name} <span className="pi-vs">vs</span> {booksModalEvent.away_name}
+                <span className="pi-subsep">•</span>
+                {fmtKickoff(booksModalEvent.commence_time_utc, lang)}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="product-modal-close"
+              onClick={() => setBooksModalEventId("")}
+              aria-label={lang === "en" ? "Close" : lang === "es" ? "Cerrar" : "Fechar"}
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="product-modal-body">
+            {booksModalList.length ? (
+              <div className="pi-books-modal-list">
+                {booksModalList.map((book) => {
+                  const capturedAtMs = book.captured_at_utc
+                    ? new Date(book.captured_at_utc).getTime()
+                    : NaN;
+
+                  return (
+                    <div key={book.key} className="pi-books-modal-row">
+                      <div className="pi-books-modal-book">
+                        <div className="pi-books-modal-book-top">
+                          <span className="pi-books-modal-book-name">{book.name}</span>
+
+                          {vis.odds.show_partner_label && book.is_affiliate ? (
+                            <span className="pi-book-partner-badge">
+                              {t(lang, "odds.partner")}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {Number.isFinite(capturedAtMs) ? (
+                          <div className="pi-books-modal-book-time">
+                            {t(lang, "common.updatedAgo", {
+                              ago: fmtAgo(capturedAtMs, lang, nowTick),
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="pi-books-modal-odds">
+                        <div className="pi-books-modal-odd">
+                          <span>H</span>
+                          <strong>{fmtOdds(book.odds_1x2?.H)}</strong>
+                        </div>
+
+                        <div className="pi-books-modal-odd">
+                          <span>D</span>
+                          <strong>{fmtOdds(book.odds_1x2?.D)}</strong>
+                        </div>
+
+                        <div className="pi-books-modal-odd">
+                          <span>A</span>
+                          <strong>{fmtOdds(book.odds_1x2?.A)}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="pi-muted">
+                {lang === "en"
+                  ? "No bookmaker odds available for this match."
+                  : lang === "es"
+                  ? "No hay cuotas disponibles para este partido."
+                  : "Não há odds disponíveis para este jogo."}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null}
 
     {isMobileAnalysisView && mobileAnalysisOpen ? (
       <div

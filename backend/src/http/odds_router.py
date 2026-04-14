@@ -28,14 +28,36 @@ class OddsBookRow(BaseModel):
     affiliate_url: Optional[str] = None
 
 class EdgeSummary(BaseModel):
-    best_outcome: Optional[str] = None  # "H" | "D" | "A"
-    best_edge: Optional[float] = None   # model_p - market_novig_p
-    best_odd: Optional[float] = None
+    best_outcome: Optional[str] = None  # outcome com maior consensus edge
+    best_edge: Optional[float] = None   # model_p - consensus_market_novig_p
+
+    best_odd: Optional[float] = None    # melhor odd executável do best_outcome
     best_book_key: Optional[str] = None
     best_book_name: Optional[str] = None
+
+    best_ev: Optional[float] = None     # maior EV executável entre H/D/A
+    best_ev_outcome: Optional[str] = None
+    best_ev_odd: Optional[float] = None
+    best_ev_book_key: Optional[str] = None
+    best_ev_book_name: Optional[str] = None
+
+    opportunity_outcome: Optional[str] = None
+    opportunity_edge: Optional[float] = None
+    opportunity_ev: Optional[float] = None
+    opportunity_odd: Optional[float] = None
+    opportunity_book_key: Optional[str] = None
+    opportunity_book_name: Optional[str] = None
+    opportunity_book_captured_at_utc: Optional[str] = None
+    opportunity_book_freshness_seconds: Optional[int] = None
+
     market_books_count: int = 0
+    market_complete_books_count: int = 0
     market_min_odd: Optional[float] = None
     market_max_odd: Optional[float] = None
+
+    consensus_probs: Optional[Dict[str, Optional[float]]] = None
+    consensus_edges: Optional[Dict[str, Optional[float]]] = None
+    market_source: Optional[str] = None
 
 class OddsEventRow(BaseModel):
     event_id: str
@@ -60,6 +82,7 @@ class OddsBook(BaseModel):
     name: str
     is_affiliate: bool = False
     url: Optional[str] = None
+    captured_at_utc: Optional[str] = None
     odds_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
 
 class OddsEventsResponse(BaseModel):
@@ -210,12 +233,12 @@ def _load_affiliates() -> Dict[str, Dict[str, str]]:
 
 def _snapshots_to_books(rows: List[tuple]) -> List[OddsBook]:
     """
-    rows: [(bookmaker, odds_home, odds_draw, odds_away), ...]
+    rows: [(bookmaker, odds_home, odds_draw, odds_away, captured_at_utc), ...]
     """
     aff = _load_affiliates()
     out: List[OddsBook] = []
 
-    for (bookmaker, oh, od, oa) in rows:
+    for (bookmaker, oh, od, oa, captured_at_utc) in rows:
         key = _book_key(bookmaker)
         meta = aff.get(key) or {}
         raw_name = meta.get("name") or bookmaker or key
@@ -230,6 +253,11 @@ def _snapshots_to_books(rows: List[tuple]) -> List[OddsBook]:
                 name=str(name),
                 is_affiliate=bool(is_aff),
                 url=str(url) if url else None,
+                captured_at_utc=(
+                    captured_at_utc.isoformat().replace("+00:00", "Z")
+                    if captured_at_utc is not None
+                    else None
+                ),
                 odds_1x2={
                     "H": float(oh) if oh is not None else None,
                     "D": float(od) if od is not None else None,
@@ -246,7 +274,7 @@ def _fetch_latest_books_for_events(conn, event_ids: List[str]) -> Dict[str, List
         return {}
 
     sql = """
-      SELECT s.event_id, s.bookmaker, s.odds_home, s.odds_draw, s.odds_away
+      SELECT s.event_id, s.bookmaker, s.odds_home, s.odds_draw, s.odds_away, t.max_ts
       FROM odds.odds_snapshots_1x2 s
       JOIN (
           SELECT event_id, bookmaker, MAX(captured_at_utc) AS max_ts
@@ -264,8 +292,8 @@ def _fetch_latest_books_for_events(conn, event_ids: List[str]) -> Dict[str, List
 
     with conn.cursor() as cur:
         cur.execute(sql, {"event_ids": ids})
-        for (eid, bookmaker, oh, od, oa) in cur.fetchall():
-            by_event.setdefault(str(eid), []).append((bookmaker, oh, od, oa))
+        for (eid, bookmaker, oh, od, oa, max_ts) in cur.fetchall():
+            by_event.setdefault(str(eid), []).append((bookmaker, oh, od, oa, max_ts))
 
     return {eid: _snapshots_to_books(rows) for eid, rows in by_event.items()}
 
@@ -285,8 +313,16 @@ def _implied_prob(odds: Optional[float]) -> Optional[float]:
     return 1.0 / o
 
 
-def _market_probs_from_odds(odds_h: Optional[float], odds_d: Optional[float], odds_a: Optional[float]) -> Dict[str, Any]:
-    raw = {"H": _implied_prob(odds_h), "D": _implied_prob(odds_d), "A": _implied_prob(odds_a)}
+def _market_probs_from_odds(
+    odds_h: Optional[float],
+    odds_d: Optional[float],
+    odds_a: Optional[float],
+) -> Dict[str, Any]:
+    raw = {
+        "H": _implied_prob(odds_h),
+        "D": _implied_prob(odds_d),
+        "A": _implied_prob(odds_a),
+    }
     s = sum(v for v in raw.values() if v is not None)
     if s <= 0:
         return {"raw": raw, "novig": None, "overround": None}
@@ -298,6 +334,360 @@ def _edge(model_p: Optional[float], market_p: Optional[float]) -> Optional[float
     if model_p is None or market_p is None:
         return None
     return float(model_p) - float(market_p)
+
+
+def _ev_decimal(model_p: Optional[float], odds: Optional[float]) -> Optional[float]:
+    if model_p is None or odds is None:
+        return None
+    try:
+        p = float(model_p)
+        o = float(odds)
+    except Exception:
+        return None
+    if p <= 0 or o <= 0:
+        return None
+    return (p * o) - 1.0
+
+
+def _is_valid_decimal_odd(odd: Optional[float]) -> bool:
+    if odd is None:
+        return False
+    try:
+        v = float(odd)
+    except Exception:
+        return False
+    return v > 1.0
+
+
+def _median(values: List[float]) -> Optional[float]:
+    cleaned: List[float] = []
+    for value in values or []:
+        try:
+            fv = float(value)
+        except Exception:
+            continue
+        if fv <= 0:
+            continue
+        cleaned.append(fv)
+
+    if not cleaned:
+        return None
+
+    cleaned.sort()
+    mid = len(cleaned) // 2
+
+    if len(cleaned) % 2 == 1:
+        return cleaned[mid]
+
+    return (cleaned[mid - 1] + cleaned[mid]) / 2.0
+
+MAX_VALID_ODD_PREMIUM_OVER_MEDIAN = 0.15
+
+def _parse_utc_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _select_best_valid_price_for_side(books: List[OddsBook], side: str) -> Dict[str, Any]:
+    candidates: List[Dict[str, Any]] = []
+
+    for book in books or []:
+        odd = (book.odds_1x2 or {}).get(side)
+        if not _is_valid_decimal_odd(odd):
+            continue
+
+        candidates.append(
+            {
+                "odd": float(odd),
+                "book_key": book.key,
+                "book_name": book.name,
+                "captured_at_utc": book.captured_at_utc,
+            }
+        )
+
+    if not candidates:
+        return {
+            "books_count": 0,
+            "median_odd": None,
+            "allowed_max_odd": None,
+            "best_odd": None,
+            "best_book_key": None,
+            "best_book_name": None,
+            "best_book_captured_at_utc": None,
+            "best_book_freshness_seconds": None,
+            "market_min_odd": None,
+            "market_max_odd": None,
+        }
+
+    odds_values = [float(item["odd"]) for item in candidates]
+    median_odd = _median(odds_values)
+    allowed_max_odd = (
+        float(median_odd) * (1.0 + MAX_VALID_ODD_PREMIUM_OVER_MEDIAN)
+        if median_odd is not None
+        else None
+    )
+
+    valid_candidates = [
+        item for item in candidates
+        if allowed_max_odd is None or float(item["odd"]) <= float(allowed_max_odd)
+    ]
+
+    if not valid_candidates:
+        valid_candidates = candidates
+
+    best_item = max(valid_candidates, key=lambda item: float(item["odd"]))
+
+    freshness_seconds = None
+    captured_dt = _parse_utc_iso(best_item.get("captured_at_utc"))
+    if captured_dt is not None:
+        freshness_seconds = max(
+            0,
+            int((datetime.now(timezone.utc) - captured_dt).total_seconds()),
+        )
+
+    return {
+        "books_count": len(candidates),
+        "median_odd": float(median_odd) if median_odd is not None else None,
+        "allowed_max_odd": float(allowed_max_odd) if allowed_max_odd is not None else None,
+        "best_odd": float(best_item["odd"]),
+        "best_book_key": best_item.get("book_key"),
+        "best_book_name": best_item.get("book_name"),
+        "best_book_captured_at_utc": best_item.get("captured_at_utc"),
+        "best_book_freshness_seconds": freshness_seconds,
+        "market_min_odd": min(odds_values) if odds_values else None,
+        "market_max_odd": max(odds_values) if odds_values else None,
+    }
+
+def _consensus_market_probs_from_books(books: List[OddsBook]) -> Dict[str, Any]:
+    per_outcome: Dict[str, List[float]] = {"H": [], "D": [], "A": []}
+    complete_books_count = 0
+
+    for book in books or []:
+        odds = book.odds_1x2 or {}
+        oh = odds.get("H")
+        od = odds.get("D")
+        oa = odds.get("A")
+
+        if not (
+            _is_valid_decimal_odd(oh)
+            and _is_valid_decimal_odd(od)
+            and _is_valid_decimal_odd(oa)
+        ):
+            continue
+
+        market = _market_probs_from_odds(float(oh), float(od), float(oa))
+        novig = market.get("novig") or {}
+
+        if any(novig.get(side) is None for side in ("H", "D", "A")):
+            continue
+
+        complete_books_count += 1
+        for side in ("H", "D", "A"):
+            per_outcome[side].append(float(novig[side]))
+
+    if complete_books_count == 0:
+        return {
+            "raw": None,
+            "novig": None,
+            "overround": None,
+            "books_count": 0,
+            "source": "median_complete_books_novig",
+        }
+
+    consensus_raw = {
+        side: _median(per_outcome[side])
+        for side in ("H", "D", "A")
+    }
+
+    total = sum(v for v in consensus_raw.values() if v is not None)
+    if total <= 0:
+        return {
+            "raw": consensus_raw,
+            "novig": None,
+            "overround": None,
+            "books_count": complete_books_count,
+            "source": "median_complete_books_novig",
+        }
+
+    consensus_novig = {
+        side: (float(consensus_raw[side]) / float(total) if consensus_raw[side] is not None else None)
+        for side in ("H", "D", "A")
+    }
+
+    return {
+        "raw": consensus_raw,
+        "novig": consensus_novig,
+        "overround": None,
+        "books_count": complete_books_count,
+        "source": "median_complete_books_novig",
+    }
+
+
+def _build_edge_summary_from_books(
+    probs_block: Dict[str, Optional[float]],
+    books: List[OddsBook],
+) -> Optional[EdgeSummary]:
+    if not probs_block:
+        return None
+
+    market = _consensus_market_probs_from_books(books)
+    consensus = market.get("novig") or {}
+    if not consensus:
+        return None
+
+    edges = {
+        "H": _edge(probs_block.get("H"), consensus.get("H")),
+        "D": _edge(probs_block.get("D"), consensus.get("D")),
+        "A": _edge(probs_block.get("A"), consensus.get("A")),
+    }
+
+    best_outcome = None
+    best_edge = None
+    for side in ("H", "D", "A"):
+        edge_value = edges.get(side)
+        if edge_value is None:
+            continue
+        if best_edge is None or edge_value > best_edge:
+            best_edge = edge_value
+            best_outcome = side
+
+    per_side_prices: Dict[str, Dict[str, Any]] = {}
+    overall_best_ev = None
+    overall_best_ev_outcome = None
+    overall_best_ev_odd = None
+    overall_best_ev_book_key = None
+    overall_best_ev_book_name = None
+
+    for side in ("H", "D", "A"):
+        price_info = _select_best_valid_price_for_side(books, side)
+        side_best_ev = _ev_decimal(probs_block.get(side), price_info.get("best_odd"))
+
+        price_info["best_ev"] = side_best_ev
+        per_side_prices[side] = price_info
+
+        if side_best_ev is not None and (overall_best_ev is None or side_best_ev > overall_best_ev):
+            overall_best_ev = side_best_ev
+            overall_best_ev_outcome = side
+            overall_best_ev_odd = price_info.get("best_odd")
+            overall_best_ev_book_key = price_info.get("best_book_key")
+            overall_best_ev_book_name = price_info.get("best_book_name")
+
+    best_price = per_side_prices.get(best_outcome) if best_outcome else None
+
+    opportunity_outcome = None
+    opportunity_edge = None
+    opportunity_ev = None
+
+    for side in ("H", "D", "A"):
+        edge_value = edges.get(side)
+        ev_value = per_side_prices.get(side, {}).get("best_ev")
+
+        if edge_value is None or ev_value is None:
+            continue
+
+        if (
+            opportunity_outcome is None
+            or edge_value > opportunity_edge
+            or (
+                edge_value == opportunity_edge
+                and opportunity_ev is not None
+                and ev_value > opportunity_ev
+            )
+        ):
+            opportunity_outcome = side
+            opportunity_edge = edge_value
+            opportunity_ev = ev_value
+
+    opportunity_price = per_side_prices.get(opportunity_outcome) if opportunity_outcome else None
+
+    return EdgeSummary(
+        best_outcome=best_outcome,
+        best_edge=float(best_edge) if best_edge is not None else None,
+
+        best_odd=best_price.get("best_odd") if best_price else None,
+        best_book_key=best_price.get("best_book_key") if best_price else None,
+        best_book_name=best_price.get("best_book_name") if best_price else None,
+
+        best_ev=float(overall_best_ev) if overall_best_ev is not None else None,
+        best_ev_outcome=overall_best_ev_outcome,
+        best_ev_odd=overall_best_ev_odd,
+        best_ev_book_key=overall_best_ev_book_key,
+        best_ev_book_name=overall_best_ev_book_name,
+
+        opportunity_outcome=opportunity_outcome,
+        opportunity_edge=float(opportunity_edge) if opportunity_edge is not None else None,
+        opportunity_ev=float(opportunity_ev) if opportunity_ev is not None else None,
+        opportunity_odd=opportunity_price.get("best_odd") if opportunity_price else None,
+        opportunity_book_key=opportunity_price.get("best_book_key") if opportunity_price else None,
+        opportunity_book_name=opportunity_price.get("best_book_name") if opportunity_price else None,
+        opportunity_book_captured_at_utc=(
+            opportunity_price.get("best_book_captured_at_utc") if opportunity_price else None
+        ),
+        opportunity_book_freshness_seconds=(
+            opportunity_price.get("best_book_freshness_seconds") if opportunity_price else None
+        ),
+
+        market_books_count=int(market.get("books_count") or 0),
+        market_complete_books_count=int(market.get("books_count") or 0),
+        market_min_odd=best_price.get("market_min_odd") if best_price else None,
+        market_max_odd=best_price.get("market_max_odd") if best_price else None,
+
+        consensus_probs={
+            "H": consensus.get("H"),
+            "D": consensus.get("D"),
+            "A": consensus.get("A"),
+        },
+        consensus_edges={
+            "H": edges.get("H"),
+            "D": edges.get("D"),
+            "A": edges.get("A"),
+        },
+        market_source=str(market.get("source") or "median_complete_books_novig"),
+    )
+
+
+def _build_value_block_from_books(
+    probs_block: Dict[str, Optional[float]],
+    books: List[OddsBook],
+) -> Optional[Dict[str, Any]]:
+    if not probs_block:
+        return None
+
+    market = _consensus_market_probs_from_books(books)
+    consensus = market.get("novig") or {}
+    if not consensus:
+        return None
+
+    edges = {
+        "H": _edge(probs_block.get("H"), consensus.get("H")),
+        "D": _edge(probs_block.get("D"), consensus.get("D")),
+        "A": _edge(probs_block.get("A"), consensus.get("A")),
+    }
+
+    ev_decimal: Dict[str, Optional[float]] = {"H": None, "D": None, "A": None}
+    best_ev = None
+    best_side = None
+
+    for side in ("H", "D", "A"):
+        price_info = _select_best_valid_price_for_side(books, side)
+        ev_value = _ev_decimal(probs_block.get(side), price_info.get("best_odd"))
+        ev_decimal[side] = ev_value
+
+        if ev_value is not None and (best_ev is None or ev_value > best_ev):
+            best_ev = ev_value
+            best_side = side
+
+    return {
+        "market": market,
+        "edge": edges,
+        "ev_decimal": ev_decimal,
+        "best_ev": best_ev,
+        "best_side": best_side,
+    }
 
 
 def _fetch_event_and_best_odds(conn, event_id: str) -> Dict[str, Any]:
@@ -578,64 +968,8 @@ def list_odds_events(
                         if probs:
                             probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
 
-                            mkt = _market_probs_from_odds(
-                                float(odds_home) if odds_home is not None else None,
-                                float(odds_draw) if odds_draw is not None else None,
-                                float(odds_away) if odds_away is not None else None,
-                            )
-                            novig = mkt.get("novig") or {}
-
-                            edges = {
-                                "H": _edge(probs_block.get("H"), novig.get("H")),
-                                "D": _edge(probs_block.get("D"), novig.get("D")),
-                                "A": _edge(probs_block.get("A"), novig.get("A")),
-                            }
-
-                            # melhor outcome por edge (ignora None)
-                            best_outcome = None
-                            best_edge = None
-                            for k in ["H", "D", "A"]:
-                                v = edges.get(k)
-                                if v is None:
-                                    continue
-                                if best_edge is None or v > best_edge:
-                                    best_edge = v
-                                    best_outcome = k
-
-                            # melhor execução por outcome (entre books)
-                            best_odd = None
-                            best_book_key = None
-                            best_book_name = None
-                            market_books_count = 0
-                            market_min_odd = None
-                            market_max_odd = None
-
                             books = books_map.get(str(event_id), []) or []
-                            if best_outcome:
-                                for b in books:
-                                    o = (b.odds_1x2 or {}).get(best_outcome)
-                                    if o is None:
-                                        continue
-                                    odd = float(o)
-                                    market_books_count += 1
-                                    market_min_odd = odd if market_min_odd is None else min(market_min_odd, odd)
-                                    market_max_odd = odd if market_max_odd is None else max(market_max_odd, odd)
-
-                                    if best_odd is None or odd > best_odd:
-                                        best_odd = odd
-                                        best_book_key = b.key
-                                        best_book_name = b.name
-
-                            edge_summary = EdgeSummary(
-                                best_outcome=best_outcome,
-                                best_edge=float(best_edge) if best_edge is not None else None,
-                                best_odd=best_odd,
-                                best_book_key=best_book_key,
-                                best_book_name=best_book_name,
-                                market_books_count=int(market_books_count),
-                                market_min_odd=market_min_odd,
-                                market_max_odd=market_max_odd,
-                            )
+                            edge_summary = _build_edge_summary_from_books(probs_block, books)
                 except Exception:
                     edge_summary = None
 
@@ -787,19 +1121,8 @@ def quote(req: QuoteRequest) -> QuoteResponse:
                         matchup["model_error"] = str(e)
 
         # 4) value/edge (opcional)
-        if probs_block and ev.get("odds_best"):
-            o = ev["odds_best"]
-            mkt = _market_probs_from_odds(o.get("H"), o.get("D"), o.get("A"))
-            novig = mkt.get("novig")
-
-            value_block = {
-                "market": mkt,
-                "edge": {
-                    "H": _edge(probs_block.get("H"), (novig.get("H") if novig else None)),
-                    "D": _edge(probs_block.get("D"), (novig.get("D") if novig else None)),
-                    "A": _edge(probs_block.get("A"), (novig.get("A") if novig else None)),
-                },
-            }
+        if probs_block and odds_books:
+            value_block = _build_value_block_from_books(probs_block, odds_books)
 
         return QuoteResponse(
             ok=True,
