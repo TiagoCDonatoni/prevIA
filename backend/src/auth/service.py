@@ -788,16 +788,6 @@ def _insert_session(cur, *, user_id: int, request: Request) -> str:
 
     cur.execute(
         """
-        UPDATE auth.sessions
-        SET revoked_at_utc = NOW()
-        WHERE user_id = %(user_id)s
-          AND revoked_at_utc IS NULL
-        """,
-        {"user_id": user_id},
-    )
-
-    cur.execute(
-        """
         INSERT INTO auth.sessions (
             user_id,
             session_token_hash,

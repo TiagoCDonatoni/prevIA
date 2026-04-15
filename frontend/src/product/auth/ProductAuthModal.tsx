@@ -68,6 +68,9 @@ export function ProductAuthModal(props: {
     String(import.meta.env.VITE_PRODUCT_GOOGLE_AUTH_ENABLED ?? "false").toLowerCase() === "true";
   const googleClientId = String(import.meta.env.VITE_PRODUCT_GOOGLE_CLIENT_ID ?? "").trim();
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const googleLoginInFlightRef = useRef(false);
+  const googleInitializedRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>(props.initialMode ?? "signup");
   const [fullName, setFullName] = useState("");
@@ -170,6 +173,11 @@ export function ProductAuthModal(props: {
       return;
     }
 
+    if (googleLoginInFlightRef.current) {
+      return;
+    }
+
+    googleLoginInFlightRef.current = true;
     setBusy(true);
     resetFeedback();
 
@@ -183,6 +191,7 @@ export function ProductAuthModal(props: {
         setErrorText(tr("auth.genericError"));
       }
     } finally {
+      googleLoginInFlightRef.current = false;
       setBusy(false);
     }
   }
@@ -238,17 +247,22 @@ export function ProductAuthModal(props: {
         if (!googleButtonRef.current) return;
         if (!window.google?.accounts?.id) return;
 
-        googleButtonRef.current.innerHTML = "";
+        if (!googleInitializedRef.current) {
+          window.google.accounts.id.initialize({
+            client_id: googleClientId,
+            callback: (response) => {
+              void handleGoogleCredential(String(response.credential || ""));
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+            use_fedcm_for_prompt: true,
+          });
 
-        window.google.accounts.id.initialize({
-          client_id: googleClientId,
-          callback: (response) => {
-            void handleGoogleCredential(String(response.credential || ""));
-          },
-          auto_select: false,
-          cancel_on_tap_outside: true,
-          use_fedcm_for_prompt: true,
-        });
+          googleInitializedRef.current = true;
+        }
+
+        window.google.accounts.id.cancel();
+        googleButtonRef.current.innerHTML = "";
 
         window.google.accounts.id.renderButton(googleButtonRef.current, {
           theme: "outline",
@@ -268,6 +282,14 @@ export function ProductAuthModal(props: {
 
     return () => {
       cancelled = true;
+
+      if (window.google?.accounts?.id) {
+        window.google.accounts.id.cancel();
+      }
+
+      if (googleButtonRef.current) {
+        googleButtonRef.current.innerHTML = "";
+      }
     };
   }, [
     open,

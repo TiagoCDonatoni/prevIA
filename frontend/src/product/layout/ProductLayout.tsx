@@ -509,11 +509,24 @@ React.useEffect(() => {
         initialMode={authInitialMode}
         onClose={() => setAuthOpen(false)}
         onAuthSuccess={async (payload) => {
-          await syncSessionFromAuthPayload(payload);
+          let confirmed = payload;
+
+          try {
+            confirmed = await fetchAuthMe();
+
+            if (!confirmed.is_authenticated) {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              confirmed = await fetchAuthMe();
+            }
+          } catch (err) {
+            console.error("post-auth confirmation failed", err);
+          }
+
+          await syncSessionFromAuthPayload(confirmed);
           setAuthOpen(false);
 
           const shouldOpenPostSignupOffer =
-            authInitialMode === "signup" && Boolean(payload.is_authenticated);
+            authInitialMode === "signup" && Boolean(confirmed.is_authenticated);
 
           if (shouldOpenPostSignupOffer) {
             const currentPreferences = resolveAccountPreferences(store.state.preferences);
