@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 
-import type { ProductOddsBook, ProductOddsEvent, ProductOddsQuoteResponse } from "../../api/contracts";
+import type {
+  ProductEdgeSummary,
+  ProductOddsBook,
+  ProductOddsEvent,
+  ProductOddsQuoteResponse,
+  ProductOdds1x2,
+} from "../../api/contracts";
 import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
@@ -36,8 +42,17 @@ const UI_DEFAULTS = {
 
 type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE" | "EDGE";
+type WindowMode = "UPCOMING" | "TODAY" | "3" | "7" | "30";
 
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
+const UPCOMING_WINDOW_HOURS = 24;
+const UPCOMING_FALLBACK_MAX_LEAGUES = 12;
+const OPPORTUNITY_EDGE_THRESHOLD = 0.05;
+const OPPORTUNITY_EV_THRESHOLD = 0.03;
+const OPPORTUNITY_MIN_BOOKS = 4;
+const OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60;
+const POSITIVE_EDGE_THRESHOLD = 0.02;
+const NEUTRAL_EDGE_THRESHOLD = -0.02;
 
 type AnalysisSectionKey = "probabilities" | "goals" | "oddsEdge";
 
@@ -46,6 +61,32 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
   goals: false,
   oddsEdge: false,
 };
+
+function getCalendarDayBounds(reference = new Date()) {
+  const start = new Date(reference);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(reference);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+function getUpcomingHorizonMs(nowMs: number) {
+  return nowMs + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000;
+}
+
+function getFetchHoursAheadForWindowMode(mode: WindowMode) {
+  if (mode === "UPCOMING") return UI_DEFAULTS.hoursAheadFallback;
+
+  if (mode === "TODAY") {
+    const { end } = getCalendarDayBounds(new Date());
+    const diffMs = Math.max(0, end.getTime() - Date.now());
+    return Math.max(1, Math.ceil(diffMs / (60 * 60 * 1000)));
+  }
+
+  return Number(mode) * 24;
+}
 
 function narrativeStyleFromInternalView(
   view: InternalNarrativeView
@@ -74,10 +115,6 @@ function fmtOutcome(outcome: "H" | "D" | "A" | null | undefined, home: string, a
   return `Fora (${away})`;
 }
 
-const OPPORTUNITY_EDGE_THRESHOLD = 0.15;
-const POSITIVE_EDGE_THRESHOLD = 0.02;
-const NEUTRAL_EDGE_THRESHOLD = -0.02;
-
 function edgeTier(edge: number | null | undefined) {
   if (edge == null || !Number.isFinite(edge)) return "none";
   if (edge >= OPPORTUNITY_EDGE_THRESHOLD) return "hot";
@@ -103,6 +140,50 @@ function fmtOdds(x: number | null | undefined) {
 function fmtPctNullable(x: number | null | undefined) {
   if (x == null || !Number.isFinite(x)) return "—";
   return `${(x * 100).toFixed(1)}%`;
+}
+
+function probForOutcome(
+  probs:
+    | { H: number | null; D: number | null; A: number | null }
+    | null
+    | undefined,
+  outcome: "H" | "D" | "A" | null | undefined
+) {
+  if (!probs || !outcome) return null;
+  const value = probs[outcome];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function fairOddFromProb(prob: number | null | undefined) {
+  if (prob == null || !Number.isFinite(prob) || prob <= 0) return null;
+  return 1 / prob;
+}
+
+function fmtFreshnessSeconds(
+  seconds: number | null | undefined,
+  lang: "pt" | "en" | "es"
+) {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+
+  const total = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(total / 60);
+  const hours = Math.floor(mins / 60);
+
+  if (hours >= 1) {
+    if (lang === "en") return `${hours}h ago`;
+    if (lang === "es") return `hace ${hours} h`;
+    return `há ${hours} h`;
+  }
+
+  if (mins >= 1) {
+    if (lang === "en") return `${mins} min ago`;
+    if (lang === "es") return `hace ${mins} min`;
+    return `há ${mins} min`;
+  }
+
+  if (lang === "en") return "just now";
+  if (lang === "es") return "justo ahora";
+  return "agora";
 }
 
 function poissonProbAtLeastGoals(lam: number | null | undefined, minGoals: number) {
@@ -233,29 +314,10 @@ function pickBooksForDisplay(
   const list = Array.isArray(books) ? books : [];
   if (!list.length) return { shown: [], extra: 0 };
 
-  const UI_MAX = 6;
+  const UI_MAX = 3;
   const planLimit = Math.max(1, planMax || 1);
 
-  const bestOdd = (b: ProductOddsBook) => {
-    const o = b.odds_1x2 || {};
-    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
-    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
-    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
-    return Math.max(H, D, A);
-  };
-
-  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
-  const sorted = [...list].sort((a, b) => {
-    const aa = a.is_affiliate ? 1 : 0;
-    const bb = b.is_affiliate ? 1 : 0;
-    if (aa !== bb) return bb - aa;
-
-    const oa = bestOdd(a);
-    const ob = bestOdd(b);
-    if (oa !== ob) return ob - oa;
-
-    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
-  });
+  const sorted = sortBooksForSurface(list);
 
   // Respeita o que o plano permite (não “conta” books fora do entitlement)
   const allowed = sorted.slice(0, planLimit);
@@ -287,26 +349,7 @@ function pickBooksForAnalysis(
   const UI_MAX = 5; // análise: 5 casas + 1 chip "+x"
   const planLimit = Math.max(1, planMax || 1);
 
-  const bestOdd = (b: ProductOddsBook) => {
-    const o = b.odds_1x2 || {};
-    const H = typeof o.H === "number" && Number.isFinite(o.H) ? o.H : -Infinity;
-    const D = typeof o.D === "number" && Number.isFinite(o.D) ? o.D : -Infinity;
-    const A = typeof o.A === "number" && Number.isFinite(o.A) ? o.A : -Infinity;
-    return Math.max(H, D, A);
-  };
-
-  // Afiliadas primeiro; dentro do grupo ordena por melhor odd desc; empate por nome/chave
-  const sorted = [...list].sort((a, b) => {
-    const aa = a.is_affiliate ? 1 : 0;
-    const bb = b.is_affiliate ? 1 : 0;
-    if (aa !== bb) return bb - aa;
-
-    const oa = bestOdd(a);
-    const ob = bestOdd(b);
-    if (oa !== ob) return ob - oa;
-
-    return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
-  });
+  const sorted = sortBooksForSurface(list);
 
   // respeita entitlement do plano
   const allowed = sorted.slice(0, planLimit);
@@ -332,6 +375,43 @@ function fmtMoreBooks(extra: number, lang: Lang) {
   if (lang === "en") return `+${extra} books`;
   // pt + es
   return `+${extra} casas`;
+}
+
+function averageValidOdds(values: Array<number | null | undefined>) {
+  const valid = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+
+  if (!valid.length) return -Infinity;
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+}
+
+function averageBookOdds(book: ProductOddsBook | null | undefined) {
+  const odds = book?.odds_1x2;
+  return averageValidOdds([odds?.H, odds?.D, odds?.A]);
+}
+
+function compareBooksForSurface(a: ProductOddsBook, b: ProductOddsBook) {
+  const aPartner = a.is_affiliate ? 1 : 0;
+  const bPartner = b.is_affiliate ? 1 : 0;
+
+  if (aPartner !== bPartner) return bPartner - aPartner;
+
+  const avgA = averageBookOdds(a);
+  const avgB = averageBookOdds(b);
+
+  if (avgA !== avgB) return avgB - avgA;
+
+  return String(a.name ?? a.key).localeCompare(String(b.name ?? b.key));
+}
+
+function sortBooksForSurface(books: ProductOddsBook[] | null | undefined) {
+  const list = Array.isArray(books) ? books : [];
+  return [...list].sort(compareBooksForSurface);
+}
+
+function canOpenBooksModalForPlan(plan: PlanId) {
+  return plan === "BASIC" || plan === "LIGHT" || plan === "PRO";
 }
 
 function fmtAgo(ts: number, lang: Lang, now: number) {
@@ -360,6 +440,24 @@ function fmtAgo(ts: number, lang: Lang, now: number) {
   return `${diffDay}d ago`;
 }
 
+function fmtCountdownToIso(
+  iso: string | null | undefined,
+  nowMs: number
+) {
+  if (!iso) return "00:00";
+
+  const targetMs = new Date(iso).getTime();
+  if (!Number.isFinite(targetMs)) return "00:00";
+
+  const diffMs = Math.max(0, targetMs - nowMs);
+  const totalMinutes = Math.ceil(diffMs / 60000);
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 function fmtKickoff(iso: string, lang: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -372,11 +470,26 @@ function fmtKickoff(iso: string, lang: string) {
   }).format(d);
 }
 
-function hasOpportunityEdge(edge: number | null | undefined) {
+function hasOpportunity(summary: ProductEdgeSummary | null | undefined) {
+  const side = summary?.opportunity_outcome;
+  const edge = summary?.opportunity_edge;
+  const ev = summary?.opportunity_ev;
+  const books =
+    summary?.market_complete_books_count ??
+    summary?.market_books_count ??
+    0;
+  const freshness = summary?.opportunity_book_freshness_seconds;
+
   return (
+    (side === "H" || side === "D" || side === "A") &&
     typeof edge === "number" &&
     Number.isFinite(edge) &&
-    edge >= OPPORTUNITY_EDGE_THRESHOLD
+    typeof ev === "number" &&
+    Number.isFinite(ev) &&
+    edge >= OPPORTUNITY_EDGE_THRESHOLD &&
+    ev >= OPPORTUNITY_EV_THRESHOLD &&
+    books >= OPPORTUNITY_MIN_BOOKS &&
+    (freshness == null || freshness <= OPPORTUNITY_MAX_FRESHNESS_SECONDS)
   );
 }
 
@@ -424,6 +537,14 @@ function LockedPanel({
   );
 }
 
+function hasUsableAnalysisStatus(status: string | null | undefined) {
+  return (
+    status === "MODEL_FOUND" ||
+    status === "EXACT" ||
+    status === "PROBABLE"
+  );
+}
+
 export default function ProductIndex() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
@@ -461,7 +582,7 @@ export default function ProductIndex() {
     return new Map(leagues.map((item) => [item.sport_key, item]));
   }, [leagues]);
 
-  const [windowDays, setWindowDays] = useState<number>(7);
+  const [windowMode, setWindowMode] = useState<WindowMode>("UPCOMING");
   const [sortBy, setSortBy] = useState<SortBy>("DATE");
   const [onlyOpportunities, setOnlyOpportunities] = useState(false);
 
@@ -488,8 +609,53 @@ export default function ProductIndex() {
       return leagueOptions.map((item) => item.value);
     }
 
-    return sportKey ? [sportKey] : [];
-  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, sportKey]);
+    if (!leagues.length) return [];
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const { start: todayStart, end: todayEnd } = getCalendarDayBounds(now);
+
+    const eligible: string[] = [];
+    const future: string[] = [];
+
+    for (const item of leagues) {
+      const kickoffRaw = item.next_kickoff_utc;
+      if (!kickoffRaw) continue;
+
+      const kickoffMs = new Date(kickoffRaw).getTime();
+      if (!Number.isFinite(kickoffMs)) continue;
+      if (kickoffMs < nowMs) continue;
+
+      future.push(item.sport_key);
+
+      if (windowMode === "UPCOMING") {
+        if (kickoffMs <= getUpcomingHorizonMs(nowMs)) {
+          eligible.push(item.sport_key);
+        }
+        continue;
+      }
+
+      if (windowMode === "TODAY") {
+        if (kickoffMs >= todayStart.getTime() && kickoffMs <= todayEnd.getTime()) {
+          eligible.push(item.sport_key);
+        }
+        continue;
+      }
+
+      const horizonMs = nowMs + Number(windowMode) * 24 * 60 * 60 * 1000;
+      if (kickoffMs <= horizonMs) {
+        eligible.push(item.sport_key);
+      }
+    }
+
+    if (eligible.length) return eligible;
+
+    if (windowMode === "UPCOMING") {
+      return future.slice(0, UPCOMING_FALLBACK_MAX_LEAGUES);
+    }
+
+    return [];
+  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowMode]);
 
   const fetchLeagues = useMemo(() => {
     return activeLeagueSportKeys
@@ -508,6 +674,9 @@ export default function ProductIndex() {
 
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
+  const creditsResetCountdown = useMemo(() => {
+    return fmtCountdownToIso(store.entitlements.credits.resets_at_iso, nowTick);
+  }, [store.entitlements.credits.resets_at_iso, nowTick]);
 
   const [selectedId, setSelectedId] = useState<string>("");
 
@@ -524,6 +693,22 @@ export default function ProductIndex() {
   });
 
   const [mobileAnalysisOpen, setMobileAnalysisOpen] = useState(false);
+  const [booksModalEventId, setBooksModalEventId] = useState<string>("");
+
+  const canOpenBooksModal = canOpenBooksModalForPlan(plan);
+
+  function handleOpenBooksModal(eventItem: ProductOddsEvent) {
+    setSelectedId(String(eventItem.event_id));
+    clearQuoteUI();
+
+    if (!canOpenBooksModal) {
+      setUpgradeReason("FEATURE_LOCKED");
+      setUpgradeOpen(true);
+      return;
+    }
+
+    setBooksModalEventId(String(eventItem.event_id));
+  }
 
   const [analysisSectionsOpen, setAnalysisSectionsOpen] = useState<Record<AnalysisSectionKey, boolean>>(
     () => ({ ...DEFAULT_ANALYSIS_SECTIONS_OPEN })
@@ -543,23 +728,16 @@ export default function ProductIndex() {
       const res = await productListLeagues();
       const items = (res?.items ?? []).map((l) => applyLeagueOverride(l));
       setLeagues(items);
-      if (!sportKey && items.length) setSportKey(items[0].sport_key);
+      setSportKey((prev) => {
+        if (prev && items.some((item) => item.sport_key === prev)) return prev;
+        return items[0]?.sport_key ?? "";
+      });
     } catch (e: any) {
       setLeaguesError(e?.message ?? "Failed to load leagues");
     } finally {
       setLeaguesLoading(false);
     }
-  }, [sportKey]);
-
-  function resetWindowDaysFromLeague(
-    nextLeague: (ProductLeagueItem & { assume_season: number; artifact_filename: string | null }) | null
-  ) {
-    const days = Math.max(
-      1,
-      Math.round((nextLeague?.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback) / 24)
-    );
-    setWindowDays(Math.min(days, 30));
-  }
+  }, []);
 
   function clearAdvancedFilters() {
     setSelectedCountryCodes([]);
@@ -568,7 +746,7 @@ export default function ProductIndex() {
     setSelectedTeams([]);
     setOnlyOpportunities(false);
     setSortBy("DATE");
-    resetWindowDaysFromLeague(league);
+    setWindowMode("UPCOMING");
   }
 
   function renderOnlyOpportunitiesToggle(extraClassName = "") {
@@ -612,14 +790,15 @@ export default function ProductIndex() {
             ? "No se encontraron opciones"
             : "Nenhuma opção encontrada"
         }
-        selectedValue={String(windowDays)}
+        selectedValue={windowMode}
         options={[
-          { value: "1", label: t(lang, "odds.windowToday") },
+          { value: "UPCOMING", label: t(lang, "odds.windowUpcoming") },
+          { value: "TODAY", label: t(lang, "odds.windowToday") },
           { value: "3", label: t(lang, "odds.window3d") },
           { value: "7", label: t(lang, "odds.window7d") },
           { value: "30", label: t(lang, "odds.window30d") },
         ]}
-        onChange={(next) => setWindowDays(Number(next))}
+        onChange={(next) => setWindowMode(next as WindowMode)}
       />
     );
   }
@@ -702,18 +881,23 @@ export default function ProductIndex() {
       return compactSelectedLabel(selectedOptions[0].label);
     }
 
-    if (type === "country") {
-      return `${selectedOptions.length} países`;
+    if (lang === "en") {
+      if (type === "country") return `${selectedOptions.length} countries`;
+      if (type === "league") return `${selectedOptions.length} leagues`;
+      if (type === "book") return `${selectedOptions.length} books`;
+      return `${selectedOptions.length} teams`;
     }
 
-    if (type === "league") {
-      return `${selectedOptions.length} ligas`;
+    if (lang === "es") {
+      if (type === "country") return `${selectedOptions.length} países`;
+      if (type === "league") return `${selectedOptions.length} ligas`;
+      if (type === "book") return `${selectedOptions.length} casas`;
+      return `${selectedOptions.length} equipos`;
     }
 
-    if (type === "book") {
-      return `${selectedOptions.length} casas`;
-    }
-
+    if (type === "country") return `${selectedOptions.length} países`;
+    if (type === "league") return `${selectedOptions.length} ligas`;
+    if (type === "book") return `${selectedOptions.length} casas`;
     return `${selectedOptions.length} times`;
   }
 
@@ -733,17 +917,26 @@ export default function ProductIndex() {
   }, [teamOptions]);
 
   const loadEvents = useCallback(async () => {
-    if (!fetchLeagues.length) return;
+    if (!fetchLeagues.length) {
+      setEvents([]);
+      setSelectedId("");
+      setQuote(null);
+      setQuoteError("");
+      setLastLoadedAt(Date.now());
+      return;
+    }
 
     setLoadingEvents(true);
     setEventsError("");
 
     try {
+      const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
+
       const batches = await Promise.all(
         fetchLeagues.map(async (cfg) => {
           const res = await productListOddsEvents({
             sport_key: cfg.sport_key,
-            hours_ahead: cfg.hours_ahead ?? UI_DEFAULTS.hoursAheadFallback,
+            hours_ahead: hoursAhead,
             limit: UI_DEFAULTS.limit,
             assume_league_id: cfg.league_id,
             assume_season: cfg.assume_season,
@@ -769,7 +962,7 @@ export default function ProductIndex() {
     } finally {
       setLoadingEvents(false);
     }
-  }, [fetchLeagues]);
+  }, [fetchLeagues, windowMode]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -965,29 +1158,27 @@ export default function ProductIndex() {
   }, []);
 
   useEffect(() => {
-    const firstLeague = fetchLeagues[0] ?? null;
-    if (!firstLeague) return;
-
-    if (!windowDays) {
-      resetWindowDaysFromLeague(firstLeague);
-    }
-
     loadEvents();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchLeagues.map((item) => item.sport_key).join("|")]);
+  }, [loadEvents]);
 
   // lista visível (filtro client-side)
-  const visibleEvents = useMemo(() => {
+  const visibleEventsState = useMemo(() => {
     const now = new Date();
-    const max = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+    const nowMs = now.getTime();
+    const { start: todayStart, end: todayEnd } = getCalendarDayBounds(now);
 
     const selectedBookSet = selectedBookKeys.length ? new Set(selectedBookKeys) : null;
     const selectedTeamSet = selectedTeams.length ? new Set(selectedTeams) : null;
 
-    let list = events.filter((e) => {
-      const kickoff = new Date(e.commence_time_utc);
+    const futureFiltered = events.filter((e) => {
+      const kickoffRaw = e.commence_time_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoff = new Date(kickoffRaw);
       if (Number.isNaN(kickoff.getTime())) return false;
-      if (kickoff < now || kickoff > max) return false;
+      if (kickoff.getTime() < nowMs) return false;
+
+      if (!hasUsableAnalysisStatus(e.match_status)) return false;
 
       if (selectedTeamSet) {
         const home = String(e.home_name ?? "");
@@ -1001,19 +1192,56 @@ export default function ProductIndex() {
         if (!hasSelectedBook) return false;
       }
 
-      if (onlyOpportunities) {
-        const edge = e.edge_summary?.best_edge;
-        if (!hasOpportunityEdge(edge)) return false;
+      if (onlyOpportunities && !hasOpportunity(e.edge_summary)) {
+        return false;
       }
 
       return true;
     });
 
-    if (sortBy === "DATE") {
+    let scoped = futureFiltered;
+    let useUpcomingFallback = false;
+
+    if (windowMode === "UPCOMING") {
+      const horizonMs = getUpcomingHorizonMs(nowMs);
+      const withinUpcoming = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs <= horizonMs;
+      });
+
+      if (withinUpcoming.length) {
+        scoped = withinUpcoming;
+      } else {
+        scoped = futureFiltered;
+        useUpcomingFallback = futureFiltered.length > 0;
+      }
+    } else if (windowMode === "TODAY") {
+      scoped = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs >= todayStart.getTime() && kickoffMs <= todayEnd.getTime();
+      });
+    } else {
+      const horizonMs = nowMs + Number(windowMode) * 24 * 60 * 60 * 1000;
+      scoped = futureFiltered.filter((e) => {
+        const kickoffRaw = e.commence_time_utc;
+        if (!kickoffRaw) return false;
+        const kickoffMs = new Date(kickoffRaw).getTime();
+        return Number.isFinite(kickoffMs) && kickoffMs <= horizonMs;
+      });
+    }
+
+    const effectiveSortBy: SortBy = useUpcomingFallback ? "DATE" : sortBy;
+    const list = [...scoped];
+
+    if (effectiveSortBy === "DATE") {
       list.sort(
-        (a, b) => new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime()
+        (a, b) => new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime()
       );
-    } else if (sortBy === "CONFIDENCE") {
+    } else if (effectiveSortBy === "CONFIDENCE") {
       list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
     } else {
       list.sort((a, b) => {
@@ -1025,12 +1253,48 @@ export default function ProductIndex() {
 
         if (safeA !== safeB) return safeB - safeA;
 
-        return new Date(a.commence_time_utc).getTime() - new Date(b.commence_time_utc).getTime();
+        return new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime();
       });
     }
 
-    return list;
-  }, [events, windowDays, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
+    return {
+      items: list,
+      useUpcomingFallback,
+    };
+  }, [events, windowMode, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
+
+  const visibleEvents = visibleEventsState.items;
+  const isUpcomingFallbackActive = visibleEventsState.useUpcomingFallback;
+
+  const booksModalEvent = useMemo(() => {
+    const targetId = String(booksModalEventId ?? "").trim();
+    if (!targetId) return null;
+
+    return (
+      visibleEvents.find((item) => String(item.event_id) === targetId) ??
+      events.find((item) => String(item.event_id) === targetId) ??
+      null
+    );
+  }, [booksModalEventId, visibleEvents, events]);
+
+  const booksModalList = useMemo(() => {
+    return sortBooksForSurface(booksModalEvent?.odds_books);
+  }, [booksModalEvent]);
+
+  const showTodayEmptyNotice = useMemo(() => {
+    if (windowMode !== "TODAY") return false;
+    if (loadingEvents || !!eventsError || visibleEvents.length > 0) return false;
+
+    const { end } = getCalendarDayBounds(new Date());
+
+    return leagues.some((item) => {
+      const kickoffRaw = item.next_kickoff_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoffMs = new Date(kickoffRaw).getTime();
+      return Number.isFinite(kickoffMs) && kickoffMs > end.getTime();
+    });
+  }, [windowMode, loadingEvents, eventsError, visibleEvents.length, leagues]);
 
   // só mantém a seleção se o usuário já tinha uma seleção anterior.
   // Não auto-seleciona no primeiro load.
@@ -1063,6 +1327,22 @@ export default function ProductIndex() {
     () => visibleEvents.find((e) => String(e.event_id) === String(selectedId)) ?? null,
     [visibleEvents, selectedId]
   );
+
+  const selectedAllBooks = useMemo(() => {
+    return sortBooksForSurface(selected?.odds_books);
+  }, [selected]);
+
+  const { shown: analysisPreviewBooks } = useMemo(() => {
+    return pickBooksForAnalysis(
+      selectedAllBooks,
+      vis.odds.books_count,
+      vis.odds.show_affiliate_link
+    );
+  }, [selectedAllBooks, vis.odds.books_count, vis.odds.show_affiliate_link]);
+
+  const analysisHiddenBooksCount = useMemo(() => {
+    return Math.max(0, selectedAllBooks.length - analysisPreviewBooks.length);
+  }, [selectedAllBooks.length, analysisPreviewBooks.length]);
 
   const selectedProbs = useMemo(() => {
     if (!selected?.probs_1x2) return null;
@@ -1164,9 +1444,8 @@ export default function ProductIndex() {
                   ) : null}
 
                   {(() => {
-                    const edge = selected.edge_summary?.best_edge;
-                    const hasOpportunity = hasOpportunityEdge(edge);
-                    if (!hasOpportunity) return null;
+                    const hasOpportunityFlag = hasOpportunity(selected.edge_summary);
+                    if (!hasOpportunityFlag) return null;
 
                     return (
                       <span className="pi-opportunity">
@@ -1292,6 +1571,8 @@ export default function ProductIndex() {
                 })()}
 
                 {/* ===== Painéis técnicos com accordions no mobile ===== */}
+
+
                 <div className="pi-technical-sections">
                   <section className={`pi-accordion ${analysisSectionsOpen.probabilities ? "is-open" : ""}`}>
                     <button
@@ -1302,10 +1583,10 @@ export default function ProductIndex() {
                     >
                       <span className="pi-accordion-title">
                         {lang === "en"
-                          ? "Probabilities & confidence"
+                          ? "Odds & opportunity"
                           : lang === "es"
-                          ? "Probabilidades y confianza"
-                          : "Probabilidades e confiança"}
+                          ? "Cuotas y oportunidad"
+                          : "Odds e oportunidade"}
                       </span>
                       <span className="pi-accordion-icon" aria-hidden="true">
                         {analysisSectionsOpen.probabilities ? "−" : "+"}
@@ -1637,6 +1918,48 @@ export default function ProductIndex() {
                     </section>
                   ) : null}
 
+                  {analysisPreviewBooks.length ? (
+                    <div className="pi-panel pi-analysis-books">
+                      <div className="pi-panel-label">
+                        {lang === "en"
+                          ? "Bookmakers"
+                          : lang === "es"
+                          ? "Casas de apuestas"
+                          : "Casas de aposta"}
+                      </div>
+
+                      <div className="pi-books-stack">
+                        {analysisPreviewBooks.map((book) => (
+                          <div key={`${selected.event_id}-${book.key}`} className="pi-book-analysis-card">
+                            <div className="pi-book-preview-head">
+                              <span className="pi-book-preview-name">{book.name}</span>
+
+                              {vis.odds.show_partner_label && book.is_affiliate ? (
+                                <span className="pi-book-partner-badge">{t(lang, "odds.partner")}</span>
+                              ) : null}
+                            </div>
+
+                            <div className="pi-book-preview-odds">
+                              H {fmtOdds(book.odds_1x2?.H)} • D {fmtOdds(book.odds_1x2?.D)} • A {fmtOdds(book.odds_1x2?.A)}
+                            </div>
+                          </div>
+                        ))}
+
+                        {analysisHiddenBooksCount > 0 ? (
+                          <button
+                            type="button"
+                            className="pi-book-more-btn pi-book-more-btn-inline"
+                            aria-label={`${t(lang, "odds.seeAllBooks")} (+${analysisHiddenBooksCount})`}
+                            title={t(lang, "odds.seeAllBooks")}
+                            onClick={() => handleOpenBooksModal(selected)}
+                          >
+                            +{analysisHiddenBooksCount}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <section className={`pi-accordion ${analysisSectionsOpen.oddsEdge ? "is-open" : ""}`}>
                     <button
                       type="button"
@@ -1677,50 +2000,186 @@ export default function ProductIndex() {
                           )}
                         </div>
 
-                        {vis.value.show_edge_percent ? (
-                          quote?.value?.edge ? (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-panel-value">
-                                H {fmtPct(quote.value.edge.H)} <br />
-                                D {fmtPct(quote.value.edge.D)} <br />
-                                A {fmtPct(quote.value.edge.A)}
-                              </div>
-
-                              {vis.value.show_value_detected ? (
-                                <div className="pi-muted">{t(lang, "matchup.valueEnabled")}</div>
-                              ) : null}
-                            </div>
-                          ) : selected?.edge_summary?.best_edge != null ? (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-panel-value">
-                                {fmtEdge(selected.edge_summary.best_edge)}
-                              </div>
-                              <div className="pi-muted">
-                                {fmtOutcome(
-                                  selected.edge_summary.best_outcome,
-                                  selected.home_name,
-                                  selected.away_name,
-                                  lang
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="pi-panel">
-                              <div className="pi-panel-label">{t(lang, "matchup.edge")}</div>
-                              <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
-                            </div>
-                          )
-                        ) : (
+                        {!vis.value.show_edge_percent ? (
                           <LockedPanel
-                            title={t(lang, "matchup.edge")}
+                            title={t(lang, "matchup.opportunityView")}
                             lang={lang}
                             onUnlock={() => {
                               setUpgradeReason("FEATURE_LOCKED");
                               setUpgradeOpen(true);
                             }}
                           />
+                        ) : (
+                          (() => {
+                            const summary = selected?.edge_summary ?? null;
+
+                            const edgeOutcome = summary?.best_outcome ?? null;
+                            const bestEvOutcome = summary?.best_ev_outcome ?? null;
+
+                            const opportunitySide = summary?.opportunity_outcome ?? null;
+                            const opportunityEdge = summary?.opportunity_edge ?? null;
+                            const opportunityEv = summary?.opportunity_ev ?? null;
+                            const opportunityOdd = summary?.opportunity_odd ?? null;
+                            const opportunityBook = summary?.opportunity_book_name ?? null;
+                            const opportunityFreshness = summary?.opportunity_book_freshness_seconds ?? null;
+
+                            const fairOdd = fairOddFromProb(probForOutcome(effectiveProbs, edgeOutcome));
+
+                            const marketBooksCount =
+                              summary?.market_complete_books_count ??
+                              summary?.market_books_count ??
+                              0;
+
+                            const isProView = vis.model.show_metrics;
+                            const hasOpportunityFlag = hasOpportunity(summary);
+
+                            if (summary?.best_edge == null) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, isProView ? "matchup.marketRead" : "matchup.opportunityView")}
+                                  </div>
+                                  <div className="pi-muted">{t(lang, "matchup.noEdge")}</div>
+                                </div>
+                              );
+                            }
+
+                            if (!isProView) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, "matchup.opportunityView")}
+                                  </div>
+
+                                  <div className="pi-panel-value">
+                                    {fmtOutcome(edgeOutcome, selected.home_name, selected.away_name, lang)}
+                                  </div>
+
+                                  <div className="pi-muted" style={{ marginTop: 8 }}>
+                                    {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(summary.best_edge)}</strong>
+                                  </div>
+
+                                  {vis.value.show_fair_odds ? (
+                                    <div className="pi-muted">
+                                      {t(lang, "matchup.fairOdds")}: <strong>{fmtOdds(fairOdd)}</strong>
+                                    </div>
+                                  ) : null}
+
+                                  <div className="pi-muted">
+                                    {hasOpportunityFlag
+                                      ? t(lang, "matchup.strongSignalNow")
+                                      : t(lang, "matchup.noClearOpportunity")}
+                                  </div>
+
+                                  <div
+                                    className="pi-locked-cta"
+                                    style={{ marginTop: 10 }}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => {
+                                      setUpgradeReason("FEATURE_LOCKED");
+                                      setUpgradeOpen(true);
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setUpgradeReason("FEATURE_LOCKED");
+                                        setUpgradeOpen(true);
+                                      }
+                                    }}
+                                  >
+                                    {t(lang, "matchup.proUnlockCta")} →
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (hasOpportunityFlag) {
+                              return (
+                                <div className="pi-panel">
+                                  <div className="pi-panel-label">
+                                    {t(lang, "matchup.validatedOpportunity")}
+                                  </div>
+
+                                  <div className="pi-panel-value">
+                                    {fmtOutcome(opportunitySide, selected.home_name, selected.away_name, lang)}
+                                  </div>
+
+                                  <div className="pi-muted" style={{ marginTop: 8 }}>
+                                    {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(opportunityEdge)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.executableValue")}: <strong>{fmtPctNullable(opportunityEv)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.validOdd")}: <strong>{fmtOdds(opportunityOdd)}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.book")}: <strong>{opportunityBook ?? "—"}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.marketBooks")}:{" "}
+                                    <strong>{t(lang, "matchup.marketBooksValue", { count: marketBooksCount })}</strong>
+                                  </div>
+
+                                  <div className="pi-muted">
+                                    {t(lang, "matchup.executionUpdated")}:{" "}
+                                    <strong>{fmtFreshnessSeconds(opportunityFreshness, lang)}</strong>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="pi-panel">
+                                <div className="pi-panel-label">
+                                  {t(lang, "matchup.marketRead")}
+                                </div>
+
+                                <div className="pi-panel-value">
+                                  {fmtOutcome(edgeOutcome, selected.home_name, selected.away_name, lang)}
+                                </div>
+
+                                <div className="pi-muted" style={{ marginTop: 8 }}>
+                                  {t(lang, "matchup.edgeConsensus")}: <strong>{fmtEdge(summary.best_edge)}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.bestExecutableValue")}:{" "}
+                                  <strong>{fmtPctNullable(summary.best_ev)}</strong>
+                                  {bestEvOutcome ? (
+                                    <>
+                                      {" "}•{" "}
+                                      {fmtOutcome(bestEvOutcome, selected.home_name, selected.away_name, lang)}
+                                    </>
+                                  ) : null}
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.validOdd")}:{" "}
+                                  <strong>{fmtOdds(summary.best_ev_odd ?? summary.best_odd)}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.book")}:{" "}
+                                  <strong>{summary.best_ev_book_name ?? summary.best_book_name ?? "—"}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.marketBooks")}:{" "}
+                                  <strong>{t(lang, "matchup.marketBooksValue", { count: marketBooksCount })}</strong>
+                                </div>
+
+                                <div className="pi-muted">
+                                  {t(lang, "matchup.noValidatedOpportunity")}
+                                </div>
+                              </div>
+                            );
+                          })()
                         )}
                       </div>
                     </div>
@@ -1820,6 +2279,15 @@ return (
             : `${visibleEvents.length} jogos`}
         </span>
 
+        <span className="pi-subsep">•</span>
+        <span>
+        {lang === "en"
+          ? `Credits reset in ${creditsResetCountdown}`
+          : lang === "es"
+          ? `Reset de créditos en ${creditsResetCountdown}`
+          : `Reset de créditos em ${creditsResetCountdown}`}
+        </span>
+
         {lastLoadedAt ? (
           <>
             <span className="pi-subsep">•</span>
@@ -1839,6 +2307,16 @@ return (
           : ""}
       </button>
     </div>
+
+    {isUpcomingFallbackActive ? (
+      <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
+        {t(lang, "odds.upcomingFallbackNotice")}
+      </div>
+    ) : showTodayEmptyNotice ? (
+      <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
+        {t(lang, "odds.todayEmptyNotice")}
+      </div>
+    ) : null}
 
     {hasActiveFilters ? (
       <div className="pi-active-filters">
@@ -2038,15 +2516,23 @@ return (
             const eventKey = String(e.event_id);
             const active = eventKey === String(selectedId);
             const es = e.edge_summary ?? null;
-            const edge = es?.best_edge;
-            const hasOpportunity = hasOpportunityEdge(edge);
+            const hasOpportunityFlag = hasOpportunity(es);
+            const isProbableOnly = e.match_status === "PROBABLE";
 
             return (
-              <button
+              <div
                 key={e.event_id}
                 className={`pi-row ${active ? "is-active" : ""}`}
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   handleSelectEvent(String(e.event_id));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleSelectEvent(String(e.event_id));
+                  }
                 }}
               >
                 <div className="pi-row-main">
@@ -2078,16 +2564,28 @@ return (
                       ) : null}
                     </div>
 
-                    {hasOpportunity ? (
+                    {hasOpportunityFlag || isProbableOnly ? (
                       <div className="pi-row-actions-inline">
-                        <span className="pi-opportunity">
-                          {t(lang, "odds.opportunityDetected")}
-                        </span>
+                        {isProbableOnly ? (
+                          <span className="pi-chip pi-chip-muted">
+                            {lang === "en"
+                              ? "Moderate confidence"
+                              : lang === "es"
+                              ? "Confianza moderada"
+                              : "Confiança moderada"}
+                          </span>
+                        ) : null}
+
+                        {hasOpportunityFlag ? (
+                          <span className="pi-opportunity">
+                            {t(lang, "odds.opportunityDetected")}
+                          </span>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -2102,6 +2600,117 @@ return (
         </aside>
       ) : null}
     </div>
+
+    {booksModalEvent ? (
+      <div
+        className="um-overlay"
+        onClick={() => setBooksModalEventId("")}
+      >
+        <div
+          className="um-modal pi-books-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={
+            lang === "en"
+              ? "Bookmakers"
+              : lang === "es"
+              ? "Casas de apuestas"
+              : "Casas de aposta"
+          }
+          onClick={(event) => event.stopPropagation()}
+          style={{ maxWidth: 720 }}
+        >
+          <div className="product-modal-head">
+            <div className="product-modal-head-copy">
+              <div className="product-modal-kicker">prevIA</div>
+              <div className="product-modal-title">
+                {lang === "en"
+                  ? "Bookmakers"
+                  : lang === "es"
+                  ? "Casas de apuestas"
+                  : "Casas de aposta"}
+              </div>
+
+              <div className="product-modal-subtitle">
+                {booksModalEvent.home_name} <span className="pi-vs">vs</span> {booksModalEvent.away_name}
+                <span className="pi-subsep">•</span>
+                {fmtKickoff(booksModalEvent.commence_time_utc, lang)}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="product-modal-close"
+              onClick={() => setBooksModalEventId("")}
+              aria-label={lang === "en" ? "Close" : lang === "es" ? "Cerrar" : "Fechar"}
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="product-modal-body">
+            {booksModalList.length ? (
+              <div className="pi-books-modal-list">
+                {booksModalList.map((book) => {
+                  const capturedAtMs = book.captured_at_utc
+                    ? new Date(book.captured_at_utc).getTime()
+                    : NaN;
+
+                  return (
+                    <div key={book.key} className="pi-books-modal-row">
+                      <div className="pi-books-modal-book">
+                        <div className="pi-books-modal-book-top">
+                          <span className="pi-books-modal-book-name">{book.name}</span>
+
+                          {vis.odds.show_partner_label && book.is_affiliate ? (
+                            <span className="pi-book-partner-badge">
+                              {t(lang, "odds.partner")}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {Number.isFinite(capturedAtMs) ? (
+                          <div className="pi-books-modal-book-time">
+                            {t(lang, "common.updatedAgo", {
+                              ago: fmtAgo(capturedAtMs, lang, nowTick),
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="pi-books-modal-odds">
+                        <div className="pi-books-modal-odd">
+                          <span>H</span>
+                          <strong>{fmtOdds(book.odds_1x2?.H)}</strong>
+                        </div>
+
+                        <div className="pi-books-modal-odd">
+                          <span>D</span>
+                          <strong>{fmtOdds(book.odds_1x2?.D)}</strong>
+                        </div>
+
+                        <div className="pi-books-modal-odd">
+                          <span>A</span>
+                          <strong>{fmtOdds(book.odds_1x2?.A)}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="pi-muted">
+                {lang === "en"
+                  ? "No bookmaker odds available for this match."
+                  : lang === "es"
+                  ? "No hay cuotas disponibles para este partido."
+                  : "Não há odds disponíveis para este jogo."}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null}
 
     {isMobileAnalysisView && mobileAnalysisOpen ? (
       <div

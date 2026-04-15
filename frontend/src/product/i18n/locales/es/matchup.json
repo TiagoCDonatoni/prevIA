@@ -5,5 +5,26 @@
   "edge": "Edge (vs mercado)",
   "valueEnabled": "Detección de valor habilitada",
   "noProbs": "Sin probabilidades (modelo no disponible).",
-  "noEdge": "Sin datos de edge para este partido."
+  "noEdge": "Sin datos de edge para este partido.",
+
+  "opportunityView": "Lectura de oportunidad",
+  "opportunityExecution": "Oportunidad y ejecución",
+  "edgeConsensus": "Edge consenso",
+  "fairOdds": "Cuota justa",
+  "executableValue": "EV ejecutable",
+  "validOdd": "Cuota válida",
+  "book": "Casa",
+  "marketBooks": "Mercado",
+  "marketBooksValue": "{count} casas",
+  "executionUpdated": "Actualización",
+  "strongSignalNow": "Señal fuerte en este lado.",
+  "noClearOpportunity": "No hay una oportunidad clara en este momento.",
+  "proUnlockCta": "Ver ejecución completa en Pro",
+
+  "validatedOpportunity": "Oportunidad validada",
+  "marketRead": "Lectura de mercado",
+  "bestExecutableValue": "Mejor EV encontrado",
+  "noValidatedOpportunity": "No hay una oportunidad validada según los criterios actuales.",
+  "edgeConsensusTooltip": "Muestra cuánto está la probabilidad de nuestro modelo por encima o por debajo de la probabilidad implícita del mercado, tras ajustar el margen. Cuanto mayor el edge, mayor la diferencia entre modelo y mercado.",
+  "executableValueTooltip": "Muestra el retorno esperado de la apuesta según la probabilidad del modelo y la cuota disponible. Un EV positivo indica valor esperado positivo a largo plazo."
 }

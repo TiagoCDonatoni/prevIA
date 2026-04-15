@@ -43,19 +43,42 @@ export default function ProductBootstrap({
           return;
         }
 
-        const usage = await fetchAccessUsage();
-        if (cancelled) return;
+        try {
+          const usage = await fetchAccessUsage();
+          if (cancelled) return;
 
-        store.applyBackendUsage({
-          date_key: usage.date_key,
-          credits_used: usage.usage.credits_used,
-          revealed_count: usage.usage.revealed_count,
-          daily_limit: usage.usage.daily_limit,
-          remaining: usage.usage.remaining,
-          revealed_fixture_keys: usage.usage.revealed_fixture_keys,
-        });
+          store.applyBackendUsage({
+            date_key: usage.date_key,
+            credits_used: usage.usage.credits_used,
+            revealed_count: usage.usage.revealed_count,
+            daily_limit: usage.usage.daily_limit,
+            remaining: usage.usage.remaining,
+            revealed_fixture_keys: usage.usage.revealed_fixture_keys,
+          });
+        } catch (err) {
+          console.error("product usage bootstrap failed", err);
+        }
       } catch (err) {
         console.error("product bootstrap failed", err);
+
+        if (cancelled) return;
+
+        store.applyBackendBootstrap({
+          is_authenticated: false,
+          email: null,
+          plan: "FREE",
+          auth_mode: "bootstrap_error",
+          user_id: null,
+          full_name: null,
+          preferred_lang: null,
+          user_status: null,
+          email_verified: null,
+          subscription_plan_code: null,
+          subscription_status: null,
+          subscription_provider: null,
+          subscription_billing_cycle: null,
+          access_context: null,
+        });
       }
     }
 

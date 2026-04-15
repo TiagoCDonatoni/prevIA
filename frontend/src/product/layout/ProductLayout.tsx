@@ -1,7 +1,11 @@
 import React, { useCallback, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom"; 
 
-import { PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
+import {
+  PRODUCT_APP_REQUIRE_LOGIN,
+  PRODUCT_AUTH_ENABLED,
+  PRODUCT_DEV_AUTO_LOGIN_ENABLED,
+} from "../../config";
 import { fetchAccessUsage, postAccessDevReset } from "../api/access";
 import {
   clearProductPlanOverride,
@@ -25,6 +29,8 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
 import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
 import { resolveAccountPreferences } from "../preferences/accountPreferences";
+
+import { ProductAuthGate } from "../components/ProductAuthGate";
 
   type FooterSocialId = "instagram" | "x" | "tiktok";
 
@@ -320,6 +326,19 @@ React.useEffect(() => {
   const authBootstrapPending =
     PRODUCT_AUTH_ENABLED && !store.bootstrap.is_ready;
 
+  const shouldShowBlockingAuthSplash =
+    PRODUCT_AUTH_ENABLED &&
+    PRODUCT_APP_REQUIRE_LOGIN &&
+    !PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
+    authBootstrapPending;
+
+  const shouldRequireLoginGate =
+    PRODUCT_AUTH_ENABLED &&
+    PRODUCT_APP_REQUIRE_LOGIN &&
+    !PRODUCT_DEV_AUTO_LOGIN_ENABLED &&
+    !authBootstrapPending &&
+    !isAuthenticated;
+
   const isAccountMenuEligiblePlan =
     plan === "FREE" ||
     plan === "BASIC" ||
@@ -466,7 +485,7 @@ React.useEffect(() => {
       setIsAccountMenuOpen(false);
       setIsMobileHeaderMenuOpen(false);
 
-      navigate(`/${lang}`, { replace: true });
+      navigate(PRODUCT_APP_REQUIRE_LOGIN ? "/app" : `/${lang}`, { replace: true });
     } catch (err) {
       console.error("product logout failed", err);
     }
@@ -481,6 +500,55 @@ React.useEffect(() => {
     },
     []
   );
+
+  function renderAuthModal() {
+    return (
+      <ProductAuthModal
+        open={authOpen}
+        lang={lang}
+        initialMode={authInitialMode}
+        onClose={() => setAuthOpen(false)}
+        onAuthSuccess={async (payload) => {
+          await syncSessionFromAuthPayload(payload);
+          setAuthOpen(false);
+
+          const shouldOpenPostSignupOffer =
+            authInitialMode === "signup" && Boolean(payload.is_authenticated);
+
+          if (shouldOpenPostSignupOffer) {
+            const currentPreferences = resolveAccountPreferences(store.state.preferences);
+
+            if (!currentPreferences.completed_onboarding) {
+              setPreferencesOpen(true);
+              return;
+            }
+
+            setPlanReason("POST_SIGNUP");
+            setPlanOpen(true);
+          }
+        }}
+      />
+    );
+  }
+
+  if (shouldShowBlockingAuthSplash) {
+    return <ProductAuthGate lang={lang} loading />;
+  }
+
+  if (shouldRequireLoginGate) {
+    return (
+      <>
+        <ProductAuthGate
+          lang={lang}
+          busy={authOpen}
+          onLogin={() => openAuthModal("login")}
+          onSignup={() => openAuthModal("signup")}
+          onForgot={() => openAuthModal("forgot")}
+        />
+        {renderAuthModal()}
+      </>
+    );
+  }
 
   const mobileMenuLabel =
     lang === "pt" ? "Abrir menu" : lang === "es" ? "Abrir menú" : "Open menu";
@@ -891,31 +959,7 @@ const mobileHeaderMenuContent = (
         </div>
       </footer>
 
-      <ProductAuthModal
-        open={authOpen}
-        lang={lang}
-        initialMode={authInitialMode}
-        onClose={() => setAuthOpen(false)}
-        onAuthSuccess={async (payload) => {
-          await syncSessionFromAuthPayload(payload);
-          setAuthOpen(false);
-
-          const shouldOpenPostSignupOffer =
-            authInitialMode === "signup" && Boolean(payload.is_authenticated);
-
-          if (shouldOpenPostSignupOffer) {
-            const currentPreferences = resolveAccountPreferences(store.state.preferences);
-
-            if (!currentPreferences.completed_onboarding) {
-              setPreferencesOpen(true);
-              return;
-            }
-
-            setPlanReason("POST_SIGNUP");
-            setPlanOpen(true);
-          }
-        }}
-      />
+      {renderAuthModal()}
 
       <AccountPreferencesModal
         open={preferencesOpen}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from time import perf_counter
+from time import perf_counter, sleep
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -96,6 +96,83 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _step_error_text(out: Any) -> Optional[str]:
+    if isinstance(out, dict):
+        if bool(out.get("ok", True)):
+            return None
+        return str(out.get("error") or out.get("reason") or "step_returned_not_ok")
+    return None
+
+
+def _run_step_with_retry(
+    *,
+    step_name: str,
+    fn,
+    max_attempts: int = 1,
+    backoff_sec: float = 1.0,
+    soft_fail: bool = False,
+) -> Dict[str, Any]:
+    attempts: List[Dict[str, Any]] = []
+    t0 = perf_counter()
+
+    last_result: Dict[str, Any] = {}
+    last_error: Optional[str] = None
+
+    for attempt_no in range(1, max_attempts + 1):
+        attempt_t0 = perf_counter()
+
+        try:
+            out = fn() or {}
+            last_result = out if isinstance(out, dict) else {"result": out}
+            err = _step_error_text(last_result)
+
+            attempts.append(
+                {
+                    "attempt_no": attempt_no,
+                    "ok": err is None,
+                    "elapsed_ms": int((perf_counter() - attempt_t0) * 1000),
+                    "error": err,
+                }
+            )
+
+            if err is None:
+                return {
+                    "ok": True,
+                    "soft_failed": False,
+                    "attempts_used": attempt_no,
+                    "attempts": attempts,
+                    "result": last_result,
+                    "error": None,
+                    "elapsed_ms_total": int((perf_counter() - t0) * 1000),
+                }
+
+            last_error = err
+
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            attempts.append(
+                {
+                    "attempt_no": attempt_no,
+                    "ok": False,
+                    "elapsed_ms": int((perf_counter() - attempt_t0) * 1000),
+                    "error": last_error,
+                    "traceback": traceback.format_exc(),
+                }
+            )
+
+        if attempt_no < max_attempts:
+            sleep(backoff_sec * attempt_no)
+
+    return {
+        "ok": False,
+        "soft_failed": bool(soft_fail),
+        "attempts_used": len(attempts),
+        "attempts": attempts,
+        "result": last_result,
+        "error": last_error or f"{step_name}_failed",
+        "elapsed_ms_total": int((perf_counter() - t0) * 1000),
+    }
+
 def update_pipeline_run(
     *,
     only_sport_key: Optional[str] = None,
@@ -122,6 +199,9 @@ def update_pipeline_run(
             "events_resolved": 0,
             "snapshots_upserted": 0,
             "fallbacks": 0,
+            "sports_refresh_failures": 0,
+            "sports_refresh_retries_used": 0,
+            "warnings": 0,
             "errors": 0,
             "elapsed_ms": 0,
         },
@@ -149,6 +229,7 @@ def update_pipeline_run(
             "steps": {},
             "timing_ms": {},
         }
+        league_out["warnings"] = []
 
         print(
             f"[UPDATE_PIPELINE] [{idx}/{total}] start sport_key={scope.sport_key} "
@@ -165,14 +246,29 @@ def update_pipeline_run(
                 f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core start seasons={seasons}",
                 flush=True,
             )
-            step_t0 = perf_counter()
-            refresh_out = orchestrate_apifootball_pg(
-                league_ids=[scope.league_id],
-                seasons=seasons,
-                max_calls=30,
+
+            fixtures_core_step = _run_step_with_retry(
+                step_name="fixtures_core",
+                max_attempts=3,
+                backoff_sec=1.0,
+                soft_fail=True,
+                fn=lambda: orchestrate_apifootball_pg(
+                    league_ids=[scope.league_id],
+                    seasons=seasons,
+                    max_calls=30,
+                ),
             )
-            league_out["steps"]["fixtures_core"] = refresh_out
-            league_out["timing_ms"]["fixtures_core"] = int((perf_counter() - step_t0) * 1000)
+
+            league_out["steps"]["fixtures_core"] = fixtures_core_step
+            league_out["timing_ms"]["fixtures_core"] = int(
+                fixtures_core_step["elapsed_ms_total"]
+            )
+
+            result["summary"]["sports_refresh_retries_used"] += max(
+                0, int(fixtures_core_step["attempts_used"]) - 1
+            )
+
+            refresh_out = dict(fixtures_core_step.get("result") or {})
 
             leagues_upserts = _safe_int(
                 (((refresh_out or {}).get("core") or {}).get("leagues") or {}).get("upserts", 0)
@@ -184,13 +280,37 @@ def update_pipeline_run(
                 (((refresh_out or {}).get("core") or {}).get("fixtures") or {}).get("upserts", 0)
             )
 
-            print(
-                f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core done "
-                f"leagues_upserts={leagues_upserts} teams_upserts={teams_upserts} "
-                f"fixtures_upserts={fixtures_upserts} "
-                f"elapsed_ms={league_out['timing_ms']['fixtures_core']}",
-                flush=True,
-            )
+            if not fixtures_core_step["ok"]:
+                result["summary"]["sports_refresh_failures"] += 1
+                result["summary"]["warnings"] += 1
+                result["summary"]["errors"] += 1
+                result["ok"] = False
+
+                league_out["warnings"].append(
+                    {
+                        "step": "fixtures_core",
+                        "message": "sports refresh/core failed after retries; pipeline continued with stale core data",
+                        "error": fixtures_core_step.get("error"),
+                        "attempts_used": fixtures_core_step.get("attempts_used"),
+                    }
+                )
+
+                print(
+                    f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core soft-failed "
+                    f"attempts={fixtures_core_step.get('attempts_used')} "
+                    f"error={fixtures_core_step.get('error')} "
+                    f"elapsed_ms={league_out['timing_ms']['fixtures_core']}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core done "
+                    f"attempts={fixtures_core_step.get('attempts_used')} "
+                    f"leagues_upserts={leagues_upserts} teams_upserts={teams_upserts} "
+                    f"fixtures_upserts={fixtures_upserts} "
+                    f"elapsed_ms={league_out['timing_ms']['fixtures_core']}",
+                    flush=True,
+                )
 
             print(
                 f"[UPDATE_PIPELINE] [{idx}/{total}] step=stats start seasons={seasons}",
@@ -339,6 +459,7 @@ def update_pipeline_run(
             result["summary"]["events_resolved"] += resolve_persisted
             result["summary"]["snapshots_upserted"] += snapshots_upserted
             result["summary"]["fallbacks"] += snapshots_fallback
+
 
             league_out["timing_ms"]["total"] = int((perf_counter() - league_t0) * 1000)
 

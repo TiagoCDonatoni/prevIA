@@ -5,5 +5,26 @@
   "edge": "Edge (vs market)",
   "valueEnabled": "Value detection enabled",
   "noProbs": "No probabilities (model unavailable).",
-  "noEdge": "No edge data for this match."
+  "noEdge": "No edge data for this match.",
+
+  "opportunityView": "Opportunity view",
+  "opportunityExecution": "Opportunity & execution",
+  "edgeConsensus": "Consensus edge",
+  "fairOdds": "Fair odds",
+  "executableValue": "Executable EV",
+  "validOdd": "Valid odd",
+  "book": "Book",
+  "marketBooks": "Market",
+  "marketBooksValue": "{count} books",
+  "executionUpdated": "Update",
+  "strongSignalNow": "Strong signal on this side.",
+  "noClearOpportunity": "No clear opportunity right now.",
+  "proUnlockCta": "See full execution on Pro",
+
+  "validatedOpportunity": "Validated opportunity",
+  "marketRead": "Market read",
+  "bestExecutableValue": "Best EV found",
+  "noValidatedOpportunity": "No opportunity validated by the current criteria.",
+  "edgeConsensusTooltip": "Shows how far our model probability is above or below the market implied probability after margin adjustment. The higher the edge, the larger the gap between model and market.",
+  "executableValueTooltip": "Shows the expected return of the bet based on the model probability and the available odd. Positive EV indicates positive expected value over the long run."
 }

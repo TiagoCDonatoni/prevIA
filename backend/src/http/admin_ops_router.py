@@ -4,10 +4,12 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 
 from time import perf_counter
 from typing import Any, Callable, Dict
+import json
 import re
 import unicodedata
 
 from src.ops.job_runner import run_job
+from src.ops.jobs.odds_catalog_sync import sync_odds_sport_catalog
 from src.ops.jobs.odds_refresh import odds_refresh
 from src.ops.jobs.odds_resolve import odds_resolve_batch
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
@@ -52,6 +54,25 @@ def _format_job_response(
         "fallback_reason": fallback_reason,
     }
 
+def _iso_dt(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
 
 def _should_fallback_to_direct_execution(exc: Exception) -> bool:
     message = str(exc or "").lower()
@@ -226,7 +247,18 @@ def _extract_competition_candidates_and_country(
     candidates = _dedupe_keep_order(candidates)
     return candidates, (country_norm or None)
 
-def _auto_resolve_single_league(cur, sport_key: str) -> dict:
+def _serialize_league_candidate(match: tuple[Any, Any, Any, Any], match_reason: str, rank: int) -> dict:
+    return {
+        "league_id": int(match[0]),
+        "name": str(match[1]),
+        "country_name": str(match[2]) if match[2] is not None else None,
+        "country_code": str(match[3]).upper() if match[3] is not None else None,
+        "match_reason": match_reason,
+        "rank": int(rank),
+    }
+
+
+def _build_league_resolution_preview(cur, sport_key: str, limit: int = 5) -> dict:
     cur.execute(
         """
         select
@@ -243,16 +275,10 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
     )
     row = cur.fetchone()
     if not row:
-        return {"ok": False, "sport_key": sport_key, "reason": "not_found"}
+        return {"ok": False, "sport_key": sport_key, "reason": "not_found", "candidates": []}
 
     current_league_id = int(row[3] or 0)
-    if current_league_id > 0:
-        return {
-            "ok": True,
-            "sport_key": sport_key,
-            "league_id": current_league_id,
-            "reason": "already_resolved",
-        }
+    current_mapping_status = str(row[4] or "")
 
     competition_candidates, country_norm = _extract_competition_candidates_and_country(
         sport_key=row[0],
@@ -265,7 +291,8 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         select
           league_id,
           name,
-          country_name
+          country_name,
+          country_code
         from core.leagues
         order by league_id
         """
@@ -281,53 +308,105 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         country_name_norm = _norm_text(lg[2])
 
         if league_name_norm in competition_candidates and country_norm and country_norm == country_name_norm:
-            exact_matches.append((league_id, lg[1], lg[2]))
+            exact_matches.append((league_id, lg[1], lg[2], lg[3]))
         elif league_name_norm in competition_candidates:
-            name_only_matches.append((league_id, lg[1], lg[2]))
+            name_only_matches.append((league_id, lg[1], lg[2], lg[3]))
 
-    chosen = None
-    confidence = None
-    notes = None
+    candidates = []
+    seen_ids: set[int] = set()
+    rank = 0
+    for match_reason, bucket in (("exact_name_country", exact_matches), ("unique_name", name_only_matches)):
+        for match in bucket:
+            league_id = int(match[0])
+            if league_id in seen_ids:
+                continue
+            seen_ids.add(league_id)
+            rank += 1
+            candidates.append(_serialize_league_candidate(match, match_reason, rank))
+            if len(candidates) >= max(1, int(limit)):
+                break
+        if len(candidates) >= max(1, int(limit)):
+            break
 
-    if len(exact_matches) == 1:
-        chosen = exact_matches[0]
+    suggested_candidate = None
+    reason = "no_match"
+    can_auto_resolve = False
+
+    if current_league_id > 0:
+        suggested_candidate = {
+            "league_id": current_league_id,
+            "name": None,
+            "country_name": None,
+            "country_code": None,
+            "match_reason": "already_resolved",
+            "rank": 1,
+        }
+        reason = "already_resolved"
+        can_auto_resolve = True
+    elif len(exact_matches) == 1:
+        suggested_candidate = _serialize_league_candidate(exact_matches[0], "exact_name_country", 1)
+        reason = "exact_name_country"
+        can_auto_resolve = True
+    elif len(exact_matches) > 1:
+        reason = "ambiguous_exact_matches"
+    elif len(name_only_matches) == 1:
+        suggested_candidate = _serialize_league_candidate(name_only_matches[0], "unique_name", 1)
+        reason = "unique_name"
+        can_auto_resolve = True
+    elif len(name_only_matches) > 1:
+        reason = "ambiguous_name_matches"
+
+    return {
+        "ok": True,
+        "sport_key": str(row[0]),
+        "sport_title": str(row[1]) if row[1] is not None else None,
+        "sport_group": str(row[2]) if row[2] is not None else None,
+        "current_league_id": current_league_id,
+        "current_mapping_status": current_mapping_status or None,
+        "competition_candidates": competition_candidates,
+        "country_hint": country_norm,
+        "reason": reason,
+        "can_auto_resolve": can_auto_resolve,
+        "suggested_candidate": suggested_candidate,
+        "candidates": candidates,
+    }
+
+
+def _auto_resolve_single_league(cur, sport_key: str) -> dict:
+    preview = _build_league_resolution_preview(cur, sport_key, limit=10)
+    if not preview.get("ok"):
+        return preview
+
+    current_league_id = int(preview.get("current_league_id") or 0)
+    if current_league_id > 0:
+        return {
+            "ok": True,
+            "sport_key": sport_key,
+            "league_id": current_league_id,
+            "reason": "already_resolved",
+            "suggested_candidate": preview.get("suggested_candidate"),
+        }
+
+    suggested_candidate = preview.get("suggested_candidate") or {}
+    if not preview.get("can_auto_resolve") or int(suggested_candidate.get("league_id") or 0) <= 0:
+        return {
+            "ok": False,
+            "sport_key": sport_key,
+            "reason": str(preview.get("reason") or "no_match"),
+            "competition_candidates": preview.get("competition_candidates") or [],
+            "country_hint": preview.get("country_hint"),
+            "candidates": preview.get("candidates") or [],
+        }
+
+    league_id = int(suggested_candidate["league_id"])
+    match_reason = str(suggested_candidate.get("match_reason") or "")
+
+    if match_reason == "exact_name_country":
         confidence = 0.99
         notes = "auto-resolved by exact name+country"
-    elif len(exact_matches) > 1:
-        return {
-            "ok": False,
-            "sport_key": sport_key,
-            "reason": "ambiguous_exact_matches",
-            "candidates": [
-                {"league_id": m[0], "name": m[1], "country_name": m[2]}
-                for m in exact_matches
-            ],
-        }
-    elif len(name_only_matches) == 1:
-        chosen = name_only_matches[0]
+    else:
         confidence = 0.85
         notes = "auto-resolved by unique name"
-    elif len(name_only_matches) > 1:
-        return {
-            "ok": False,
-            "sport_key": sport_key,
-            "reason": "ambiguous_name_matches",
-            "candidates": [
-                {"league_id": m[0], "name": m[1], "country_name": m[2]}
-                for m in name_only_matches
-            ],
-        }
-
-    if not chosen:
-        return {
-            "ok": False,
-            "sport_key": sport_key,
-            "reason": "no_match",
-            "competition_candidates": competition_candidates,
-            "country_norm": country_norm,
-        }
-
-    league_id = int(chosen[0])
 
     mapping_source = "auto_high_conf" if (confidence or 0) >= 0.95 else "auto_low_conf"
 
@@ -359,6 +438,7 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         "reason": "resolved",
         "confidence": confidence,
         "notes": notes,
+        "suggested_candidate": suggested_candidate,
     }
 
 @router.post("/odds/refresh")
@@ -421,6 +501,258 @@ def admin_ops_pipeline_run(
 ):
     return _run_admin_job("update_pipeline_run", update_pipeline_run, only_sport_key=only_sport_key)
 
+@router.get("/pipeline/health")
+def admin_ops_pipeline_health(
+    lookback_days: int = Query(default=5, ge=1, le=30),
+):
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                select max(fetched_at_utc)
+                from raw.api_responses
+                where provider = 'apifootball'
+                  and endpoint = 'fixtures'
+                  and ok = true
+            """)
+            raw_fixtures_last_ok_at_utc = cur.fetchone()[0]
+
+            cur.execute("""
+                select max(updated_at_utc)
+                from core.fixtures
+            """)
+            core_fixtures_last_updated_at_utc = cur.fetchone()[0]
+
+            cur.execute("""
+                select max(updated_at_utc)
+                from odds.odds_events
+            """)
+            odds_events_last_updated_at_utc = cur.fetchone()[0]
+
+            cur.execute("""
+                select max(captured_at_utc)
+                from odds.odds_snapshots_1x2
+            """)
+            odds_snapshots_last_captured_at_utc = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                select
+                  count(*) as fixtures_total,
+                  count(*) filter (where is_finished = true) as fixtures_finished,
+                  count(*) filter (
+                    where goals_home is not null and goals_away is not null
+                  ) as fixtures_with_goals,
+                  count(*) filter (
+                    where kickoff_utc < now()
+                      and status_short = 'NS'
+                  ) as fixtures_past_due_ns
+                from core.fixtures
+                where kickoff_utc >= now() - (%(lookback_days)s || ' days')::interval
+                  and kickoff_utc <= now()
+                """,
+                {"lookback_days": int(lookback_days)},
+            )
+            row = cur.fetchone()
+
+            cur.execute("""
+                select
+                  count(*) filter (
+                    where updated_at_utc >= now() - interval '24 hours'
+                      and status like 'failed%%'
+                  ) as failed_24h,
+                  count(*) filter (
+                    where updated_at_utc >= now() - interval '7 days'
+                      and status like 'failed%%'
+                  ) as failed_7d
+                from ops.ops_job_runs
+            """)
+            failed_row = cur.fetchone()
+
+            cur.execute("""
+                select
+                  job_key,
+                  run_id,
+                  status,
+                  scope_key,
+                  sport_key,
+                  started_at_utc,
+                  finished_at_utc,
+                  duration_ms,
+                  error_json
+                from (
+                  select
+                    run_id,
+                    job_key,
+                    status,
+                    scope_key,
+                    sport_key,
+                    started_at_utc,
+                    finished_at_utc,
+                    duration_ms,
+                    error_json,
+                    row_number() over (
+                      partition by job_key
+                      order by run_id desc
+                    ) as rn
+                  from ops.ops_job_runs
+                  where job_key in ('update_pipeline_run', 'pipeline_run_all')
+                ) t
+                where rn = 1
+                order by job_key asc
+            """)
+            last_run_rows = cur.fetchall() or []
+
+    last_runs: Dict[str, Any] = {
+        "update_pipeline_run": None,
+        "pipeline_run_all": None,
+    }
+
+    for r in last_run_rows:
+        last_runs[str(r[0])] = {
+            "run_id": int(r[1]),
+            "status": str(r[2]),
+            "scope_key": str(r[3]) if r[3] is not None else None,
+            "sport_key": str(r[4]) if r[4] is not None else None,
+            "started_at_utc": _iso_dt(r[5]),
+            "finished_at_utc": _iso_dt(r[6]),
+            "duration_ms": int(r[7]) if r[7] is not None else None,
+            "error": _json_value(r[8]),
+        }
+
+    return {
+        "ok": True,
+        "generated_at_utc": _iso_dt(raw_fixtures_last_ok_at_utc) or _iso_dt(core_fixtures_last_updated_at_utc),
+        "freshness": {
+            "raw_fixtures_last_ok_at_utc": _iso_dt(raw_fixtures_last_ok_at_utc),
+            "core_fixtures_last_updated_at_utc": _iso_dt(core_fixtures_last_updated_at_utc),
+            "odds_events_last_updated_at_utc": _iso_dt(odds_events_last_updated_at_utc),
+            "odds_snapshots_last_captured_at_utc": _iso_dt(odds_snapshots_last_captured_at_utc),
+        },
+        "core_checks": {
+            "lookback_days": int(lookback_days),
+            "fixtures_total": int(row[0] or 0),
+            "fixtures_finished": int(row[1] or 0),
+            "fixtures_with_goals": int(row[2] or 0),
+            "fixtures_past_due_ns": int(row[3] or 0),
+        },
+        "failed_runs": {
+            "last_24h": int(failed_row[0] or 0),
+            "last_7d": int(failed_row[1] or 0),
+        },
+        "last_runs": last_runs,
+    }
+
+@router.get("/runs/recent")
+def admin_ops_runs_recent(
+    limit: int = Query(default=50, ge=1, le=200),
+    job_key: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+):
+    sql = """
+      select
+        run_id,
+        job_key,
+        trigger_source,
+        requested_by,
+        scope_type,
+        scope_key,
+        sport_key,
+        status,
+        block_reason,
+        result_json,
+        counters_json,
+        error_json,
+        started_at_utc,
+        finished_at_utc,
+        duration_ms,
+        updated_at_utc
+      from ops.ops_job_runs
+      where (%(job_key)s::text is null or job_key = %(job_key)s::text)
+        and (%(status)s::text is null or status = %(status)s::text)
+      order by run_id desc
+      limit %(limit)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "limit": int(limit),
+                    "job_key": job_key,
+                    "status": status,
+                },
+            )
+            rows = cur.fetchall() or []
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "run_id": int(r[0]),
+                "job_key": str(r[1]),
+                "trigger_source": str(r[2]) if r[2] is not None else None,
+                "requested_by": str(r[3]) if r[3] is not None else None,
+                "scope_type": str(r[4]) if r[4] is not None else None,
+                "scope_key": str(r[5]) if r[5] is not None else None,
+                "sport_key": str(r[6]) if r[6] is not None else None,
+                "status": str(r[7]),
+                "block_reason": str(r[8]) if r[8] is not None else None,
+                "result": _json_value(r[9]),
+                "counters": _json_value(r[10]),
+                "error": _json_value(r[11]),
+                "started_at_utc": _iso_dt(r[12]),
+                "finished_at_utc": _iso_dt(r[13]),
+                "duration_ms": int(r[14]) if r[14] is not None else None,
+                "updated_at_utc": _iso_dt(r[15]),
+            }
+        )
+
+    return {"ok": True, "items": items, "count": len(items)}
+
+@router.get("/runs/{run_id}/events")
+def admin_ops_run_events(
+    run_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    sql = """
+      select
+        attempt_id,
+        event_type,
+        event_level,
+        message,
+        payload_json,
+        created_at_utc
+      from ops.ops_job_events
+      where run_id = %(run_id)s
+      order by created_at_utc asc
+      limit %(limit)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"run_id": int(run_id), "limit": int(limit)})
+            rows = cur.fetchall() or []
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "attempt_id": int(r[0]) if r[0] is not None else None,
+                "event_type": str(r[1]),
+                "event_level": str(r[2]),
+                "message": str(r[3]) if r[3] is not None else None,
+                "payload": _json_value(r[4]),
+                "created_at_utc": _iso_dt(r[5]),
+            }
+        )
+
+    return {
+        "ok": True,
+        "run_id": int(run_id),
+        "items": items,
+        "count": len(items),
+    }
 
 @router.post("/odds/league_map/gap_scan")
 def admin_ops_league_map_gap_scan(default_enabled: bool = False):
@@ -496,6 +828,109 @@ def admin_ops_league_map_pending(limit: int = 200):
 def admin_ops_league_map_autoclassify():
     return _run_admin_job("odds_league_autoclassify", odds_league_autoclassify)
 
+@router.post("/odds/league_map/discover_candidates")
+def admin_ops_league_map_discover_candidates(
+    default_enabled: bool = False,
+    auto_resolve: bool = True,
+):
+    catalog_sync = _run_admin_job("odds_catalog_sync", sync_odds_sport_catalog)
+    gap_scan = _run_admin_job(
+        "odds_league_gap_scan",
+        odds_league_gap_scan,
+        default_enabled=default_enabled,
+    )
+    autoclassify = _run_admin_job("odds_league_autoclassify", odds_league_autoclassify)
+
+    auto_resolve_result: Dict[str, Any] = {
+        "ok": True,
+        "skipped": not bool(auto_resolve),
+        "count": 0,
+        "resolved_count": 0,
+        "already_resolved_count": 0,
+        "failed_count": 0,
+        "items": [],
+    }
+
+    if auto_resolve:
+        with pg_conn() as conn:
+            conn.autocommit = False
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select m.sport_key
+                    from odds.odds_league_map m
+                    where coalesce(m.league_id, 0) = 0
+                    order by m.sport_key
+                    """
+                )
+                sport_keys = [r[0] for r in (cur.fetchall() or [])]
+
+                items = []
+                resolved_count = 0
+                already_resolved_count = 0
+                failed_count = 0
+
+                for sport_key in sport_keys:
+                    out = _auto_resolve_single_league(cur, sport_key)
+                    items.append(out)
+
+                    if out.get("reason") == "resolved":
+                        resolved_count += 1
+                    elif out.get("reason") == "already_resolved":
+                        already_resolved_count += 1
+                    else:
+                        failed_count += 1
+
+            conn.commit()
+
+        auto_resolve_result = {
+            "ok": True,
+            "skipped": False,
+            "count": len(sport_keys),
+            "resolved_count": resolved_count,
+            "already_resolved_count": already_resolved_count,
+            "failed_count": failed_count,
+            "items": items,
+        }
+
+    return {
+        "ok": bool(catalog_sync.get("ok"))
+        and bool(gap_scan.get("ok"))
+        and bool(autoclassify.get("ok"))
+        and bool(auto_resolve_result.get("ok", True)),
+        "steps": {
+            "catalog_sync": catalog_sync,
+            "gap_scan": gap_scan,
+            "autoclassify": autoclassify,
+            "auto_resolve": auto_resolve_result,
+        },
+        "summary": {
+            "catalog_upserted": int((catalog_sync.get("counters") or {}).get("catalog_upserted") or 0),
+            "sports_seen": int((catalog_sync.get("counters") or {}).get("sports_seen") or 0),
+            "inserted": int((gap_scan.get("counters") or {}).get("inserted") or 0),
+            "inserted_pending": int((gap_scan.get("counters") or {}).get("inserted_pending") or 0),
+            "inserted_ignored": int((gap_scan.get("counters") or {}).get("inserted_ignored") or 0),
+            "ignored": int((autoclassify.get("counters") or {}).get("ignored") or 0),
+            "resolved_count": int(auto_resolve_result.get("resolved_count") or 0),
+            "already_resolved_count": int(auto_resolve_result.get("already_resolved_count") or 0),
+            "failed_count": int(auto_resolve_result.get("failed_count") or 0),
+        },
+    }
+
+
+@router.get("/odds/league_map/suggestions")
+def admin_ops_league_map_suggestions(
+    sport_key: str = Query(..., min_length=3),
+    limit: int = Query(default=5, ge=1, le=20),
+):
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            preview = _build_league_resolution_preview(cur, sport_key, limit=limit)
+
+    if not preview.get("ok"):
+        raise HTTPException(status_code=404, detail=preview)
+
+    return preview
 
 @router.post("/odds/league_map/approve")
 def admin_ops_league_map_approve(

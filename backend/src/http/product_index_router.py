@@ -9,14 +9,11 @@ from fastapi import APIRouter, Query
 from src.db.pg import pg_conn
 from src.product.model_registry import get_active_model_version
 from src.http.odds_router import (
-    OddsBook,
-    EdgeSummary,
     OddsEventRow,
     OddsEventsResponse,
     _fetch_latest_books_for_events,
-    _market_probs_from_odds,
-    _edge,
     _build_snapshot_summary,
+    _build_edge_summary_from_books,
 )
 
 router = APIRouter(prefix="/product", tags=["product"])
@@ -142,69 +139,15 @@ def product_index(
                 match_score = 0.0
 
             edge_summary = None
-            if has_model and (odds_home is not None or odds_draw is not None or odds_away is not None):
+            if has_model:
                 probs_block = {
                     "H": float(probs_1x2["home"]),
                     "D": float(probs_1x2["draw"]),
                     "A": float(probs_1x2["away"]),
                 }
 
-                mkt = _market_probs_from_odds(
-                    float(odds_home) if odds_home is not None else None,
-                    float(odds_draw) if odds_draw is not None else None,
-                    float(odds_away) if odds_away is not None else None,
-                )
-                novig = mkt.get("novig") or {}
-
-                edges = {
-                    "H": _edge(probs_block.get("H"), novig.get("H")),
-                    "D": _edge(probs_block.get("D"), novig.get("D")),
-                    "A": _edge(probs_block.get("A"), novig.get("A")),
-                }
-
-                best_outcome = None
-                best_edge = None
-                for k in ["H", "D", "A"]:
-                    v = edges.get(k)
-                    if v is None:
-                        continue
-                    if best_edge is None or v > best_edge:
-                        best_edge = v
-                        best_outcome = k
-
-                best_odd = None
-                best_book_key = None
-                best_book_name = None
-                market_books_count = 0
-                market_min_odd = None
-                market_max_odd = None
-
                 books = books_map.get(str(event_id), []) or []
-                if best_outcome:
-                    for b in books:
-                        o = (b.odds_1x2 or {}).get(best_outcome)
-                        if o is None:
-                            continue
-                        odd = float(o)
-                        market_books_count += 1
-                        market_min_odd = odd if market_min_odd is None else min(market_min_odd, odd)
-                        market_max_odd = odd if market_max_odd is None else max(market_max_odd, odd)
-
-                        if best_odd is None or odd > best_odd:
-                            best_odd = odd
-                            best_book_key = b.key
-                            best_book_name = b.name
-
-                edge_summary = EdgeSummary(
-                    best_outcome=best_outcome,
-                    best_edge=float(best_edge) if best_edge is not None else None,
-                    best_odd=best_odd,
-                    best_book_key=best_book_key,
-                    best_book_name=best_book_name,
-                    market_books_count=int(market_books_count),
-                    market_min_odd=market_min_odd,
-                    market_max_odd=market_max_odd,
-                )
+                edge_summary = _build_edge_summary_from_books(probs_block, books)
 
             events.append(
                 OddsEventRow(

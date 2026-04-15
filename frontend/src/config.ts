@@ -38,3 +38,6 @@ export const ENABLE_PUBLIC_FREE_ANON_EMBED =
 
 export const ENABLE_PUBLIC_PRODUCT_LAYER =
   envFlag(import.meta.env.VITE_ENABLE_PUBLIC_PRODUCT_LAYER, false);
+
+export const PRODUCT_APP_REQUIRE_LOGIN =
+  envFlag(import.meta.env.VITE_PRODUCT_APP_REQUIRE_LOGIN, true);
