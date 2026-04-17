@@ -81,6 +81,98 @@ export type BillingSubscriptionResponse = {
   message?: string;
 };
 
+export type BillingChangeDecision = {
+  decision_code:
+    | "noop"
+    | "upgrade_now"
+    | "downgrade_period_end"
+    | "cycle_upgrade_now"
+    | "cycle_downgrade_period_end"
+    | string;
+  effective_mode: "none" | "immediate" | "period_end" | string;
+  reason_code?: string | null;
+};
+
+export type BillingChangePreviewCurrent = {
+  subscription_id: number;
+  plan_price_id: number | null;
+  plan_code: string;
+  billing_cycle: BillingCycle | null;
+  currency_code: string | null;
+  billing_status: string | null;
+  cancel_at_period_end: boolean;
+  provider: string | null;
+  provider_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  updated_at_utc?: string | null;
+  unit_amount_cents: number | null;
+  price_version?: string | null;
+};
+
+export type BillingChangePreviewTarget = {
+  plan_price_id: number | null;
+  plan_code: string;
+  billing_cycle: BillingCycle | null;
+  currency_code: string | null;
+  unit_amount_cents: number | null;
+  price_version?: string | null;
+};
+
+export type BillingChangePreviewData = {
+  calculation_mode: "classification_only" | "stripe_invoice_preview" | string;
+  full_period_delta_cents: number | null;
+  amount_due_now_cents: number | null;
+  charge_cents?: number | null;
+  credit_cents?: number | null;
+  proration_date?: number | null;
+  line_items?: Array<{
+    amount_cents: number;
+    currency_code: string;
+    description: string;
+  }>;
+  currency_code?: string | null;
+};
+
+export type BillingChangePolicy = {
+  can_apply_now: boolean;
+  can_schedule: boolean;
+  requires_stripe_proration_preview: boolean;
+};
+
+export type BillingChangePreviewResponse = {
+  ok: boolean;
+  billing_runtime?: "sandbox" | "live" | string;
+  current: BillingChangePreviewCurrent;
+  target: BillingChangePreviewTarget;
+  decision: BillingChangeDecision;
+  preview: BillingChangePreviewData;
+  policy: BillingChangePolicy;
+};
+
+export type BillingChangeApplyResponse = BillingSubscriptionResponse & {
+  applied: boolean;
+  pending_update: boolean;
+  decision?: BillingChangeDecision;
+  billing_runtime?: "sandbox" | "live" | string;
+  latest_invoice_id?: string | null;
+  payment_intent_id?: string | null;
+  payment_intent_status?: string | null;
+  pending_update_expires_at?: string | null;
+  sync_result?: Record<string, any> | null;
+};
+
+export type BillingChangePreviewPayload = {
+  target_plan_code: Exclude<PlanId, "FREE_ANON" | "FREE">;
+  target_billing_cycle: BillingCycle;
+  currency_code: "BRL" | "USD";
+};
+
+export type BillingChangeApplyPayload = BillingChangePreviewPayload & {
+  preview_proration_date?: number | null;
+  preview_subscription_updated_at?: string | null;
+};
+
 export type BillingCheckoutSessionSyncResponse = BillingSubscriptionResponse & {
   synced: boolean;
   checkout_session_id: string;
@@ -178,6 +270,24 @@ export async function fetchBillingCheckoutSessionStatus(
 
 export async function fetchBillingSubscription(): Promise<BillingSubscriptionResponse> {
   return requestBilling<BillingSubscriptionResponse>("/billing/subscription");
+}
+
+export async function postBillingChangePreview(
+  payload: BillingChangePreviewPayload
+): Promise<BillingChangePreviewResponse> {
+  return requestBilling<BillingChangePreviewResponse, BillingChangePreviewPayload>(
+    "/billing/subscription/change-preview",
+    payload
+  );
+}
+
+export async function postBillingChangeApply(
+  payload: BillingChangeApplyPayload
+): Promise<BillingChangeApplyResponse> {
+  return requestBilling<BillingChangeApplyResponse, BillingChangeApplyPayload>(
+    "/billing/subscription/change-apply",
+    payload
+  );
 }
 
 export async function postBillingCancelRenewal(): Promise<BillingSubscriptionResponse> {
