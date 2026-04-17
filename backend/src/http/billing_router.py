@@ -11,6 +11,7 @@ from src.billing.service import (
     create_checkout_session_for_user,
     get_billing_subscription_summary_for_user,
     list_billing_catalog,
+    preview_subscription_change_for_user,
     process_stripe_webhook_event,
     resume_subscription_renewal_for_user,
     sync_checkout_session_for_user,
@@ -192,6 +193,35 @@ def billing_subscription(request: Request):
             content={"ok": False, "code": str(exc), "message": str(exc)},
         )
 
+@router.post("/subscription/change-preview")
+def billing_subscription_change_preview(
+    request: Request,
+    payload: dict = Body(...),
+):
+    auth_payload = _require_authenticated_context(request)
+    if isinstance(auth_payload, JSONResponse):
+        return auth_payload
+
+    user_id, billing_runtime = _extract_user_context(auth_payload)
+
+    try:
+        return preview_subscription_change_for_user(
+            user_id,
+            target_plan_code=str(payload.get("target_plan_code") or ""),
+            target_billing_cycle=str(payload.get("target_billing_cycle") or payload.get("billing_cycle") or ""),
+            currency_code=str(payload.get("currency_code") or "BRL"),
+            billing_runtime=billing_runtime,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
+    except RuntimeError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
 
 @router.post("/subscription/cancel-renewal")
 def billing_subscription_cancel_renewal(request: Request):

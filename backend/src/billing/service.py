@@ -18,6 +18,20 @@ VALID_BILLING_CYCLES = {"monthly", "quarterly", "annual"}
 VALID_CURRENCY_CODES = {"BRL", "USD"}
 VALID_BILLING_RUNTIMES = {"sandbox", "live"}
 
+PLAN_CHANGE_PLAN_RANK = {
+    "BASIC": 1,
+    "LIGHT": 2,
+    "PRO": 3,
+}
+
+PLAN_CHANGE_CYCLE_RANK = {
+    "monthly": 1,
+    "quarterly": 2,
+    "annual": 3,
+}
+
+PLAN_CHANGE_ALLOWED_BILLING_STATUSES = {"active", "trialing"}
+
 SUBSCRIPTION_STATUS_MAP = {
     "trialing": "trialing",
     "active": "active",
@@ -638,6 +652,100 @@ def _resolve_plan_price_by_price_code(price_code: Optional[str]) -> Optional[Dic
         "currency_code": str(row[4]),
     }
 
+def _resolve_plan_price_detail_by_id(plan_price_id: Optional[Any]) -> Optional[Dict[str, Any]]:
+    if plan_price_id in (None, ""):
+        return None
+
+    try:
+        normalized_plan_price_id = int(plan_price_id)
+    except Exception:
+        return None
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    plan_price_id,
+                    price_code,
+                    plan_code,
+                    billing_cycle,
+                    currency_code,
+                    unit_amount_cents,
+                    price_version
+                FROM billing.plan_prices
+                WHERE plan_price_id = %(plan_price_id)s
+                LIMIT 1
+                """,
+                {"plan_price_id": normalized_plan_price_id},
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        return None
+
+    return {
+        "plan_price_id": int(row[0]),
+        "price_code": str(row[1]),
+        "plan_code": str(row[2]),
+        "billing_cycle": str(row[3]),
+        "currency_code": str(row[4]),
+        "unit_amount_cents": int(row[5]) if row[5] is not None else None,
+        "price_version": str(row[6]) if row[6] is not None else None,
+    }
+
+def _resolve_active_plan_price(
+    *,
+    plan_code: str,
+    billing_cycle: str,
+    currency_code: str,
+) -> Optional[Dict[str, Any]]:
+    normalized_plan_code = _normalize_plan_code(plan_code)
+    normalized_billing_cycle = _normalize_billing_cycle(billing_cycle)
+    normalized_currency_code = _normalize_currency_code(currency_code)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    plan_price_id,
+                    price_code,
+                    plan_code,
+                    billing_cycle,
+                    currency_code,
+                    unit_amount_cents,
+                    price_version
+                FROM billing.plan_prices
+                WHERE plan_code = %(plan_code)s
+                  AND billing_cycle = %(billing_cycle)s
+                  AND currency_code = %(currency_code)s
+                  AND active = TRUE
+                ORDER BY sort_order ASC, plan_price_id ASC
+                LIMIT 1
+                """,
+                {
+                    "plan_code": normalized_plan_code,
+                    "billing_cycle": normalized_billing_cycle,
+                    "currency_code": normalized_currency_code,
+                },
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        return None
+
+    return {
+        "plan_price_id": int(row[0]),
+        "price_code": str(row[1]),
+        "plan_code": str(row[2]),
+        "billing_cycle": str(row[3]),
+        "currency_code": str(row[4]),
+        "unit_amount_cents": int(row[5]) if row[5] is not None else None,
+        "price_version": str(row[6]) if row[6] is not None else None,
+    }
 
 def _resolve_plan_price_from_checkout_session_payload(checkout_session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     metadata = checkout_session.get("metadata") or {}
@@ -706,6 +814,59 @@ def _normalize_subscription_row_status(billing_status: Optional[str]) -> str:
 def _is_terminal_billing_status(billing_status: Optional[str]) -> bool:
     value = str(billing_status or "").strip().lower()
     return value in {"canceled", "cancelled", "expired", "incomplete_expired"}
+
+def _classify_subscription_change(
+    *,
+    current_plan_code: str,
+    current_billing_cycle: str,
+    target_plan_code: str,
+    target_billing_cycle: str,
+) -> Dict[str, str]:
+    current_plan = _normalize_plan_code(current_plan_code)
+    current_cycle = _normalize_billing_cycle(current_billing_cycle)
+    target_plan = _normalize_plan_code(target_plan_code)
+    target_cycle = _normalize_billing_cycle(target_billing_cycle)
+
+    if current_plan == target_plan and current_cycle == target_cycle:
+        return {
+            "decision_code": "noop",
+            "effective_mode": "none",
+        }
+
+    current_plan_rank = PLAN_CHANGE_PLAN_RANK[current_plan]
+    target_plan_rank = PLAN_CHANGE_PLAN_RANK[target_plan]
+
+    if target_plan_rank > current_plan_rank:
+        return {
+            "decision_code": "upgrade_now",
+            "effective_mode": "immediate",
+        }
+
+    if target_plan_rank < current_plan_rank:
+        return {
+            "decision_code": "downgrade_period_end",
+            "effective_mode": "period_end",
+        }
+
+    current_cycle_rank = PLAN_CHANGE_CYCLE_RANK[current_cycle]
+    target_cycle_rank = PLAN_CHANGE_CYCLE_RANK[target_cycle]
+
+    if target_cycle_rank > current_cycle_rank:
+        return {
+            "decision_code": "cycle_upgrade_now",
+            "effective_mode": "immediate",
+        }
+
+    if target_cycle_rank < current_cycle_rank:
+        return {
+            "decision_code": "cycle_downgrade_period_end",
+            "effective_mode": "period_end",
+        }
+
+    return {
+        "decision_code": "noop",
+        "effective_mode": "none",
+    }
 
 def _build_entitlements_for_plan(plan_code: str) -> Dict[str, Any]:
     plan = str(plan_code or "FREE").strip().upper()
@@ -1585,6 +1746,129 @@ def get_billing_subscription_summary_for_user(
         },
     }
 
+def preview_subscription_change_for_user(
+    user_id: int,
+    *,
+    target_plan_code: str,
+    target_billing_cycle: str,
+    currency_code: str,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    normalized_target_plan_code = _normalize_plan_code(target_plan_code)
+    normalized_target_billing_cycle = _normalize_billing_cycle(target_billing_cycle)
+    normalized_currency_code = _normalize_currency_code(currency_code)
+
+    effective = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+    if effective is None:
+        raise ValueError("subscription_not_found")
+
+    provider = str(effective.get("provider") or "").strip().lower()
+    provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
+    billing_status = str(effective.get("billing_status") or "").strip().lower()
+    cancel_at_period_end = bool(effective.get("cancel_at_period_end"))
+
+    if provider != "stripe" or not provider_subscription_id or _is_terminal_billing_status(billing_status):
+        raise ValueError("subscription_not_manageable")
+
+    current_plan_code = _normalize_plan_code(str(effective.get("plan_code") or ""))
+    current_billing_cycle = _normalize_billing_cycle(str(effective.get("billing_cycle") or ""))
+    current_currency_code = _normalize_currency_code(str(effective.get("currency_code") or normalized_currency_code))
+
+    current_price = _resolve_plan_price_detail_by_id(effective.get("plan_price_id"))
+    if current_price is None:
+        current_price = _resolve_active_plan_price(
+            plan_code=current_plan_code,
+            billing_cycle=current_billing_cycle,
+            currency_code=current_currency_code,
+        )
+
+    target_price = _resolve_active_plan_price(
+        plan_code=normalized_target_plan_code,
+        billing_cycle=normalized_target_billing_cycle,
+        currency_code=normalized_currency_code,
+    )
+    if target_price is None:
+        raise ValueError("plan_price_not_found_for_currency")
+
+    decision = _classify_subscription_change(
+        current_plan_code=current_plan_code,
+        current_billing_cycle=current_billing_cycle,
+        target_plan_code=normalized_target_plan_code,
+        target_billing_cycle=normalized_target_billing_cycle,
+    )
+
+    reason_code: Optional[str] = None
+    can_apply_now = False
+    can_schedule = False
+
+    if decision["decision_code"] == "noop":
+        reason_code = "subscription_change_same_target"
+    elif cancel_at_period_end:
+        reason_code = "subscription_change_blocked_cancel_at_period_end"
+    elif billing_status not in PLAN_CHANGE_ALLOWED_BILLING_STATUSES:
+        reason_code = "subscription_change_blocked_status"
+    else:
+        can_apply_now = decision["effective_mode"] == "immediate"
+        can_schedule = decision["effective_mode"] == "period_end"
+
+    current_unit_amount_cents = current_price.get("unit_amount_cents") if current_price else None
+    target_unit_amount_cents = target_price.get("unit_amount_cents") if target_price else None
+
+    full_period_delta_cents: Optional[int] = None
+    if (
+        current_unit_amount_cents is not None
+        and target_unit_amount_cents is not None
+        and current_currency_code == normalized_currency_code
+    ):
+        full_period_delta_cents = int(target_unit_amount_cents) - int(current_unit_amount_cents)
+
+    return {
+        "ok": True,
+        "billing_runtime": normalized_runtime,
+        "current": {
+            "subscription_id": effective.get("subscription_id"),
+            "plan_price_id": effective.get("plan_price_id"),
+            "plan_code": current_plan_code,
+            "billing_cycle": current_billing_cycle,
+            "currency_code": current_currency_code,
+            "billing_status": billing_status,
+            "cancel_at_period_end": cancel_at_period_end,
+            "provider": provider,
+            "provider_subscription_id": provider_subscription_id,
+            "current_period_start": effective.get("current_period_start"),
+            "current_period_end": effective.get("current_period_end"),
+            "unit_amount_cents": current_unit_amount_cents,
+            "price_version": (current_price or {}).get("price_version"),
+        },
+        "target": {
+            "plan_price_id": target_price.get("plan_price_id"),
+            "plan_code": normalized_target_plan_code,
+            "billing_cycle": normalized_target_billing_cycle,
+            "currency_code": normalized_currency_code,
+            "unit_amount_cents": target_unit_amount_cents,
+            "price_version": target_price.get("price_version"),
+        },
+        "decision": {
+            "decision_code": decision["decision_code"],
+            "effective_mode": decision["effective_mode"],
+            "reason_code": reason_code,
+        },
+        "preview": {
+            "calculation_mode": "classification_only",
+            "full_period_delta_cents": full_period_delta_cents,
+            "amount_due_now_cents": None,
+            "credit_cents": None,
+        },
+        "policy": {
+            "can_apply_now": can_apply_now,
+            "can_schedule": can_schedule,
+            "requires_stripe_proration_preview": can_apply_now,
+        },
+    }
 
 def _update_subscription_cancel_at_period_end(
     *,
