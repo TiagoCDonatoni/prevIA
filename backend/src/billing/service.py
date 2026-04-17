@@ -1859,11 +1859,13 @@ def get_billing_subscription_summary_for_user(
             "ok": True,
             "has_subscription": False,
             "subscription": None,
+            "scheduled_change": None,
             "actions": {
                 "can_checkout": True,
                 "can_change_plan": True,
                 "can_cancel_renewal": False,
                 "can_resume_renewal": False,
+                "can_cancel_scheduled_change": False,
             },
         }
 
@@ -1901,6 +1903,11 @@ def get_billing_subscription_summary_for_user(
         and not _is_terminal_billing_status(billing_status)
     )
 
+    scheduled_change = _get_scheduled_subscription_change(
+        effective.get("subscription_id"),
+        billing_runtime=normalized_runtime,
+    )
+
     return {
         "ok": True,
         "has_subscription": True,
@@ -1911,11 +1918,13 @@ def get_billing_subscription_summary_for_user(
             "currency_symbol": _currency_symbol(str(effective.get("currency_code") or "BRL")),
             "price_version": price_version,
         },
+        "scheduled_change": scheduled_change,
         "actions": {
             "can_checkout": not can_manage_stripe_subscription,
             "can_change_plan": True,
             "can_cancel_renewal": can_manage_stripe_subscription and not cancel_at_period_end,
             "can_resume_renewal": can_manage_stripe_subscription and cancel_at_period_end,
+            "can_cancel_scheduled_change": bool(scheduled_change),
         },
     }
 
@@ -1938,6 +1947,11 @@ def preview_subscription_change_for_user(
     )
     if effective is None:
         raise ValueError("subscription_not_found")
+
+    existing_scheduled_change = _get_scheduled_subscription_change(
+        effective.get("subscription_id"),
+        billing_runtime=normalized_runtime,
+    )
 
     provider = str(effective.get("provider") or "").strip().lower()
     provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
@@ -1991,6 +2005,8 @@ def preview_subscription_change_for_user(
 
     if decision["decision_code"] == "noop":
         reason_code = "subscription_change_same_target"
+    elif existing_scheduled_change is not None:
+        reason_code = "subscription_change_blocked_existing_scheduled_change"
     elif cancel_at_period_end:
         reason_code = "subscription_change_blocked_cancel_at_period_end"
     elif billing_status not in PLAN_CHANGE_ALLOWED_BILLING_STATUSES:
@@ -2236,6 +2252,316 @@ def apply_immediate_subscription_change_for_user(
         "payment_intent_id": payment_intent.get("id"),
         "payment_intent_status": payment_intent.get("status"),
         "sync_result": sync_result,
+        **summary,
+    }
+
+
+def schedule_period_end_subscription_change_for_user(
+    user_id: int,
+    *,
+    target_plan_code: str,
+    target_billing_cycle: str,
+    currency_code: str,
+    billing_runtime: str = "live",
+    preview_subscription_updated_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    normalized_target_plan_code = _normalize_plan_code(target_plan_code)
+    normalized_target_billing_cycle = _normalize_billing_cycle(target_billing_cycle)
+    normalized_currency_code = _normalize_currency_code(currency_code)
+
+    effective = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+    if effective is None:
+        raise ValueError("subscription_not_found")
+
+    if preview_subscription_updated_at:
+        current_updated_at = str(effective.get("updated_at_utc") or "").strip()
+        expected_updated_at = str(preview_subscription_updated_at or "").strip()
+        if current_updated_at and expected_updated_at and current_updated_at != expected_updated_at:
+            raise ValueError("subscription_change_preview_stale")
+
+    preview = preview_subscription_change_for_user(
+        user_id,
+        target_plan_code=normalized_target_plan_code,
+        target_billing_cycle=normalized_target_billing_cycle,
+        currency_code=normalized_currency_code,
+        billing_runtime=normalized_runtime,
+    )
+
+    decision = preview.get("decision") or {}
+    policy = preview.get("policy") or {}
+    target = preview.get("target") or {}
+    current = preview.get("current") or {}
+
+    if not bool(policy.get("can_schedule")):
+        raise ValueError(str(decision.get("reason_code") or "subscription_change_not_schedulable"))
+
+    decision_code = str(decision.get("decision_code") or "").strip()
+    if decision_code not in {"downgrade_period_end", "cycle_downgrade_period_end"}:
+        raise ValueError("subscription_change_requires_immediate_apply")
+
+    provider_subscription_id = str(current.get("provider_subscription_id") or "").strip()
+    if not provider_subscription_id:
+        raise ValueError("subscription_not_manageable")
+
+    current_subscription_id = current.get("subscription_id")
+    existing_scheduled = _get_scheduled_subscription_change(
+        current_subscription_id,
+        billing_runtime=normalized_runtime,
+    )
+    if existing_scheduled is not None:
+        raise ValueError("subscription_change_blocked_existing_scheduled_change")
+
+    target_plan_price_id = target.get("plan_price_id")
+    if target_plan_price_id in (None, ""):
+        raise ValueError("plan_price_not_found_for_currency")
+
+    target_provider_price_id = _resolve_provider_price_id_for_plan_price_id(
+        target_plan_price_id,
+        billing_runtime=normalized_runtime,
+    )
+    if not target_provider_price_id:
+        raise ValueError(f"stripe_price_not_configured_for_{normalized_runtime}")
+
+    settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=normalized_runtime)
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
+
+    stripe.api_key = runtime_config["secret_key"]
+
+    try:
+        current_subscription = stripe.Subscription.retrieve(provider_subscription_id)
+    except stripe.error.StripeError as exc:
+        raise RuntimeError("stripe_subscription_retrieve_failed") from exc
+
+    current_subscription_payload = current_subscription._to_dict_recursive()
+
+    existing_schedule_id = str(current_subscription_payload.get("schedule") or "").strip()
+    if existing_schedule_id:
+        raise ValueError("subscription_change_schedule_conflict")
+
+    primary_item = _extract_primary_subscription_item(current_subscription_payload)
+    current_provider_price_id = str(primary_item.get("provider_price_id") or "").strip()
+    quantity = int(primary_item.get("quantity") or 1)
+
+    if not current_provider_price_id:
+        raise RuntimeError("stripe_subscription_item_price_not_found")
+
+    current_period_start_raw = current_subscription_payload.get("current_period_start")
+    current_period_end_raw = current_subscription_payload.get("current_period_end")
+
+    try:
+        current_period_start = int(current_period_start_raw)
+        current_period_end = int(current_period_end_raw)
+    except Exception:
+        raise RuntimeError("stripe_subscription_period_not_found")
+
+    if current_period_end <= current_period_start:
+        raise RuntimeError("stripe_subscription_period_invalid")
+
+    try:
+        created_schedule = stripe.SubscriptionSchedule.create(
+            from_subscription=provider_subscription_id,
+            end_behavior="release",
+        )
+    except stripe.error.StripeError as exc:
+        stripe_detail = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+        raise RuntimeError(f"stripe_subscription_schedule_create_failed: {stripe_detail}") from exc
+
+    provider_schedule_id = str(getattr(created_schedule, "id", None) or "").strip()
+    if not provider_schedule_id:
+        raise RuntimeError("stripe_subscription_schedule_create_failed")
+
+    try:
+        updated_schedule = stripe.SubscriptionSchedule.modify(
+            provider_schedule_id,
+            end_behavior="release",
+            proration_behavior="none",
+            phases=[
+                {
+                    "start_date": current_period_start,
+                    "end_date": current_period_end,
+                    "items": [
+                        {
+                            "price": current_provider_price_id,
+                            "quantity": quantity,
+                        }
+                    ],
+                    "proration_behavior": "none",
+                },
+                {
+                    "start_date": current_period_end,
+                    "items": [
+                        {
+                            "price": target_provider_price_id,
+                            "quantity": quantity,
+                        }
+                    ],
+                    "proration_behavior": "none",
+                    "metadata": {
+                        "change_type": decision_code,
+                        "target_plan_code": normalized_target_plan_code,
+                        "target_billing_cycle": normalized_target_billing_cycle,
+                    },
+                },
+            ],
+        )
+    except stripe.error.StripeError as exc:
+        stripe_detail = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+        try:
+            stripe.SubscriptionSchedule.release(provider_schedule_id)
+        except Exception:
+            logger.exception(
+                "could not release schedule after failed schedule modify schedule_id=%s",
+                provider_schedule_id,
+            )
+        raise RuntimeError(f"stripe_subscription_schedule_update_failed: {stripe_detail}") from exc
+
+    updated_schedule_payload = updated_schedule._to_dict_recursive()
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO billing.subscription_change_requests (
+                    user_id,
+                    subscription_id,
+                    billing_runtime,
+                    status,
+                    change_type,
+                    from_plan_code,
+                    from_billing_cycle,
+                    to_plan_code,
+                    to_billing_cycle,
+                    currency_code,
+                    effective_at_utc,
+                    provider_schedule_id,
+                    preview_payload_json,
+                    created_at_utc,
+                    updated_at_utc
+                )
+                VALUES (
+                    %(user_id)s,
+                    %(subscription_id)s,
+                    %(billing_runtime)s,
+                    'scheduled',
+                    %(change_type)s,
+                    %(from_plan_code)s,
+                    %(from_billing_cycle)s,
+                    %(to_plan_code)s,
+                    %(to_billing_cycle)s,
+                    %(currency_code)s,
+                    %(effective_at_utc)s,
+                    %(provider_schedule_id)s,
+                    %(preview_payload_json)s::jsonb,
+                    NOW(),
+                    NOW()
+                )
+                """,
+                {
+                    "user_id": user_id,
+                    "subscription_id": int(current_subscription_id),
+                    "billing_runtime": normalized_runtime,
+                    "change_type": decision_code,
+                    "from_plan_code": str(current.get("plan_code") or ""),
+                    "from_billing_cycle": str(current.get("billing_cycle") or ""),
+                    "to_plan_code": normalized_target_plan_code,
+                    "to_billing_cycle": normalized_target_billing_cycle,
+                    "currency_code": normalized_currency_code,
+                    "effective_at_utc": _ts_from_unix(current_period_end),
+                    "provider_schedule_id": provider_schedule_id,
+                    "preview_payload_json": _json_dumps_safe(
+                        {
+                            "preview": preview,
+                            "updated_schedule": updated_schedule_payload,
+                        }
+                    ),
+                },
+            )
+        conn.commit()
+
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+
+    return {
+        "ok": True,
+        "scheduled": True,
+        "message": "subscription_change_scheduled",
+        "decision": decision,
+        "billing_runtime": normalized_runtime,
+        "provider_schedule_id": provider_schedule_id,
+        **summary,
+    }
+
+
+def cancel_scheduled_subscription_change_for_user(
+    user_id: int,
+    *,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
+    effective = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+    if effective is None:
+        raise ValueError("subscription_not_found")
+
+    scheduled_change = _get_scheduled_subscription_change(
+        effective.get("subscription_id"),
+        billing_runtime=normalized_runtime,
+    )
+    if scheduled_change is None:
+        raise ValueError("scheduled_change_not_found")
+
+    provider_schedule_id = str(scheduled_change.get("provider_schedule_id") or "").strip()
+    if not provider_schedule_id:
+        raise RuntimeError("scheduled_change_provider_schedule_not_found")
+
+    settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=normalized_runtime)
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
+
+    stripe.api_key = runtime_config["secret_key"]
+
+    try:
+        stripe.SubscriptionSchedule.release(provider_schedule_id)
+    except stripe.error.StripeError as exc:
+        stripe_detail = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+        raise RuntimeError(f"stripe_subscription_schedule_release_failed: {stripe_detail}") from exc
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE billing.subscription_change_requests
+                SET
+                    status = 'cancelled',
+                    updated_at_utc = NOW()
+                WHERE change_request_id = %(change_request_id)s
+                """,
+                {"change_request_id": int(scheduled_change["change_request_id"])},
+            )
+        conn.commit()
+
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+
+    return {
+        "ok": True,
+        "cancelled": True,
+        "message": "scheduled_change_cancelled",
+        "billing_runtime": normalized_runtime,
         **summary,
     }
 
@@ -2574,6 +2900,72 @@ def _safe_upsert_stripe_webhook_event(
             event.get("type"),
             status,
         )
+
+
+def _get_scheduled_subscription_change(
+    subscription_id: Optional[int],
+    *,
+    billing_runtime: str = "live",
+) -> Optional[Dict[str, Any]]:
+    if subscription_id in (None, ""):
+        return None
+
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    change_request_id,
+                    subscription_id,
+                    billing_runtime,
+                    status,
+                    change_type,
+                    from_plan_code,
+                    from_billing_cycle,
+                    to_plan_code,
+                    to_billing_cycle,
+                    currency_code,
+                    effective_at_utc,
+                    provider_schedule_id,
+                    created_at_utc,
+                    updated_at_utc
+                FROM billing.subscription_change_requests
+                WHERE subscription_id = %(subscription_id)s
+                  AND billing_runtime = %(billing_runtime)s
+                  AND status = 'scheduled'
+                ORDER BY updated_at_utc DESC, change_request_id DESC
+                LIMIT 1
+                """,
+                {
+                    "subscription_id": int(subscription_id),
+                    "billing_runtime": normalized_runtime,
+                },
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        return None
+
+    return {
+        "change_request_id": int(row[0]),
+        "subscription_id": int(row[1]),
+        "billing_runtime": str(row[2]),
+        "status": str(row[3]),
+        "change_type": str(row[4]),
+        "from_plan_code": str(row[5]),
+        "from_billing_cycle": str(row[6]),
+        "target_plan_code": str(row[7]),
+        "target_billing_cycle": str(row[8]),
+        "currency_code": str(row[9]),
+        "effective_at_utc": row[10].isoformat() if row[10] else None,
+        "provider_schedule_id": str(row[11]) if row[11] else None,
+        "created_at_utc": row[12].isoformat() if row[12] else None,
+        "updated_at_utc": row[13].isoformat() if row[13] else None,
+    }
+
 
 def _get_existing_stripe_webhook_event_status(
     event_id: str,

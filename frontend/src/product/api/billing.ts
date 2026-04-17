@@ -70,12 +70,31 @@ export type BillingSubscriptionActions = {
   can_change_plan: boolean;
   can_cancel_renewal: boolean;
   can_resume_renewal: boolean;
+  can_cancel_scheduled_change: boolean;
+};
+
+export type BillingScheduledChange = {
+  change_request_id: number;
+  subscription_id: number;
+  billing_runtime: "sandbox" | "live" | string;
+  status: "scheduled" | "applied" | "cancelled" | "failed" | string;
+  change_type: "downgrade_period_end" | "cycle_downgrade_period_end" | string;
+  from_plan_code: string;
+  from_billing_cycle: BillingCycle | string;
+  target_plan_code: string;
+  target_billing_cycle: BillingCycle | string;
+  currency_code: string;
+  effective_at_utc: string | null;
+  provider_schedule_id: string | null;
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
 };
 
 export type BillingSubscriptionResponse = {
   ok: boolean;
   has_subscription: boolean;
   subscription: BillingSubscriptionData | null;
+  scheduled_change?: BillingScheduledChange | null;
   actions: BillingSubscriptionActions;
   action?: "cancel_renewal" | "resume_renewal";
   message?: string;
@@ -171,6 +190,22 @@ export type BillingChangePreviewPayload = {
 export type BillingChangeApplyPayload = BillingChangePreviewPayload & {
   preview_proration_date?: number | null;
   preview_subscription_updated_at?: string | null;
+};
+
+export type BillingChangeSchedulePayload = BillingChangePreviewPayload & {
+  preview_subscription_updated_at?: string | null;
+};
+
+export type BillingChangeScheduleResponse = BillingSubscriptionResponse & {
+  scheduled: boolean;
+  decision?: BillingChangeDecision;
+  billing_runtime?: "sandbox" | "live" | string;
+  provider_schedule_id?: string | null;
+};
+
+export type BillingChangeCancelResponse = BillingSubscriptionResponse & {
+  cancelled: boolean;
+  billing_runtime?: "sandbox" | "live" | string;
 };
 
 export type BillingCheckoutSessionSyncResponse = BillingSubscriptionResponse & {
@@ -287,6 +322,22 @@ export async function postBillingChangeApply(
   return requestBilling<BillingChangeApplyResponse, BillingChangeApplyPayload>(
     "/billing/subscription/change-apply",
     payload
+  );
+}
+
+export async function postBillingChangeSchedule(
+  payload: BillingChangeSchedulePayload
+): Promise<BillingChangeScheduleResponse> {
+  return requestBilling<BillingChangeScheduleResponse, BillingChangeSchedulePayload>(
+    "/billing/subscription/change-schedule",
+    payload
+  );
+}
+
+export async function postBillingChangeCancel(): Promise<BillingChangeCancelResponse> {
+  return requestBilling<BillingChangeCancelResponse, Record<string, never>>(
+    "/billing/subscription/change-cancel",
+    {}
   );
 }
 

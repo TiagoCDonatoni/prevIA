@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from src.auth.service import get_auth_me_payload
 from src.billing.service import (
     apply_immediate_subscription_change_for_user,
+    cancel_scheduled_subscription_change_for_user,
     cancel_subscription_renewal_for_user,
     create_checkout_session_for_user,
     get_billing_subscription_summary_for_user,
@@ -15,6 +16,7 @@ from src.billing.service import (
     preview_subscription_change_for_user,
     process_stripe_webhook_event,
     resume_subscription_renewal_for_user,
+    schedule_period_end_subscription_change_for_user,
     sync_checkout_session_for_user,
 )
 from src.core.settings import load_settings
@@ -245,6 +247,63 @@ def billing_subscription_change_apply(
             billing_runtime=billing_runtime,
             preview_proration_date=payload.get("preview_proration_date"),
             preview_subscription_updated_at=str(payload.get("preview_subscription_updated_at") or ""),
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
+    except RuntimeError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
+
+
+@router.post("/subscription/change-schedule")
+def billing_subscription_change_schedule(
+    request: Request,
+    payload: dict = Body(...),
+):
+    auth_payload = _require_authenticated_context(request)
+    if isinstance(auth_payload, JSONResponse):
+        return auth_payload
+
+    user_id, billing_runtime = _extract_user_context(auth_payload)
+
+    try:
+        return schedule_period_end_subscription_change_for_user(
+            user_id,
+            target_plan_code=str(payload.get("target_plan_code") or ""),
+            target_billing_cycle=str(payload.get("target_billing_cycle") or payload.get("billing_cycle") or ""),
+            currency_code=str(payload.get("currency_code") or "BRL"),
+            billing_runtime=billing_runtime,
+            preview_subscription_updated_at=str(payload.get("preview_subscription_updated_at") or ""),
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
+    except RuntimeError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": str(exc), "message": str(exc)},
+        )
+
+
+@router.post("/subscription/change-cancel")
+def billing_subscription_change_cancel(request: Request):
+    auth_payload = _require_authenticated_context(request)
+    if isinstance(auth_payload, JSONResponse):
+        return auth_payload
+
+    user_id, billing_runtime = _extract_user_context(auth_payload)
+
+    try:
+        return cancel_scheduled_subscription_change_for_user(
+            user_id,
+            billing_runtime=billing_runtime,
         )
     except ValueError as exc:
         return JSONResponse(
