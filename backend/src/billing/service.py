@@ -175,6 +175,139 @@ def _extract_price_from_subscription(subscription: Dict[str, Any]) -> Dict[str, 
     }
 
 
+def _extract_primary_subscription_item(subscription: Dict[str, Any]) -> Dict[str, Any]:
+    items = (((subscription or {}).get("items") or {}).get("data") or [])
+    first_item = items[0] if items else {}
+    price = first_item.get("price") or {}
+
+    try:
+        quantity = int(first_item.get("quantity") or 1)
+    except Exception:
+        quantity = 1
+
+    return {
+        "subscription_item_id": str(first_item.get("id") or "").strip() or None,
+        "provider_price_id": str(price.get("id") or "").strip() or None,
+        "quantity": quantity,
+    }
+
+
+def _extract_proration_lines_from_invoice_preview(invoice_preview: Dict[str, Any]) -> List[Dict[str, Any]]:
+    lines = (((invoice_preview or {}).get("lines") or {}).get("data") or [])
+    results: List[Dict[str, Any]] = []
+
+    for line in lines:
+        parent = line.get("parent") or {}
+        subscription_item_details = parent.get("subscription_item_details") or {}
+
+        is_proration = bool(subscription_item_details.get("proration"))
+        if not is_proration:
+            is_proration = bool(line.get("proration"))
+
+        if not is_proration:
+            continue
+
+        amount_cents = int(line.get("amount") or 0)
+        results.append(
+            {
+                "amount_cents": amount_cents,
+                "currency_code": str(line.get("currency") or invoice_preview.get("currency") or "BRL").upper(),
+                "description": str(line.get("description") or "").strip(),
+            }
+        )
+
+    return results
+
+
+def _preview_stripe_subscription_change_invoice(
+    *,
+    provider_subscription_id: str,
+    target_plan_price_id: int,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
+    settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=normalized_runtime)
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
+
+    target_provider_price_id = _resolve_provider_price_id_for_plan_price_id(
+        target_plan_price_id,
+        billing_runtime=normalized_runtime,
+    )
+    if not target_provider_price_id:
+        raise ValueError(f"stripe_price_not_configured_for_{normalized_runtime}")
+
+    stripe.api_key = runtime_config["secret_key"]
+
+    try:
+        subscription = stripe.Subscription.retrieve(provider_subscription_id)
+    except stripe.error.StripeError as exc:
+        raise RuntimeError("stripe_subscription_retrieve_failed") from exc
+
+    subscription_payload = subscription._to_dict_recursive()
+    primary_item = _extract_primary_subscription_item(subscription_payload)
+    subscription_item_id = primary_item.get("subscription_item_id")
+    quantity = int(primary_item.get("quantity") or 1)
+
+    if not subscription_item_id:
+        raise RuntimeError("stripe_subscription_item_not_found")
+
+    proration_date = int(datetime.now(timezone.utc).timestamp())
+
+    try:
+        invoice_preview = stripe.Invoice.create_preview(
+            subscription=provider_subscription_id,
+            subscription_details={
+                "proration_behavior": "always_invoice",
+                "proration_date": proration_date,
+                "items": [
+                    {
+                        "id": subscription_item_id,
+                        "price": target_provider_price_id,
+                        "quantity": quantity,
+                    }
+                ],
+            },
+        )
+    except stripe.error.StripeError as exc:
+        stripe_detail = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+        raise RuntimeError(f"stripe_subscription_preview_failed: {stripe_detail}") from exc
+
+    invoice_preview_payload = invoice_preview._to_dict_recursive()
+    proration_lines = _extract_proration_lines_from_invoice_preview(invoice_preview_payload)
+
+    charge_cents = 0
+    credit_cents = 0
+
+    for line in proration_lines:
+        amount_cents = int(line.get("amount_cents") or 0)
+        if amount_cents >= 0:
+            charge_cents += amount_cents
+        else:
+            credit_cents += abs(amount_cents)
+
+    raw_amount_due = invoice_preview_payload.get("amount_due")
+    if raw_amount_due is None:
+        raw_amount_due = invoice_preview_payload.get("total")
+
+    amount_due_now_cents = int(raw_amount_due or 0)
+
+    return {
+        "calculation_mode": "stripe_invoice_preview",
+        "proration_date": proration_date,
+        "amount_due_now_cents": amount_due_now_cents,
+        "charge_cents": charge_cents,
+        "credit_cents": credit_cents,
+        "currency_code": str(invoice_preview_payload.get("currency") or "BRL").upper(),
+        "provider_subscription_id": provider_subscription_id,
+        "target_provider_price_id": target_provider_price_id,
+        "line_items": proration_lines,
+    }
+
+
+
 def _resolve_plan_price_by_provider_price_id(
     provider_price_id: Optional[str],
     *,
@@ -695,6 +828,45 @@ def _resolve_plan_price_detail_by_id(plan_price_id: Optional[Any]) -> Optional[D
         "price_version": str(row[6]) if row[6] is not None else None,
     }
 
+    def _resolve_provider_price_id_for_plan_price_id(
+    plan_price_id: Optional[Any],
+    *,
+    billing_runtime: str = "live",
+) -> Optional[str]:
+    if plan_price_id in (None, ""):
+        return None
+
+    try:
+        normalized_plan_price_id = int(plan_price_id)
+    except Exception:
+        return None
+
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    provider_price_id,
+                    provider_price_id_live
+                FROM billing.plan_prices
+                WHERE plan_price_id = %(plan_price_id)s
+                LIMIT 1
+                """,
+                {"plan_price_id": normalized_plan_price_id},
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        return None
+
+    raw_provider_price_id = row[0] if normalized_runtime == "sandbox" else row[1]
+    normalized_provider_price_id = str(raw_provider_price_id or "").strip()
+    return normalized_provider_price_id or None
+
+
 def _resolve_active_plan_price(
     *,
     plan_code: str,
@@ -810,6 +982,7 @@ def _normalize_subscription_row_status(billing_status: Optional[str]) -> str:
     if value == "canceled":
         return "cancelled"
     return "expired"
+
 
 def _is_terminal_billing_status(billing_status: Optional[str]) -> bool:
     value = str(billing_status or "").strip().lower()
@@ -1801,20 +1974,6 @@ def preview_subscription_change_for_user(
         target_billing_cycle=normalized_target_billing_cycle,
     )
 
-    reason_code: Optional[str] = None
-    can_apply_now = False
-    can_schedule = False
-
-    if decision["decision_code"] == "noop":
-        reason_code = "subscription_change_same_target"
-    elif cancel_at_period_end:
-        reason_code = "subscription_change_blocked_cancel_at_period_end"
-    elif billing_status not in PLAN_CHANGE_ALLOWED_BILLING_STATUSES:
-        reason_code = "subscription_change_blocked_status"
-    else:
-        can_apply_now = decision["effective_mode"] == "immediate"
-        can_schedule = decision["effective_mode"] == "period_end"
-
     current_unit_amount_cents = current_price.get("unit_amount_cents") if current_price else None
     target_unit_amount_cents = target_price.get("unit_amount_cents") if target_price else None
 
@@ -1825,6 +1984,49 @@ def preview_subscription_change_for_user(
         and current_currency_code == normalized_currency_code
     ):
         full_period_delta_cents = int(target_unit_amount_cents) - int(current_unit_amount_cents)
+
+    reason_code: Optional[str] = None
+    can_apply_now = False
+    can_schedule = False
+
+    if decision["decision_code"] == "noop":
+        reason_code = "subscription_change_same_target"
+    elif cancel_at_period_end:
+        reason_code = "subscription_change_blocked_cancel_at_period_end"
+    elif billing_status not in PLAN_CHANGE_ALLOWED_BILLING_STATUSES:
+        reason_code = "subscription_change_blocked_status"
+    elif current_currency_code != normalized_currency_code:
+        reason_code = "subscription_change_blocked_currency_mismatch"
+    else:
+        can_apply_now = decision["effective_mode"] == "immediate"
+        can_schedule = decision["effective_mode"] == "period_end"
+
+    preview_payload: Dict[str, Any] = {
+        "calculation_mode": "classification_only",
+        "full_period_delta_cents": full_period_delta_cents,
+        "amount_due_now_cents": None,
+        "charge_cents": None,
+        "credit_cents": None,
+        "proration_date": None,
+        "line_items": [],
+    }
+
+    if can_apply_now:
+        stripe_preview = _preview_stripe_subscription_change_invoice(
+            provider_subscription_id=provider_subscription_id,
+            target_plan_price_id=int(target_price["plan_price_id"]),
+            billing_runtime=normalized_runtime,
+        )
+        preview_payload = {
+            "calculation_mode": stripe_preview["calculation_mode"],
+            "full_period_delta_cents": full_period_delta_cents,
+            "amount_due_now_cents": stripe_preview["amount_due_now_cents"],
+            "charge_cents": stripe_preview["charge_cents"],
+            "credit_cents": stripe_preview["credit_cents"],
+            "proration_date": stripe_preview["proration_date"],
+            "line_items": stripe_preview["line_items"],
+            "currency_code": stripe_preview["currency_code"],
+        }
 
     return {
         "ok": True,
@@ -1857,18 +2059,15 @@ def preview_subscription_change_for_user(
             "effective_mode": decision["effective_mode"],
             "reason_code": reason_code,
         },
-        "preview": {
-            "calculation_mode": "classification_only",
-            "full_period_delta_cents": full_period_delta_cents,
-            "amount_due_now_cents": None,
-            "credit_cents": None,
-        },
+        "preview": preview_payload,
         "policy": {
             "can_apply_now": can_apply_now,
             "can_schedule": can_schedule,
             "requires_stripe_proration_preview": can_apply_now,
         },
     }
+
+    
 
 def _update_subscription_cancel_at_period_end(
     *,
