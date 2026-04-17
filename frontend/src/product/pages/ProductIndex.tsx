@@ -62,6 +62,38 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
   oddsEdge: false,
 };
 
+const EVENT_FETCH_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= items.length) return;
+
+      try {
+        const value = await mapper(items[currentIndex], currentIndex);
+        results[currentIndex] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[currentIndex] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return results;
+}
+
 function getCalendarDayBounds(reference = new Date()) {
   const start = new Date(reference);
   start.setHours(0, 0, 0, 0);
@@ -932,8 +964,10 @@ export default function ProductIndex() {
     try {
       const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
 
-      const batches = await Promise.all(
-        fetchLeagues.map(async (cfg) => {
+      const settled = await mapWithConcurrency(
+        fetchLeagues,
+        EVENT_FETCH_CONCURRENCY,
+        async (cfg) => {
           const res = await productListOddsEvents({
             sport_key: cfg.sport_key,
             hours_ahead: hoursAhead,
@@ -944,15 +978,28 @@ export default function ProductIndex() {
           });
 
           return res?.events ?? [];
-        })
+        }
       );
 
       const merged = new Map<string, ProductOddsEvent>();
+      let fulfilledCount = 0;
+      let firstError: any = null;
 
-      for (const batch of batches) {
-        for (const item of batch) {
-          merged.set(String(item.event_id), item);
+      for (const result of settled) {
+        if (result.status === "fulfilled") {
+          fulfilledCount += 1;
+          for (const item of result.value) {
+            merged.set(String(item.event_id), item);
+          }
+          continue;
         }
+
+        firstError = firstError ?? result.reason;
+        console.warn("[product/index] failed to load one league batch", result.reason);
+      }
+
+      if (fulfilledCount === 0 && firstError) {
+        throw firstError;
       }
 
       setEvents(Array.from(merged.values()));

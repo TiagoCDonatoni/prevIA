@@ -392,7 +392,14 @@ useEffect(() => {
               }}
               onCancel={props.onClose}
               onSuccess={() => {
-                window.location.assign("/app/account?billing=updated");
+                const params = new URLSearchParams();
+                params.set("billing", "updated");
+
+                if (checkoutSession?.session_id) {
+                  params.set("session_id", checkoutSession.session_id);
+                }
+
+                window.location.assign(`/app/account?${params.toString()}`);
               }}
             />
           ) : showPlans ? (

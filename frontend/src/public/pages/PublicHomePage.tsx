@@ -27,6 +27,7 @@ export function PublicHomePage() {
   const { lang } = useParams<{ lang: string }>();
   const currentLang = coercePublicLang(lang);
   const copy = publicCopy(currentLang);
+  const showPublicFreeAnon = ENABLE_PUBLIC_PRODUCT_LAYER && ENABLE_PUBLIC_FREE_ANON_EMBED;
 
   const SEO = {
     pt: {
@@ -71,13 +72,19 @@ export function PublicHomePage() {
             </div>
 
             <div className="public-actions">
-              <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-primary">
-                {copy.home.hero.primaryCta}
-              </Link>
+              {showPublicFreeAnon ? (
+                <a href="#teste-gratis" className="public-btn public-btn-primary">
+                  {copy.home.hero.primaryCta}
+                </a>
+              ) : (
+                <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-primary">
+                  {copy.home.hero.primaryCta}
+                </Link>
+              )}
 
-              <a href="#beta-form" className="public-btn public-btn-secondary">
+              <Link to="/app" className="public-btn public-btn-secondary">
                 {copy.home.hero.secondaryCta}
-              </a>
+              </Link>
             </div>
           </div>
 
@@ -98,7 +105,7 @@ export function PublicHomePage() {
         </div>
       </section>
 
-        {ENABLE_PUBLIC_PRODUCT_LAYER && ENABLE_PUBLIC_FREE_ANON_EMBED ? (
+        {showPublicFreeAnon ? (
           <div id="teste-gratis">
             <PublicFreeAnonEmbed
               lang={currentLang}
@@ -192,13 +199,19 @@ export function PublicHomePage() {
           <p className="landing-final-cta-body">{copy.home.finalCta.body}</p>
 
           <div className="public-actions">
-            <a href="#beta-form" className="public-btn public-btn-primary">
+            <Link to="/app" className="public-btn public-btn-primary">
               {copy.home.finalCta.primaryCta}
-            </a>
-
-            <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-secondary">
-              {copy.home.finalCta.secondaryCta}
             </Link>
+
+            {showPublicFreeAnon ? (
+              <a href="#teste-gratis" className="public-btn public-btn-secondary">
+                {copy.home.finalCta.secondaryCta}
+              </a>
+            ) : (
+              <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-secondary">
+                {copy.home.finalCta.secondaryCta}
+              </Link>
+            )}
           </div>
         </div>
       </section>

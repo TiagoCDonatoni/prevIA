@@ -65,6 +65,7 @@ def set_product_session_cookie(response: Response, raw_token: str) -> None:
         httponly=True,
         secure=settings.product_session_cookie_secure,
         samesite=settings.product_session_cookie_samesite,
+        domain=settings.product_session_cookie_domain,
         max_age=max_age,
         expires=max_age,
         path="/",
@@ -77,6 +78,7 @@ def clear_product_session_cookie(response: Response) -> None:
     response.delete_cookie(
         key=settings.product_session_cookie_name,
         path="/",
+        domain=settings.product_session_cookie_domain,
         secure=settings.product_session_cookie_secure,
         httponly=True,
         samesite=settings.product_session_cookie_samesite,

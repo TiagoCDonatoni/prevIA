@@ -9,7 +9,13 @@ import {
 } from "../preferences/accountPreferences";
 
 import { fetchAccessUsage } from "../api/access";
-import { fetchAuthMe, normalizeBackendPlanCode, patchAuthProfile } from "../api/auth";
+import {
+  clearProductPlanOverride,
+  fetchAuthMe,
+  normalizeBackendPlanCode,
+  patchAuthProfile,
+  readProductPlanOverride,
+} from "../api/auth";
 import {
   fetchBillingCheckoutSessionStatus,
   fetchBillingSubscription,
@@ -291,6 +297,11 @@ export default function ProductAccountPage() {
   const billingTrialEnd = formatDateTime(lang, billingSubscription?.trial_end_utc);
   const billingLastSync = formatDateTime(lang, billingSubscription?.updated_at_utc);
 
+  function clearStoredCheckoutSessionId() {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem("billing_last_checkout_session_id");
+  }
+
   const syncAccountFromBackend = React.useCallback(async () => {
     const authData = await fetchAuthMe();
 
@@ -308,9 +319,11 @@ export default function ProductAccountPage() {
       subscription_status: authData.subscription?.status ?? null,
       subscription_provider: authData.subscription?.provider ?? null,
       subscription_billing_cycle: authData.subscription?.billing_cycle ?? null,
+      access_context: authData.access ?? null,
     });
 
     if (!authData.is_authenticated) {
+      clearProductPlanOverride();
       return authData;
     }
 
@@ -383,6 +396,44 @@ export default function ProductAccountPage() {
     );
   }
 
+  function isCheckoutUiResolved(
+    authData: {
+      subscription?: {
+        plan_code?: string | null;
+      } | null;
+    } | null | undefined,
+    billingData: BillingSubscriptionResponse | null | undefined
+  ) {
+    const effectivePlanCode = normalizeBackendPlanCode(
+      billingData?.subscription?.plan_code ?? authData?.subscription?.plan_code
+    );
+
+    return effectivePlanCode !== "FREE";
+  }
+
+  const finalizeMaterializedCheckoutState = React.useCallback(
+    async (
+      authData: Awaited<ReturnType<typeof fetchAuthMe>>,
+      billingData: BillingSubscriptionResponse | null | undefined
+    ) => {
+      const effectivePlanCode = normalizeBackendPlanCode(
+        billingData?.subscription?.plan_code ?? authData.subscription?.plan_code
+      );
+
+      clearStoredCheckoutSessionId();
+
+      const storedOverride = readProductPlanOverride();
+
+      if (!storedOverride || effectivePlanCode === "FREE" || storedOverride === effectivePlanCode) {
+        return authData;
+      }
+
+      clearProductPlanOverride();
+      return await syncAccountFromBackend();
+    },
+    [syncAccountFromBackend]
+  );
+
   const handleRefreshAfterCheckout = React.useCallback(async () => {
     setCheckoutFinalizeError(null);
 
@@ -392,7 +443,13 @@ export default function ProductAccountPage() {
 
       setBillingState(billingData);
 
-      if (isStripeSubscriptionMaterialized(authData, billingData)) {
+      const shouldCloseOverlay =
+        isStripeSubscriptionMaterialized(authData, billingData) ||
+        isCheckoutUiResolved(authData, billingData);
+
+      if (shouldCloseOverlay) {
+        await finalizeMaterializedCheckoutState(authData, billingData);
+        setCheckoutFinalizeError(null);
         setCheckoutFinalizeSlow(false);
         setIsFinalizingCheckout(false);
         return true;
@@ -405,7 +462,13 @@ export default function ProductAccountPage() {
       setCheckoutFinalizeError(t(lang, "auth.billingCheckoutFinalizingSlow"));
       return false;
     }
-  }, [lang, syncAccountFromBackend]);
+  }, [
+    finalizeMaterializedCheckoutState,
+    isCheckoutUiResolved,
+    isStripeSubscriptionMaterialized,
+    lang,
+    syncAccountFromBackend,
+  ]);
 
   React.useEffect(() => {
     setProfileName(account.full_name ?? "");
@@ -461,7 +524,19 @@ export default function ProductAccountPage() {
 
             setBillingState(checkoutSync);
 
-            if (isStripeSubscriptionMaterialized(null, checkoutSync)) {
+            if (
+              isStripeSubscriptionMaterialized(null, checkoutSync) ||
+              isCheckoutUiResolved(null, checkoutSync)
+            ) {
+              const authData = await syncAccountFromBackend();
+
+              if (cancelled) return;
+
+              await finalizeMaterializedCheckoutState(authData, checkoutSync);
+
+              if (cancelled) return;
+
+              setCheckoutFinalizeError(null);
               setCheckoutFinalizeSlow(false);
               setIsFinalizingCheckout(false);
               return;
@@ -479,7 +554,15 @@ export default function ProductAccountPage() {
 
           setBillingState(billingData);
 
-          if (isStripeSubscriptionMaterialized(authData, billingData)) {
+          if (
+            isStripeSubscriptionMaterialized(authData, billingData) ||
+            isCheckoutUiResolved(authData, billingData)
+          ) {
+            await finalizeMaterializedCheckoutState(authData, billingData);
+
+            if (cancelled) return;
+
+            setCheckoutFinalizeError(null);
             setCheckoutFinalizeSlow(false);
             setIsFinalizingCheckout(false);
             break;
@@ -517,7 +600,13 @@ export default function ProductAccountPage() {
         window.clearTimeout(slowTimerId);
       }
     };
-  }, [isStripeSubscriptionMaterialized, lang, syncAccountFromBackend]);
+  }, [
+    finalizeMaterializedCheckoutState,
+    isCheckoutUiResolved,
+    isStripeSubscriptionMaterialized,
+    lang,
+    syncAccountFromBackend,
+  ]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;

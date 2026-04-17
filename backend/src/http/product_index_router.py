@@ -43,10 +43,30 @@ def product_index(
     mv = get_active_model_version()
 
     sql = """
-      WITH last_ts AS (
-        SELECT event_id, MAX(captured_at_utc) AS max_ts
-        FROM odds.odds_snapshots_1x2
-        GROUP BY event_id
+      WITH target_events AS (
+        SELECT
+          s.event_id,
+          s.sport_key,
+          s.kickoff_utc,
+          s.home_name,
+          s.away_name,
+          s.source_captured_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.sport_key = %(sport_key)s
+          AND s.model_version = %(model_version)s
+          AND s.kickoff_utc IS NOT NULL
+          AND s.kickoff_utc >= %(now)s
+          AND s.kickoff_utc <= %(end)s
+        ORDER BY s.kickoff_utc ASC
+        LIMIT %(limit)s
+      ),
+      last_ts AS (
+        SELECT o.event_id, MAX(o.captured_at_utc) AS max_ts
+        FROM odds.odds_snapshots_1x2 o
+        JOIN target_events t
+          ON t.event_id = o.event_id
+        GROUP BY o.event_id
       ),
       best AS (
         SELECT
@@ -55,34 +75,30 @@ def product_index(
           MAX(s.odds_draw) AS odds_draw,
           MAX(s.odds_away) AS odds_away
         FROM odds.odds_snapshots_1x2 s
-        JOIN last_ts lt ON lt.event_id = s.event_id AND lt.max_ts = s.captured_at_utc
+        JOIN last_ts lt
+          ON lt.event_id = s.event_id
+         AND lt.max_ts = s.captured_at_utc
         GROUP BY s.event_id
       )
       SELECT
-        s.event_id,
-        s.sport_key,
-        s.kickoff_utc,
-        s.home_name,
-        s.away_name,
-        s.source_captured_at_utc,
-        s.payload,
+        t.event_id,
+        t.sport_key,
+        t.kickoff_utc,
+        t.home_name,
+        t.away_name,
+        t.source_captured_at_utc,
+        t.payload,
         e.match_status,
         e.match_score,
         b.odds_home,
         b.odds_draw,
         b.odds_away
-      FROM product.matchup_snapshot_v1 s
+      FROM target_events t
       LEFT JOIN odds.odds_events e
-        ON e.event_id = s.event_id
+        ON e.event_id = t.event_id
       LEFT JOIN best b
-        ON b.event_id = s.event_id
-      WHERE s.sport_key = %(sport_key)s
-        AND s.model_version = %(model_version)s
-        AND s.kickoff_utc IS NOT NULL
-        AND s.kickoff_utc >= %(now)s
-        AND s.kickoff_utc <= %(end)s
-      ORDER BY s.kickoff_utc ASC
-      LIMIT %(limit)s
+        ON b.event_id = t.event_id
+      ORDER BY t.kickoff_utc ASC
     """
 
     events: List[OddsEventRow] = []

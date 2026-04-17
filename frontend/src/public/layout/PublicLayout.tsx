@@ -17,6 +17,7 @@ import "../public.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { ProductAuthModal } from "../../product/auth/ProductAuthModal";
+import { fetchAuthMe } from "../../product/api/auth";
 import { ENABLE_PUBLIC_PRODUCT_LAYER } from "../../config";
 
 type FooterSocialId = "instagram" | "x" | "tiktok";
@@ -194,6 +195,37 @@ const PUBLIC_FOOTER_COPY = {
   },
 } as const;
 
+function normalizePublicAuthMode(
+  raw: string
+): "login" | "signup" | "forgot" | "reset" | null {
+  const value = String(raw || "").trim().toLowerCase();
+
+  if (
+    value === "login" ||
+    value === "signup" ||
+    value === "forgot" ||
+    value === "reset"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function normalizePublicNextPath(raw: string | null): string | null {
+  const value = String(raw ?? "").trim();
+
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return null;
+  }
+
+  return value;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export function PublicLayout() {
   const { lang } = useParams<{ lang: string }>();
   const location = useLocation();
@@ -216,6 +248,10 @@ export function PublicLayout() {
   const footer = PUBLIC_FOOTER_COPY[currentLang];
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
+  const [publicSessionReady, setPublicSessionReady] = React.useState(
+    !ENABLE_PUBLIC_PRODUCT_LAYER
+  );
+  const [isPublicAuthenticated, setIsPublicAuthenticated] = React.useState(false);
 
   const [authOpen, setAuthOpen] = React.useState(false);
   const [authInitialMode, setAuthInitialMode] = React.useState<
@@ -223,6 +259,35 @@ export function PublicLayout() {
   >("signup");
 
   const [authInitialResetToken, setAuthInitialResetToken] = React.useState("");
+
+  const goToAppLabel =
+    currentLang === "pt"
+      ? "Ir para o app"
+      : currentLang === "es"
+      ? "Ir a la app"
+      : "Go to app";
+
+  const showPublicGuestActions =
+    ENABLE_PUBLIC_PRODUCT_LAYER && publicSessionReady && !isPublicAuthenticated;
+
+  const showPublicSessionActions =
+    ENABLE_PUBLIC_PRODUCT_LAYER && publicSessionReady && isPublicAuthenticated;
+
+  const confirmPublicAuthSession = React.useCallback(async () => {
+    let authData = await fetchAuthMe();
+
+    if (!authData.is_authenticated) {
+      await sleep(150);
+      authData = await fetchAuthMe();
+    }
+
+    if (!authData.is_authenticated) {
+      await sleep(300);
+      authData = await fetchAuthMe();
+    }
+
+    return authData;
+  }, []);
 
   const navItems = [
     {
@@ -243,8 +308,32 @@ export function PublicLayout() {
   ] as const;
 
   React.useEffect(() => {
-    setIsMobileMenuOpen(false);
-  }, [location.pathname, location.search, location.hash]);
+    if (!ENABLE_PUBLIC_PRODUCT_LAYER) return;
+
+    let cancelled = false;
+
+    async function run() {
+      try {
+        const data = await fetchAuthMe();
+        if (cancelled) return;
+        setIsPublicAuthenticated(Boolean(data.is_authenticated));
+      } catch (err) {
+        console.error("public auth bootstrap failed", err);
+        if (cancelled) return;
+        setIsPublicAuthenticated(false);
+      } finally {
+        if (!cancelled) {
+          setPublicSessionReady(true);
+        }
+      }
+    }
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!isMobileMenuOpen) return;
@@ -266,23 +355,55 @@ export function PublicLayout() {
     };
   }, [isMobileMenuOpen]);
 
-  function openAuthModal(mode: "signup" | "login") {
+  function openAuthModal(mode: "signup" | "login" | "forgot") {
     setAuthInitialMode(mode);
     setAuthInitialResetToken("");
     setIsMobileMenuOpen(false);
     setAuthOpen(true);
   }
 
+  function clearAuthSearchParams() {
+    if (!searchParams.get("auth") && !searchParams.get("token") && !searchParams.get("next")) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("auth");
+    nextParams.delete("token");
+    nextParams.delete("next");
+    setSearchParams(nextParams, { replace: true });
+  }
+
   React.useEffect(() => {
-    const auth = String(searchParams.get("auth") || "").trim().toLowerCase();
+    if (!ENABLE_PUBLIC_PRODUCT_LAYER) return;
+    if (!publicSessionReady) return;
+
+    const authMode = normalizePublicAuthMode(searchParams.get("auth") || "");
     const token = String(searchParams.get("token") || "").trim();
+    const nextPath = normalizePublicNextPath(searchParams.get("next"));
 
-    if (auth !== "reset" || !token) return;
+    if (authMode === "reset") {
+      if (!token) return;
 
-    setAuthInitialMode("reset");
-    setAuthInitialResetToken(token);
+      setAuthInitialMode("reset");
+      setAuthInitialResetToken(token);
+      setAuthOpen(true);
+      return;
+    }
+
+    if (!authMode || (authMode !== "login" && authMode !== "signup" && authMode !== "forgot")) {
+      return;
+    }
+
+    if (isPublicAuthenticated) {
+      navigate(nextPath ?? "/app", { replace: true });
+      return;
+    }
+
+    setAuthInitialMode(authMode as "login" | "signup" | "forgot");
+    setAuthInitialResetToken("");
     setAuthOpen(true);
-  }, [searchParams]); 
+  }, [navigate, publicSessionReady, isPublicAuthenticated, searchParams]);
 
   if (!isValidLang) {
     return <Navigate to="/pt" replace />;
@@ -344,7 +465,7 @@ export function PublicLayout() {
                 <span className="public-menu-btn-bar" />
               </button>
 
-            {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+            {showPublicGuestActions ? (
               <div className="public-header-auth">
                 <button
                   type="button"
@@ -361,6 +482,17 @@ export function PublicLayout() {
                 >
                   {copy.nav.createAccount}
                 </button>
+              </div>
+            ) : null}
+
+            {showPublicSessionActions ? (
+              <div className="public-header-auth">
+                <Link
+                  to="/app"
+                  className="public-btn public-btn-primary public-header-auth-btn"
+                >
+                  {goToAppLabel}
+                </Link>
               </div>
             ) : null}
           </div>
@@ -408,7 +540,7 @@ export function PublicLayout() {
                 {footer.links.contact}
               </Link>
 
-              {ENABLE_PUBLIC_PRODUCT_LAYER ? (
+              {showPublicGuestActions ? (
                 <div className="public-mobile-nav-auth">
                   <button
                     type="button"
@@ -425,6 +557,18 @@ export function PublicLayout() {
                   >
                     {copy.nav.createAccount}
                   </button>
+                </div>
+              ) : null}
+
+              {showPublicSessionActions ? (
+                <div className="public-mobile-nav-auth">
+                  <Link
+                    to="/app"
+                    className="public-mobile-nav-link public-mobile-nav-link-primary"
+                    onClick={() => setIsMobileMenuOpen(false)}
+                  >
+                    {goToAppLabel}
+                  </Link>
                 </div>
               ) : null}
             </nav>
@@ -513,18 +657,26 @@ export function PublicLayout() {
           onClose={() => {
             setAuthOpen(false);
             setAuthInitialResetToken("");
-
-            if (searchParams.get("auth") === "reset" || searchParams.get("token")) {
-              const nextParams = new URLSearchParams(searchParams);
-              nextParams.delete("auth");
-              nextParams.delete("token");
-              setSearchParams(nextParams, { replace: true });
-            }
+            clearAuthSearchParams();
           }}
-          onAuthSuccess={async () => {
+          onAuthSuccess={async (payload) => {
+            const nextPath = normalizePublicNextPath(searchParams.get("next"));
+
+            let confirmed = payload;
+
+            try {
+              confirmed = await confirmPublicAuthSession();
+            } catch (err) {
+              console.error("public post-auth confirmation failed", err);
+            }
+
+            setIsPublicAuthenticated(Boolean(confirmed.is_authenticated));
+            setPublicSessionReady(true);
             setAuthOpen(false);
             setAuthInitialResetToken("");
-            navigate("/app");
+            clearAuthSearchParams();
+
+            navigate(nextPath ?? "/app", { replace: true });
           }}
         />
       ) : null}
