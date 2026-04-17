@@ -17,15 +17,21 @@ import {
   readProductPlanOverride,
 } from "../api/auth";
 import {
+  BillingRequestError,
   fetchBillingCheckoutSessionStatus,
   fetchBillingSubscription,
   postBillingCancelRenewal,
+  postBillingChangeApply,
+  postBillingChangePreview,
   postBillingResumeRenewal,
+  type BillingChangeDecision,
+  type BillingChangePreviewResponse,
+  type BillingCycle,
   type BillingSubscriptionResponse,
 } from "../api/billing";
 import { t, type Lang } from "../i18n";
 import { PLAN_CATALOG } from "../planCatalog";
-import { PLAN_LABELS } from "../entitlements";
+import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
 import type { ProductLayoutOutletContext } from "../layout/ProductLayout";
 
@@ -137,6 +143,80 @@ function normalizeEditableLang(raw: string | null | undefined, fallback: Lang): 
   return fallback;
 }
 
+const BILLING_CHANGE_PLAN_OPTIONS: Array<Exclude<PlanId, "FREE" | "FREE_ANON">> = [
+  "BASIC",
+  "LIGHT",
+  "PRO",
+];
+
+const BILLING_CHANGE_CYCLE_OPTIONS: BillingCycle[] = ["monthly", "quarterly", "annual"];
+
+function getBillingChangeReasonMessage(uiLang: Lang, reasonCode?: string | null) {
+  if (reasonCode === "subscription_change_same_target") {
+    return uiLang === "pt"
+      ? "Você já está neste plano e ciclo."
+      : uiLang === "es"
+      ? "Ya estás en este plan y ciclo."
+      : "You are already on this plan and cycle.";
+  }
+
+  if (reasonCode === "subscription_change_blocked_cancel_at_period_end") {
+    return uiLang === "pt"
+      ? "Reative a renovação antes de mudar o plano."
+      : uiLang === "es"
+      ? "Reactiva la renovación antes de cambiar el plan."
+      : "Resume renewal before changing the plan.";
+  }
+
+  if (reasonCode === "subscription_change_blocked_status") {
+    return uiLang === "pt"
+      ? "O status atual da cobrança não permite mudar o plano agora."
+      : uiLang === "es"
+      ? "El estado actual de facturación no permite cambiar el plan ahora."
+      : "The current billing status does not allow a plan change right now.";
+  }
+
+  if (reasonCode === "subscription_change_blocked_currency_mismatch") {
+    return uiLang === "pt"
+      ? "Essa troca de moeda não está disponível neste fluxo."
+      : uiLang === "es"
+      ? "Este cambio de moneda no está disponible en este flujo."
+      : "This currency change is not supported in this flow.";
+  }
+
+  if (reasonCode === "subscription_change_requires_period_end_schedule") {
+    return uiLang === "pt"
+      ? "Essa mudança precisa ser agendada para a próxima renovação."
+      : uiLang === "es"
+      ? "Este cambio debe programarse para la próxima renovación."
+      : "This change must be scheduled for the next renewal.";
+  }
+
+  return null;
+}
+
+function getBillingChangeDecisionMessage(uiLang: Lang, decision?: BillingChangeDecision | null) {
+  const code = String(decision?.decision_code || "").trim().toLowerCase();
+
+  if (code === "upgrade_now" || code === "cycle_upgrade_now") {
+    return uiLang === "pt"
+      ? "A mudança será aplicada imediatamente."
+      : uiLang === "es"
+      ? "El cambio se aplicará inmediatamente."
+      : "The change will be applied immediately.";
+  }
+
+  if (code === "downgrade_period_end" || code === "cycle_downgrade_period_end") {
+    return uiLang === "pt"
+      ? "Essa mudança deve entrar na próxima renovação."
+      : uiLang === "es"
+      ? "Este cambio debe entrar en la próxima renovación."
+      : "This change should take effect on the next renewal.";
+  }
+
+  return null;
+}
+
 export default function ProductAccountPage() {
   const store = useProductStore();
   const { openAuthModal, logout } = useOutletContext<ProductLayoutOutletContext>();
@@ -161,6 +241,14 @@ export default function ProductAccountPage() {
   const [billingActionMessage, setBillingActionMessage] = React.useState<string | null>(null);
   const [isBillingLoading, setIsBillingLoading] = React.useState(false);
   const [isBillingActionLoading, setIsBillingActionLoading] = React.useState(false);
+  const [billingChangePlan, setBillingChangePlan] =
+    React.useState<Exclude<PlanId, "FREE" | "FREE_ANON">>("BASIC");
+  const [billingChangeCycle, setBillingChangeCycle] = React.useState<BillingCycle>("monthly");
+  const [billingChangePreview, setBillingChangePreview] =
+    React.useState<BillingChangePreviewResponse | null>(null);
+  const [billingChangeError, setBillingChangeError] = React.useState<string | null>(null);
+  const [isBillingChangePreviewLoading, setIsBillingChangePreviewLoading] = React.useState(false);
+  const [isBillingChangeApplyLoading, setIsBillingChangeApplyLoading] = React.useState(false);
   const [preferencesOpen, setPreferencesOpen] = React.useState(false);
   const snapshotPlan = account.subscription.plan_code;
   const plan =
@@ -293,6 +381,43 @@ export default function ProductAccountPage() {
       planCatalog.currency) as "BRL" | "USD" | "EUR"
   );
 
+  const canUseSelfServicePlanChange =
+    Boolean(billingSubscription) &&
+    String(billingSubscription?.provider || "")
+      .trim()
+      .toLowerCase() === "stripe" &&
+    Boolean(billingSubscription?.provider_subscription_id);
+
+  const effectiveBillingCurrency: "BRL" | "USD" =
+    String(billingSubscription?.currency_code || "BRL").toUpperCase() === "USD" ? "USD" : "BRL";
+
+  const billingChangeDecisionMessage = getBillingChangeDecisionMessage(
+    lang,
+    billingChangePreview?.decision
+  );
+
+  const billingChangeReasonMessage = getBillingChangeReasonMessage(
+    lang,
+    billingChangePreview?.decision?.reason_code
+  );
+
+  const billingChangeAmountDueLabel = formatMoney(
+    lang,
+    billingChangePreview?.preview?.amount_due_now_cents != null
+      ? billingChangePreview.preview.amount_due_now_cents / 100
+      : null,
+    ((billingChangePreview?.preview?.currency_code as "BRL" | "USD" | "EUR" | null) ??
+      effectiveBillingCurrency) as "BRL" | "USD" | "EUR"
+  );
+
+  const billingChangeFullDeltaLabel = formatMoney(
+    lang,
+    billingChangePreview?.preview?.full_period_delta_cents != null
+      ? billingChangePreview.preview.full_period_delta_cents / 100
+      : null,
+    effectiveBillingCurrency as "BRL" | "USD" | "EUR"
+  );
+
   const billingCurrentPeriodEnd = formatDateTime(lang, billingSubscription?.current_period_end);
   const billingTrialEnd = formatDateTime(lang, billingSubscription?.trial_end_utc);
   const billingLastSync = formatDateTime(lang, billingSubscription?.updated_at_utc);
@@ -360,6 +485,38 @@ export default function ProductAccountPage() {
       setIsBillingLoading(false);
     }
   }, [isAuthenticated, lang]);
+
+  React.useEffect(() => {
+    if (!billingSubscription) {
+      setBillingChangePreview(null);
+      setBillingChangeError(null);
+      return;
+    }
+
+    const currentPlanCode = String(billingSubscription.plan_code || "").trim().toUpperCase();
+    const nextPlan: Exclude<PlanId, "FREE" | "FREE_ANON"> =
+      currentPlanCode === "BASIC"
+        ? "LIGHT"
+        : currentPlanCode === "LIGHT"
+        ? "PRO"
+        : "PRO";
+
+    const currentCycle =
+      billingSubscription.billing_cycle === "monthly" ||
+      billingSubscription.billing_cycle === "quarterly" ||
+      billingSubscription.billing_cycle === "annual"
+        ? billingSubscription.billing_cycle
+        : "monthly";
+
+    setBillingChangePlan(nextPlan);
+    setBillingChangeCycle(currentCycle);
+    setBillingChangePreview(null);
+    setBillingChangeError(null);
+  }, [
+    billingSubscription?.subscription_id,
+    billingSubscription?.plan_code,
+    billingSubscription?.billing_cycle,
+  ]);
 
   function isStripeSubscriptionMaterialized(
     authData: {
@@ -642,6 +799,124 @@ export default function ProductAccountPage() {
       setBillingError(t(lang, "auth.billingActionError"));
     } finally {
       setIsBillingActionLoading(false);
+    }
+  }
+
+  async function handleBillingChangePreview() {
+    if (!billingSubscription) return;
+
+    try {
+      setIsBillingChangePreviewLoading(true);
+      setBillingChangeError(null);
+      setBillingActionMessage(null);
+
+      const result = await postBillingChangePreview({
+        target_plan_code: billingChangePlan,
+        target_billing_cycle: billingChangeCycle,
+        currency_code: effectiveBillingCurrency,
+      });
+
+      setBillingChangePreview(result);
+    } catch (error) {
+      console.error("handleBillingChangePreview failed", error);
+
+      if (error instanceof BillingRequestError) {
+        const friendly = getBillingChangeReasonMessage(lang, error.code || error.message);
+        setBillingChangeError(
+          friendly ??
+            (lang === "pt"
+              ? "Não foi possível gerar o preview da mudança."
+              : lang === "es"
+              ? "No se pudo generar la vista previa del cambio."
+              : "Could not generate the change preview.")
+        );
+      } else {
+        setBillingChangeError(
+          lang === "pt"
+            ? "Não foi possível gerar o preview da mudança."
+            : lang === "es"
+            ? "No se pudo generar la vista previa del cambio."
+            : "Could not generate the change preview."
+        );
+      }
+    } finally {
+      setIsBillingChangePreviewLoading(false);
+    }
+  }
+
+  async function handleBillingChangeApply() {
+    if (!billingChangePreview?.policy?.can_apply_now) return;
+
+    try {
+      setIsBillingChangeApplyLoading(true);
+      setBillingChangeError(null);
+      setBillingActionMessage(null);
+
+      const result = await postBillingChangeApply({
+        target_plan_code: billingChangePlan,
+        target_billing_cycle: billingChangeCycle,
+        currency_code: effectiveBillingCurrency,
+        preview_proration_date: billingChangePreview.preview.proration_date ?? null,
+        preview_subscription_updated_at: billingChangePreview.current.updated_at_utc ?? null,
+      });
+
+      setBillingState(result);
+      setBillingChangePreview(null);
+
+      if (result.applied) {
+        await syncAccountFromBackend();
+        setBillingActionMessage(
+          lang === "pt"
+            ? "Plano alterado com sucesso."
+            : lang === "es"
+            ? "Plan cambiado con éxito."
+            : "Plan changed successfully."
+        );
+        return;
+      }
+
+      if (result.pending_update) {
+        setBillingActionMessage(
+          lang === "pt"
+            ? "A cobrança ficou pendente. Assim que o pagamento for concluído, a mudança será aplicada."
+            : lang === "es"
+            ? "El cobro quedó pendiente. Cuando se complete el pago, el cambio será aplicado."
+            : "The payment is pending. Once it completes, the change will be applied."
+        );
+        return;
+      }
+
+      setBillingActionMessage(
+        lang === "pt"
+          ? "A solicitação foi processada."
+          : lang === "es"
+          ? "La solicitud fue procesada."
+          : "The request was processed."
+      );
+    } catch (error) {
+      console.error("handleBillingChangeApply failed", error);
+
+      if (error instanceof BillingRequestError) {
+        const friendly = getBillingChangeReasonMessage(lang, error.code || error.message);
+        setBillingChangeError(
+          friendly ??
+            (lang === "pt"
+              ? "Não foi possível aplicar a mudança agora."
+              : lang === "es"
+              ? "No se pudo aplicar el cambio ahora."
+              : "Could not apply the change right now.")
+        );
+      } else {
+        setBillingChangeError(
+          lang === "pt"
+            ? "Não foi possível aplicar a mudança agora."
+            : lang === "es"
+            ? "No se pudo aplicar el cambio ahora."
+            : "Could not apply the change right now."
+        );
+      }
+    } finally {
+      setIsBillingChangeApplyLoading(false);
     }
   }
 
