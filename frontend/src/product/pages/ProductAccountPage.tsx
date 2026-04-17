@@ -224,6 +224,11 @@ export default function ProductAccountPage() {
   const lang = store.state.lang as Lang;
   const isAuthenticated = Boolean(store.state.auth.is_logged_in);
   const account = store.accountSnapshot;
+  const googleAuthEnabled =
+    String(import.meta.env.VITE_PRODUCT_GOOGLE_AUTH_ENABLED ?? "false").toLowerCase() === "true";
+  const googleClientId = String(import.meta.env.VITE_PRODUCT_GOOGLE_CLIENT_ID ?? "").trim();
+  const canOfferGoogleLink =
+    isAuthenticated && googleAuthEnabled && Boolean(googleClientId);
 
   const [isFinalizingCheckout, setIsFinalizingCheckout] = React.useState(false);
   const [checkoutFinalizeSlow, setCheckoutFinalizeSlow] = React.useState(false);
@@ -970,13 +975,21 @@ export default function ProductAccountPage() {
             <div className="account-actions-list">
               <button
                 type="button"
-                className="product-primary"
-                onClick={() => {
-                  void handleRefreshAfterCheckout();
-                }}
+                className="product-secondary"
+                onClick={() => openAuthModal(isAuthenticated ? "changePassword" : "login")}
               >
-                {t(lang, "auth.billingCheckoutRefreshNow")}
+                {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
               </button>
+              
+              {!isAuthenticated ? (
+                <button
+                  type="button"
+                  className="product-primary"
+                  onClick={() => openAuthModal("signup")}
+                >
+                  {t(lang, "auth.signup")}
+                </button>
+              ) : null}
             </div>
 
             {checkoutFinalizeError ? (
@@ -1085,6 +1098,16 @@ export default function ProductAccountPage() {
             >
               {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
             </button>
+
+            {canOfferGoogleLink ? (
+              <button
+                type="button"
+                className="product-secondary"
+                onClick={() => openAuthModal("linkGoogle")}
+              >
+                {t(lang, "auth.linkGoogle")}
+              </button>
+            ) : null}
 
             {!isAuthenticated ? (
               <button
@@ -1222,6 +1245,177 @@ export default function ProductAccountPage() {
           {billingState && !billingState.has_subscription ? (
             <div className="account-note" style={{ marginTop: 16 }}>
               {t(lang, "auth.billingNoPaidSubscription")}
+            </div>
+          ) : null}
+
+                    {canUseSelfServicePlanChange ? (
+            <div className="account-note" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                {lang === "pt"
+                  ? "Mudança de plano"
+                  : lang === "es"
+                  ? "Cambio de plan"
+                  : "Plan change"}
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 12,
+                }}
+              >
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span>
+                    {lang === "pt" ? "Plano alvo" : lang === "es" ? "Plan objetivo" : "Target plan"}
+                  </span>
+                  <select
+                    value={billingChangePlan}
+                    onChange={(event) => {
+                      setBillingChangePlan(
+                        event.target.value as Exclude<PlanId, "FREE" | "FREE_ANON">
+                      );
+                      setBillingChangePreview(null);
+                      setBillingChangeError(null);
+                    }}
+                  >
+                    {BILLING_CHANGE_PLAN_OPTIONS.map((planId) => (
+                      <option key={planId} value={planId}>
+                        {mapPlanLabel(planId)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span>
+                    {lang === "pt" ? "Recorrência" : lang === "es" ? "Recurrencia" : "Billing cycle"}
+                  </span>
+                  <select
+                    value={billingChangeCycle}
+                    onChange={(event) => {
+                      setBillingChangeCycle(event.target.value as BillingCycle);
+                      setBillingChangePreview(null);
+                      setBillingChangeError(null);
+                    }}
+                  >
+                    {BILLING_CHANGE_CYCLE_OPTIONS.map((cycle) => (
+                      <option key={cycle} value={cycle}>
+                        {mapBillingCycleLabel(lang, cycle)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {billingChangeError ? (
+                <div style={{ marginTop: 12, color: "#b42318" }}>{billingChangeError}</div>
+              ) : null}
+
+              {billingChangePreview ? (
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    borderRadius: 12,
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    display: "grid",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>
+                    {billingChangeDecisionMessage ??
+                      (lang === "pt"
+                        ? "Preview gerado."
+                        : lang === "es"
+                        ? "Vista previa generada."
+                        : "Preview generated.")}
+                  </div>
+
+                  {billingChangeReasonMessage ? <div>{billingChangeReasonMessage}</div> : null}
+
+                  {billingChangeFullDeltaLabel ? (
+                    <div>
+                      {lang === "pt"
+                        ? `Diferença cheia do período: ${billingChangeFullDeltaLabel}`
+                        : lang === "es"
+                        ? `Diferencia total del período: ${billingChangeFullDeltaLabel}`
+                        : `Full-period difference: ${billingChangeFullDeltaLabel}`}
+                    </div>
+                  ) : null}
+
+                  {billingChangeAmountDueLabel ? (
+                    <div>
+                      {lang === "pt"
+                        ? `Cobrança imediata estimada: ${billingChangeAmountDueLabel}`
+                        : lang === "es"
+                        ? `Cobro inmediato estimado: ${billingChangeAmountDueLabel}`
+                        : `Estimated immediate charge: ${billingChangeAmountDueLabel}`}
+                    </div>
+                  ) : null}
+
+                  {billingChangePreview.policy.can_schedule &&
+                  !billingChangePreview.policy.can_apply_now ? (
+                    <div>
+                      {lang === "pt"
+                        ? "Essa mudança foi classificada para a próxima renovação. O agendamento self-service entra no próximo patch."
+                        : lang === "es"
+                        ? "Este cambio fue clasificado para la próxima renovación. La programación self-service entra en el próximo patch."
+                        : "This change was classified for the next renewal. Self-service scheduling lands in the next patch."}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  marginTop: 12,
+                }}
+              >
+                <button
+                  type="button"
+                  className="product-secondary"
+                  disabled={isBillingChangePreviewLoading || isBillingChangeApplyLoading}
+                  onClick={() => void handleBillingChangePreview()}
+                >
+                  {isBillingChangePreviewLoading
+                    ? lang === "pt"
+                      ? "Gerando preview..."
+                      : lang === "es"
+                      ? "Generando vista previa..."
+                      : "Generating preview..."
+                    : lang === "pt"
+                    ? "Ver preview"
+                    : lang === "es"
+                    ? "Ver vista previa"
+                    : "View preview"}
+                </button>
+
+                {billingChangePreview?.policy.can_apply_now ? (
+                  <button
+                    type="button"
+                    className="product-primary"
+                    disabled={isBillingChangeApplyLoading || isBillingChangePreviewLoading}
+                    onClick={() => void handleBillingChangeApply()}
+                  >
+                    {isBillingChangeApplyLoading
+                      ? lang === "pt"
+                        ? "Aplicando..."
+                        : lang === "es"
+                        ? "Aplicando..."
+                        : "Applying..."
+                      : lang === "pt"
+                      ? "Aplicar agora"
+                      : lang === "es"
+                      ? "Aplicar ahora"
+                      : "Apply now"}
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
 

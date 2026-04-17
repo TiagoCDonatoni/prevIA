@@ -190,7 +190,7 @@ import { resolveAccountPreferences } from "../preferences/accountPreferences";
 
 export type ProductLayoutOutletContext = {
   openAuthModal: (
-    mode?: "signup" | "login" | "forgot" | "reset" | "changePassword"
+    mode?: "signup" | "login" | "forgot" | "reset" | "changePassword" | "linkGoogle"
   ) => void;
   logout: () => Promise<void>;
 };
@@ -221,7 +221,7 @@ export function ProductLayout() {
 
   const [authOpen, setAuthOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<
-    "signup" | "login" | "forgot" | "reset" | "changePassword"
+    "signup" | "login" | "forgot" | "reset" | "changePassword" | "linkGoogle"
   >("signup");
   const [planOpen, setPlanOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -503,7 +503,7 @@ React.useEffect(() => {
 
   const openAuthModal = useCallback(
     (
-      mode: "signup" | "login" | "forgot" | "reset" | "changePassword" = "signup"
+      mode: "signup" | "login" | "forgot" | "reset" | "changePassword" | "linkGoogle" = "signup"
     ) => {
       setAuthInitialMode(mode);
       setAuthOpen(true);

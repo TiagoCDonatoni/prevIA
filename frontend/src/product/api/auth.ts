@@ -134,6 +134,7 @@ export type AuthChangePasswordResponse = {
 };
 
 export type AuthGoogleLoginResponse = AuthMeResponse;
+export type AuthGoogleLinkResponse = AuthMeResponse;
 
 export type PatchAuthProfilePayload = {
   full_name: string;
@@ -279,6 +280,12 @@ export async function postAuthGoogleLogin(payload: {
   credential: string;
 }): Promise<AuthGoogleLoginResponse> {
   return requestJson<AuthGoogleLoginResponse, typeof payload>("/auth/google/login", payload);
+}
+
+export async function postAuthGoogleLink(payload: {
+  credential: string;
+}): Promise<AuthGoogleLinkResponse> {
+  return requestJson<AuthGoogleLinkResponse, typeof payload>("/auth/google/link", payload);
 }
 
 export async function patchAuthProfile(

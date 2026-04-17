@@ -9,6 +9,7 @@ from src.auth.service import (
     change_password_authenticated,
     forgot_password,
     get_auth_me_payload,
+    link_google_identity_for_authenticated_user,
     login_with_google_credential,
     login_with_password,
     logout_with_session_token,
@@ -195,6 +196,32 @@ def auth_google_login(
     )
 
     return auth_payload
+
+
+@router.post("/google/link")
+def auth_google_link(
+    request: Request,
+    payload: dict = Body(...),
+):
+    credential = str(payload.get("credential") or "").strip()
+
+    result = link_google_identity_for_authenticated_user(
+        request=request,
+        credential=credential,
+    )
+
+    if not result.get("ok"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "ok": False,
+                "code": result.get("code") or "GOOGLE_LINK_FAILED",
+                "message": result.get("message") or "google link failed",
+            },
+        )
+
+    return result["auth_payload"]
+
 
 @router.post("/logout")
 def auth_logout(request: Request, response: Response):

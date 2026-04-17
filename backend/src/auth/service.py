@@ -411,7 +411,7 @@ def _login_or_signup_with_google(
             else:
                 cur.execute(
                     """
-                    SELECT user_id, full_name, email_verified
+                    SELECT user_id
                     FROM app.users
                     WHERE email_normalized = %(email_normalized)s
                     LIMIT 1
@@ -421,57 +421,44 @@ def _login_or_signup_with_google(
                 existing_user_row = cur.fetchone()
 
                 if existing_user_row is not None:
-                    user_id = int(existing_user_row[0])
+                    return {
+                        "ok": False,
+                        "status_code": 409,
+                        "code": "GOOGLE_ACCOUNT_NOT_LINKED",
+                        "message": "existing account must link google from authenticated session",
+                    }
 
-                    cur.execute(
-                        """
-                        UPDATE app.users
-                        SET email = %(email)s,
-                            full_name = COALESCE(full_name, %(full_name)s),
-                            email_verified = %(email_verified)s OR email_verified,
-                            last_login_at_utc = NOW(),
-                            updated_at_utc = NOW()
-                        WHERE user_id = %(user_id)s
-                        """,
-                        {
-                            "user_id": user_id,
-                            "email": email,
-                            "full_name": full_name,
-                            "email_verified": email_verified,
-                        },
+                cur.execute(
+                    """
+                    INSERT INTO app.users (
+                        email,
+                        email_normalized,
+                        full_name,
+                        preferred_lang,
+                        status,
+                        email_verified,
+                        last_login_at_utc
                     )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO app.users (
-                            email,
-                            email_normalized,
-                            full_name,
-                            preferred_lang,
-                            status,
-                            email_verified,
-                            last_login_at_utc
-                        )
-                        VALUES (
-                            %(email)s,
-                            %(email_normalized)s,
-                            %(full_name)s,
-                            %(preferred_lang)s,
-                            'active',
-                            %(email_verified)s,
-                            NOW()
-                        )
-                        RETURNING user_id
-                        """,
-                        {
-                            "email": email,
-                            "email_normalized": email_normalized,
-                            "full_name": full_name,
-                            "preferred_lang": load_settings().default_lang,
-                            "email_verified": email_verified,
-                        },
+                    VALUES (
+                        %(email)s,
+                        %(email_normalized)s,
+                        %(full_name)s,
+                        %(preferred_lang)s,
+                        'active',
+                        %(email_verified)s,
+                        NOW()
                     )
-                    user_id = int(cur.fetchone()[0])
+                    RETURNING user_id
+                    """,
+                    {
+                        "email": email,
+                        "email_normalized": email_normalized,
+                        "full_name": full_name,
+                        "preferred_lang": load_settings().default_lang,
+                        "email_verified": email_verified,
+                    },
+                )
+                user_id = int(cur.fetchone()[0])
 
                 cur.execute(
                     """
@@ -530,6 +517,7 @@ def _login_or_signup_with_google(
         "auth_payload": payload,
         "raw_session_token": raw_session_token,
     }
+
 
 def _refresh_entitlements_snapshot(cur, *, user_id: int, plan_code: str) -> Dict[str, Any]:
     entitlements = build_entitlements_for_plan(plan_code)
@@ -1497,6 +1485,244 @@ def login_with_google_credential(
         request=request,
         google_profile=google_profile,
     )
+
+
+def link_google_identity_for_authenticated_user(
+    *,
+    request: Request,
+    credential: str,
+) -> Dict[str, Any]:
+    try:
+        google_profile = _verify_google_credential(credential)
+    except ValueError as exc:
+        raw_message = str(exc) or "invalid google credential"
+
+        if raw_message == "google token clock skew":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_CLOCK_SKEW",
+                "message": "google token rejected due to small clock skew",
+            }
+
+        if raw_message == "google token expired":
+            return {
+                "ok": False,
+                "status_code": 400,
+                "code": "GOOGLE_TOKEN_EXPIRED",
+                "message": "google token expired",
+            }
+
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "INVALID_GOOGLE_CREDENTIAL",
+            "message": raw_message,
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "INVALID_GOOGLE_CREDENTIAL",
+            "message": "invalid google credential",
+        }
+
+    email = google_profile["email"]
+    email_normalized = google_profile["email_normalized"]
+    provider_user_id = google_profile["provider_user_id"]
+    email_verified = bool(google_profile["email_verified"])
+    full_name = google_profile["full_name"]
+    provider_payload = google_profile["payload"]
+
+    if not email_verified:
+        return {
+            "ok": False,
+            "status_code": 400,
+            "code": "GOOGLE_EMAIL_NOT_VERIFIED",
+            "message": "google email not verified",
+        }
+
+    raw_session_token = read_product_session_cookie(request)
+    if not raw_session_token:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "AUTH_REQUIRED",
+            "message": "authentication required",
+        }
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            current_user_id = _resolve_session_user_id(cur, raw_session_token=raw_session_token)
+            if current_user_id is None:
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required",
+                }
+
+            cur.execute(
+                """
+                SELECT email, email_normalized, status
+                FROM app.users
+                WHERE user_id = %(user_id)s
+                LIMIT 1
+                """,
+                {"user_id": current_user_id},
+            )
+            current_user_row = cur.fetchone()
+
+            if current_user_row is None:
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required",
+                }
+
+            current_status = str(current_user_row[2] or "").strip().lower()
+            if current_status == "blocked":
+                return {
+                    "ok": False,
+                    "status_code": 403,
+                    "code": "ACCOUNT_BLOCKED",
+                    "message": "account blocked",
+                }
+
+            current_email_normalized = str(current_user_row[1] or "").strip().lower()
+            if current_email_normalized != email_normalized:
+                return {
+                    "ok": False,
+                    "status_code": 409,
+                    "code": "GOOGLE_EMAIL_MISMATCH",
+                    "message": "google email does not match authenticated account",
+                }
+
+            cur.execute(
+                """
+                SELECT identity_id, user_id
+                FROM app.user_identities
+                WHERE provider = 'google'
+                  AND provider_user_id = %(provider_user_id)s
+                LIMIT 1
+                """,
+                {"provider_user_id": provider_user_id},
+            )
+            provider_match_row = cur.fetchone()
+
+            if provider_match_row is not None and int(provider_match_row[1]) != current_user_id:
+                return {
+                    "ok": False,
+                    "status_code": 409,
+                    "code": "GOOGLE_ALREADY_LINKED_TO_OTHER_ACCOUNT",
+                    "message": "google identity already linked to another account",
+                }
+
+            cur.execute(
+                """
+                SELECT identity_id, provider_user_id
+                FROM app.user_identities
+                WHERE user_id = %(user_id)s
+                  AND provider = 'google'
+                LIMIT 1
+                """,
+                {"user_id": current_user_id},
+            )
+            current_google_identity_row = cur.fetchone()
+
+            if current_google_identity_row is not None:
+                identity_id = int(current_google_identity_row[0])
+                existing_provider_user_id = str(current_google_identity_row[1] or "").strip()
+
+                if existing_provider_user_id and existing_provider_user_id != provider_user_id:
+                    return {
+                        "ok": False,
+                        "status_code": 409,
+                        "code": "GOOGLE_ALREADY_LINKED_ON_ACCOUNT",
+                        "message": "account already linked to another google identity",
+                    }
+
+                cur.execute(
+                    """
+                    UPDATE app.user_identities
+                    SET provider_user_id = %(provider_user_id)s,
+                        provider_email = %(provider_email)s,
+                        provider_payload_json = %(provider_payload_json)s::jsonb,
+                        updated_at_utc = NOW(),
+                        last_login_at_utc = NOW()
+                    WHERE identity_id = %(identity_id)s
+                    """,
+                    {
+                        "identity_id": identity_id,
+                        "provider_user_id": provider_user_id,
+                        "provider_email": email,
+                        "provider_payload_json": json.dumps(provider_payload),
+                    },
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO app.user_identities (
+                        user_id,
+                        provider,
+                        provider_user_id,
+                        provider_email,
+                        provider_payload_json,
+                        is_primary,
+                        last_login_at_utc
+                    )
+                    VALUES (
+                        %(user_id)s,
+                        'google',
+                        %(provider_user_id)s,
+                        %(provider_email)s,
+                        %(provider_payload_json)s::jsonb,
+                        FALSE,
+                        NOW()
+                    )
+                    """,
+                    {
+                        "user_id": current_user_id,
+                        "provider_user_id": provider_user_id,
+                        "provider_email": email,
+                        "provider_payload_json": json.dumps(provider_payload),
+                    },
+                )
+
+            cur.execute(
+                """
+                UPDATE app.users
+                SET email = %(email)s,
+                    email_normalized = %(email_normalized)s,
+                    full_name = COALESCE(full_name, %(full_name)s),
+                    email_verified = %(email_verified)s OR email_verified,
+                    updated_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                """,
+                {
+                    "user_id": current_user_id,
+                    "email": email,
+                    "email_normalized": email_normalized,
+                    "full_name": full_name,
+                    "email_verified": email_verified,
+                },
+            )
+
+            auth_payload = _build_authenticated_payload(
+                cur,
+                user_id=current_user_id,
+                auth_mode="session",
+                request=request,
+            )
+
+        conn.commit()
+
+    return {
+        "ok": True,
+        "auth_payload": auth_payload,
+    }
+
 
 def forgot_password(
     *,

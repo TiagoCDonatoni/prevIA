@@ -4,6 +4,7 @@ import {
   AuthRequestError,
   postAuthChangePassword,
   postAuthForgotPassword,
+  postAuthGoogleLink,
   postAuthGoogleLogin,
   postAuthLogin,
   postAuthResetPassword,
@@ -12,7 +13,7 @@ import {
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
 
-type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword";
+type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword" | "linkGoogle";
 
 let googleIdentityScriptPromise: Promise<void> | null = null;
 let googleIdentityScriptUrl = "";
@@ -96,6 +97,17 @@ function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "AUTH_REQUIRED") return langT("auth.errorAuthRequired");
   if (code === "PASSWORD_AUTH_NOT_AVAILABLE") return langT("auth.errorPasswordAuthNotAvailable");
   if (code === "PASSWORD_SAME_AS_CURRENT") return langT("auth.changePasswordSameAsCurrent");
+  if (code === "GOOGLE_ACCOUNT_NOT_LINKED") return langT("auth.errorGoogleAccountNotLinked");
+  if (code === "GOOGLE_EMAIL_MISMATCH") return langT("auth.errorGoogleEmailMismatch");
+  if (code === "GOOGLE_ALREADY_LINKED_TO_OTHER_ACCOUNT") {
+    return langT("auth.errorGoogleAlreadyLinkedToOtherAccount");
+  }
+  if (code === "GOOGLE_ALREADY_LINKED_ON_ACCOUNT") {
+    return langT("auth.errorGoogleAlreadyLinkedOnAccount");
+  }
+  if (code === "GOOGLE_EMAIL_NOT_VERIFIED") {
+    return langT("auth.errorGoogleEmailNotVerified");
+  }
   return langT("auth.genericError");
 }
 
@@ -104,6 +116,7 @@ function getTitle(tr: (k: string) => string, mode: Mode) {
   if (mode === "forgot") return tr("auth.forgotTitle");
   if (mode === "reset") return tr("auth.resetTitle");
   if (mode === "changePassword") return tr("auth.changePasswordTitle");
+  if (mode === "linkGoogle") return tr("auth.linkGoogleTitle");
   return tr("auth.loginTitle");
 }
 
@@ -112,6 +125,7 @@ function getSubtitle(tr: (k: string) => string, mode: Mode) {
   if (mode === "forgot") return tr("auth.forgotSubtitle");
   if (mode === "reset") return tr("auth.resetSubtitle");
   if (mode === "changePassword") return tr("auth.changePasswordSubtitle");
+  if (mode === "linkGoogle") return tr("auth.linkGoogleSubtitle");
   return tr("auth.loginSubtitle");
 }
 
@@ -159,7 +173,7 @@ export function ProductAuthModal(props: {
   const hasInitialResetToken = initialResetToken.trim().length > 0;
   const canStepBack = mode === "forgot" || mode === "reset";
   const secondaryActionLabel =
-    mode === "changePassword"
+    mode === "changePassword" || mode === "linkGoogle"
       ? tr("auth.cancel")
       : canStepBack
       ? tr("common.back")
@@ -249,7 +263,11 @@ export function ProductAuthModal(props: {
       setInfoText("");
 
       try {
-        const authPayload = await postAuthGoogleLogin({ credential });
+        const authPayload =
+          mode === "linkGoogle"
+            ? await postAuthGoogleLink({ credential })
+            : await postAuthGoogleLogin({ credential });
+
         await props.onAuthSuccess(authPayload);
       } catch (err) {
         if (err instanceof AuthRequestError) {
@@ -261,7 +279,7 @@ export function ProductAuthModal(props: {
         setBusy(false);
       }
     },
-    [props, tr]
+    [mode, props, tr]
   );
 
   useEffect(() => {
@@ -279,7 +297,7 @@ export function ProductAuthModal(props: {
   useEffect(() => {
     if (!open || !authEnabled) return;
     if (!googleAuthEnabled || !googleClientId) return;
-    if (mode !== "login" && mode !== "signup") return;
+    if (mode !== "login" && mode !== "signup" && mode !== "linkGoogle") return;
     if (!googleButtonRef.current) return;
 
     let cancelled = false;
@@ -304,7 +322,12 @@ export function ProductAuthModal(props: {
         window.google.accounts.id.renderButton(googleButtonRef.current, {
           theme: "outline",
           size: "large",
-          text: mode === "signup" ? "signup_with" : "signin_with",
+          text:
+            mode === "signup"
+              ? "signup_with"
+              : mode === "linkGoogle"
+              ? "continue_with"
+              : "signin_with",
           locale: googleLocale,
           shape: "rectangular",
           logo_alignment: "left",
@@ -354,6 +377,9 @@ export function ProductAuthModal(props: {
   }
 
   async function submit() {
+    if (mode === "linkGoogle") {
+      return;
+    }
     if (mode === "signup") {
       if (!email.trim() || !password.trim() || !fullName.trim()) return;
     } else if (mode === "login") {
@@ -498,14 +524,21 @@ export function ProductAuthModal(props: {
         </div>
 
         <div className="product-modal-body">
-          {(mode === "login" || mode === "signup") && googleAuthEnabled && googleClientId ? (
+          {(mode === "login" || mode === "signup" || mode === "linkGoogle") &&
+          googleAuthEnabled &&
+          googleClientId ? (
             <>
               <div className="product-google-slot">
                 <div ref={googleButtonRef} />
               </div>
-              <div className="product-auth-divider">
-                <span>{tr("auth.orContinueWithEmail")}</span>
-              </div>
+
+              {mode === "linkGoogle" ? (
+                <div className="product-auth-info">{tr("auth.googleLinkHelp")}</div>
+              ) : (
+                <div className="product-auth-divider">
+                  <span>{tr("auth.orContinueWithEmail")}</span>
+                </div>
+              )}
             </>
           ) : null}
 
@@ -533,7 +566,7 @@ export function ProductAuthModal(props: {
             </label>
           ) : null}
 
-          {mode !== "reset" && mode !== "changePassword" ? (
+          {mode !== "reset" && mode !== "changePassword" && mode !== "linkGoogle" ? (
             <label className="product-field">
               <span>{tr("auth.email")}</span>
               <input
@@ -570,7 +603,7 @@ export function ProductAuthModal(props: {
             </label>
           ) : null}
 
-          {mode !== "forgot" ? (
+          {mode !== "forgot" && mode !== "linkGoogle" ? (
             <label className="product-field">
               <span>
                 {mode === "reset" || mode === "changePassword"
@@ -617,21 +650,23 @@ export function ProductAuthModal(props: {
               {secondaryActionLabel}
             </button>
 
-            <button
-              type="button"
-              className="product-primary"
-              onClick={submit}
-              disabled={
-                busy ||
-                (mode === "signup" && (!email.trim() || !password.trim() || !fullName.trim())) ||
-                (mode === "login" && (!email.trim() || !password.trim())) ||
-                (mode === "forgot" && !email.trim()) ||
-                (mode === "reset" && (!resetToken.trim() || !password.trim())) ||
-                isChangePasswordDisabled
-              }
-            >
-              {busy ? tr("common.loading") : actionLabel}
-            </button>
+            {mode !== "linkGoogle" ? (
+              <button
+                type="button"
+                className="product-primary"
+                onClick={submit}
+                disabled={
+                  busy ||
+                  (mode === "signup" && (!email.trim() || !password.trim() || !fullName.trim())) ||
+                  (mode === "login" && (!email.trim() || !password.trim())) ||
+                  (mode === "forgot" && !email.trim()) ||
+                  (mode === "reset" && (!resetToken.trim() || !password.trim())) ||
+                  isChangePasswordDisabled
+                }
+              >
+                {busy ? tr("common.loading") : actionLabel}
+              </button>
+            ) : null}
           </div>
 
           <div className="product-modal-footer">

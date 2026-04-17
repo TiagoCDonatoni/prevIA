@@ -828,7 +828,7 @@ def _resolve_plan_price_detail_by_id(plan_price_id: Optional[Any]) -> Optional[D
         "price_version": str(row[6]) if row[6] is not None else None,
     }
 
-    def _resolve_provider_price_id_for_plan_price_id(
+def _resolve_provider_price_id_for_plan_price_id(
     plan_price_id: Optional[Any],
     *,
     billing_runtime: str = "live",
@@ -2043,6 +2043,7 @@ def preview_subscription_change_for_user(
             "provider_subscription_id": provider_subscription_id,
             "current_period_start": effective.get("current_period_start"),
             "current_period_end": effective.get("current_period_end"),
+            "updated_at_utc": effective.get("updated_at_utc"),
             "unit_amount_cents": current_unit_amount_cents,
             "price_version": (current_price or {}).get("price_version"),
         },
@@ -2067,7 +2068,177 @@ def preview_subscription_change_for_user(
         },
     }
 
-    
+
+def apply_immediate_subscription_change_for_user(
+    user_id: int,
+    *,
+    target_plan_code: str,
+    target_billing_cycle: str,
+    currency_code: str,
+    billing_runtime: str = "live",
+    preview_proration_date: Optional[int] = None,
+    preview_subscription_updated_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    normalized_target_plan_code = _normalize_plan_code(target_plan_code)
+    normalized_target_billing_cycle = _normalize_billing_cycle(target_billing_cycle)
+    normalized_currency_code = _normalize_currency_code(currency_code)
+
+    effective = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+    if effective is None:
+        raise ValueError("subscription_not_found")
+
+    if preview_subscription_updated_at:
+        current_updated_at = str(effective.get("updated_at_utc") or "").strip()
+        expected_updated_at = str(preview_subscription_updated_at or "").strip()
+        if current_updated_at and expected_updated_at and current_updated_at != expected_updated_at:
+            raise ValueError("subscription_change_preview_stale")
+
+    preview = preview_subscription_change_for_user(
+        user_id,
+        target_plan_code=normalized_target_plan_code,
+        target_billing_cycle=normalized_target_billing_cycle,
+        currency_code=normalized_currency_code,
+        billing_runtime=normalized_runtime,
+    )
+
+    decision = preview.get("decision") or {}
+    policy = preview.get("policy") or {}
+    target = preview.get("target") or {}
+    current = preview.get("current") or {}
+
+    if not bool(policy.get("can_apply_now")):
+        raise ValueError(str(decision.get("reason_code") or "subscription_change_not_applicable_now"))
+
+    if str(decision.get("effective_mode") or "") != "immediate":
+        raise ValueError("subscription_change_requires_period_end_schedule")
+
+    provider_subscription_id = str(current.get("provider_subscription_id") or "").strip()
+    if not provider_subscription_id:
+        raise ValueError("subscription_not_manageable")
+
+    target_plan_price_id = target.get("plan_price_id")
+    if target_plan_price_id in (None, ""):
+        raise ValueError("plan_price_not_found_for_currency")
+
+    target_provider_price_id = _resolve_provider_price_id_for_plan_price_id(
+        target_plan_price_id,
+        billing_runtime=normalized_runtime,
+    )
+    if not target_provider_price_id:
+        raise ValueError(f"stripe_price_not_configured_for_{normalized_runtime}")
+
+    settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=normalized_runtime)
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
+
+    stripe.api_key = runtime_config["secret_key"]
+
+    try:
+        current_subscription = stripe.Subscription.retrieve(provider_subscription_id)
+    except stripe.error.StripeError as exc:
+        raise RuntimeError("stripe_subscription_retrieve_failed") from exc
+
+    current_subscription_payload = current_subscription._to_dict_recursive()
+    primary_item = _extract_primary_subscription_item(current_subscription_payload)
+
+    subscription_item_id = str(primary_item.get("subscription_item_id") or "").strip()
+    quantity = int(primary_item.get("quantity") or 1)
+
+    if not subscription_item_id:
+        raise RuntimeError("stripe_subscription_item_not_found")
+
+    modify_params: Dict[str, Any] = {
+        "payment_behavior": "pending_if_incomplete",
+        "proration_behavior": "always_invoice",
+        "items": [
+            {
+                "id": subscription_item_id,
+                "price": target_provider_price_id,
+                "quantity": quantity,
+            }
+        ],
+        "expand": ["latest_invoice.payment_intent"],
+    }
+
+    if preview_proration_date not in (None, "", 0):
+        try:
+            modify_params["proration_date"] = int(preview_proration_date)
+        except Exception:
+            raise ValueError("invalid_preview_proration_date")
+
+    try:
+        updated_subscription = stripe.Subscription.modify(
+            provider_subscription_id,
+            **modify_params,
+        )
+    except stripe.error.StripeError as exc:
+        stripe_detail = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+        raise RuntimeError(f"stripe_subscription_update_failed: {stripe_detail}") from exc
+
+    updated_payload = updated_subscription._to_dict_recursive()
+    pending_update = updated_payload.get("pending_update") or None
+    latest_invoice = updated_payload.get("latest_invoice") or {}
+    payment_intent = latest_invoice.get("payment_intent") or {}
+
+    if pending_update:
+        summary = get_billing_subscription_summary_for_user(
+            user_id,
+            billing_runtime=normalized_runtime,
+        )
+
+        expires_at_value = pending_update.get("expires_at")
+        pending_update_expires_at = None
+        if expires_at_value not in (None, ""):
+            ts_value = _ts_from_unix(expires_at_value)
+            pending_update_expires_at = ts_value.isoformat() if ts_value else None
+
+        return {
+            "ok": True,
+            "applied": False,
+            "pending_update": True,
+            "message": "subscription_change_pending_payment",
+            "decision": decision,
+            "billing_runtime": normalized_runtime,
+            "latest_invoice_id": latest_invoice.get("id"),
+            "payment_intent_id": payment_intent.get("id"),
+            "payment_intent_status": payment_intent.get("status"),
+            "pending_update_expires_at": pending_update_expires_at,
+            **summary,
+        }
+
+    sync_result = sync_subscription_from_stripe_event(
+        {
+            "id": f"manual_subscription_change_{provider_subscription_id}_{normalized_target_plan_code}_{normalized_target_billing_cycle}",
+            "type": "customer.subscription.updated",
+            "data": {"object": updated_payload},
+        },
+        billing_runtime=normalized_runtime,
+    )
+
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+
+    return {
+        "ok": True,
+        "applied": True,
+        "pending_update": False,
+        "message": "subscription_changed",
+        "decision": decision,
+        "billing_runtime": normalized_runtime,
+        "latest_invoice_id": latest_invoice.get("id"),
+        "payment_intent_id": payment_intent.get("id"),
+        "payment_intent_status": payment_intent.get("status"),
+        "sync_result": sync_result,
+        **summary,
+    }
+
 
 def _update_subscription_cancel_at_period_end(
     *,
