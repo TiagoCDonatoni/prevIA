@@ -33,9 +33,9 @@
   "metaCount": "Exibindo: {showing} ({loaded} carregados)",
   "revealHint": "Clique em “Ver análise” para ver as probabilidades.",
   "filterLeague": "Filtrar por liga",
-  "opportunityDetected": "🔥 Oportunidade",
+  "opportunityDetected": "✦ Oportunidade",
   "sortEdge": "Ordenar por edge",
-  "onlyOpportunities": "🔥 Só oportunidades",
+  "onlyOpportunities": "✦ Só oportunidades",
   "upcomingFallbackNotice": "Nenhum jogo encontrado nas próximas 24h. Exibindo os próximos jogos disponíveis.",
   "todayEmptyNotice": "Nenhum jogo encontrado para hoje na seleção atual."
 }

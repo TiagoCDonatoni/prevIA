@@ -22,7 +22,9 @@ import {
   fetchBillingSubscription,
   postBillingCancelRenewal,
   postBillingChangeApply,
+  postBillingChangeCancel,
   postBillingChangePreview,
+  postBillingChangeSchedule,
   postBillingResumeRenewal,
   type BillingChangeDecision,
   type BillingChangePreviewResponse,
@@ -254,6 +256,8 @@ export default function ProductAccountPage() {
   const [billingChangeError, setBillingChangeError] = React.useState<string | null>(null);
   const [isBillingChangePreviewLoading, setIsBillingChangePreviewLoading] = React.useState(false);
   const [isBillingChangeApplyLoading, setIsBillingChangeApplyLoading] = React.useState(false);
+  const [isBillingChangeScheduleLoading, setIsBillingChangeScheduleLoading] = React.useState(false);
+  const [isBillingChangeCancelLoading, setIsBillingChangeCancelLoading] = React.useState(false);
   const [preferencesOpen, setPreferencesOpen] = React.useState(false);
   const snapshotPlan = account.subscription.plan_code;
   const plan =
@@ -357,7 +361,10 @@ export default function ProductAccountPage() {
     can_change_plan: true,
     can_cancel_renewal: false,
     can_resume_renewal: false,
+    can_cancel_scheduled_change: false,
   };
+
+  const scheduledBillingChange = billingState?.scheduled_change ?? null;
 
   const displayBillingPlanLabel = mapPlanLabel(billingSubscription?.plan_code ?? plan);
   const displayBillingStatus = mapSubscriptionStatusLabel(
@@ -401,10 +408,24 @@ export default function ProductAccountPage() {
     billingChangePreview?.decision
   );
 
-  const billingChangeReasonMessage = getBillingChangeReasonMessage(
+  const scheduledBillingChangeEffectiveAt = formatDateTime(
     lang,
-    billingChangePreview?.decision?.reason_code
+    scheduledBillingChange?.effective_at_utc
   );
+
+  const scheduledBillingChangeDescription =
+    scheduledBillingChange != null
+      ? `${mapPlanLabel(scheduledBillingChange.target_plan_code)} • ${mapBillingCycleLabel(
+          lang,
+          scheduledBillingChange.target_billing_cycle as
+            | "monthly"
+            | "quarterly"
+            | "semiannual"
+            | "annual"
+            | null
+            | undefined
+        )}`
+      : null;
 
   const billingChangeAmountDueLabel = formatMoney(
     lang,
@@ -925,6 +946,96 @@ export default function ProductAccountPage() {
     }
   }
 
+  async function handleBillingChangeSchedule() {
+    if (!billingChangePreview?.policy?.can_schedule) return;
+
+    try {
+      setIsBillingChangeScheduleLoading(true);
+      setBillingChangeError(null);
+      setBillingActionMessage(null);
+
+      const result = await postBillingChangeSchedule({
+        target_plan_code: billingChangePlan,
+        target_billing_cycle: billingChangeCycle,
+        currency_code: effectiveBillingCurrency,
+        preview_subscription_updated_at: billingChangePreview.current.updated_at_utc ?? null,
+      });
+
+      setBillingState(result);
+      setBillingChangePreview(null);
+
+      await syncAccountFromBackend();
+
+      setBillingActionMessage(
+        lang === "pt"
+          ? "Mudança agendada para a próxima renovação."
+          : lang === "es"
+          ? "Cambio programado para la próxima renovación."
+          : "Change scheduled for the next renewal."
+      );
+    } catch (error) {
+      console.error("handleBillingChangeSchedule failed", error);
+
+      if (error instanceof BillingRequestError) {
+        const friendly = getBillingChangeReasonMessage(lang, error.code || error.message);
+        setBillingChangeError(
+          friendly ??
+            (lang === "pt"
+              ? "Não foi possível agendar a mudança."
+              : lang === "es"
+              ? "No se pudo programar el cambio."
+              : "Could not schedule the change.")
+        );
+      } else {
+        setBillingChangeError(
+          lang === "pt"
+            ? "Não foi possível agendar a mudança."
+            : lang === "es"
+            ? "No se pudo programar el cambio."
+            : "Could not schedule the change."
+        );
+      }
+    } finally {
+      setIsBillingChangeScheduleLoading(false);
+    }
+  }
+
+  async function handleBillingChangeCancel() {
+    if (!billingActions.can_cancel_scheduled_change) return;
+
+    try {
+      setIsBillingChangeCancelLoading(true);
+      setBillingChangeError(null);
+      setBillingActionMessage(null);
+
+      const result = await postBillingChangeCancel();
+
+      setBillingState(result);
+      setBillingChangePreview(null);
+
+      await syncAccountFromBackend();
+
+      setBillingActionMessage(
+        lang === "pt"
+          ? "Mudança agendada cancelada."
+          : lang === "es"
+          ? "Cambio programado cancelado."
+          : "Scheduled change cancelled."
+      );
+    } catch (error) {
+      console.error("handleBillingChangeCancel failed", error);
+      setBillingChangeError(
+        lang === "pt"
+          ? "Não foi possível cancelar a mudança agendada."
+          : lang === "es"
+          ? "No se pudo cancelar el cambio programado."
+          : "Could not cancel the scheduled change."
+      );
+    } finally {
+      setIsBillingChangeCancelLoading(false);
+    }
+  }
+
   async function handleSaveProfile() {
     const nextName = profileName.trim();
 
@@ -980,7 +1091,7 @@ export default function ProductAccountPage() {
               >
                 {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
               </button>
-              
+
               {!isAuthenticated ? (
                 <button
                   type="button"
@@ -1248,7 +1359,7 @@ export default function ProductAccountPage() {
             </div>
           ) : null}
 
-                    {canUseSelfServicePlanChange ? (
+          {canUseSelfServicePlanChange ? (
             <div className="account-note" style={{ marginTop: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>
                 {lang === "pt"
@@ -1359,10 +1470,10 @@ export default function ProductAccountPage() {
                   !billingChangePreview.policy.can_apply_now ? (
                     <div>
                       {lang === "pt"
-                        ? "Essa mudança foi classificada para a próxima renovação. O agendamento self-service entra no próximo patch."
+                        ? "Essa mudança será aplicada na próxima renovação."
                         : lang === "es"
-                        ? "Este cambio fue clasificado para la próxima renovación. La programación self-service entra en el próximo patch."
-                        : "This change was classified for the next renewal. Self-service scheduling lands in the next patch."}
+                        ? "Este cambio se aplicará en la próxima renovación."
+                        : "This change will take effect on the next renewal."}
                     </div>
                   ) : null}
                 </div>
@@ -1395,6 +1506,32 @@ export default function ProductAccountPage() {
                     : "View preview"}
                 </button>
 
+                {billingChangePreview?.policy.can_schedule &&
+                !billingChangePreview.policy.can_apply_now ? (
+                  <button
+                    type="button"
+                    className="product-primary"
+                    disabled={
+                      isBillingChangeScheduleLoading ||
+                      isBillingChangePreviewLoading ||
+                      isBillingChangeApplyLoading
+                    }
+                    onClick={() => void handleBillingChangeSchedule()}
+                  >
+                    {isBillingChangeScheduleLoading
+                      ? lang === "pt"
+                        ? "Agendando..."
+                        : lang === "es"
+                        ? "Programando..."
+                        : "Scheduling..."
+                      : lang === "pt"
+                      ? "Agendar para o próximo ciclo"
+                      : lang === "es"
+                      ? "Programar para el próximo ciclo"
+                      : "Schedule for next cycle"}
+                  </button>
+                ) : null}
+
                 {billingChangePreview?.policy.can_apply_now ? (
                   <button
                     type="button"
@@ -1415,7 +1552,62 @@ export default function ProductAccountPage() {
                       : "Apply now"}
                   </button>
                 ) : null}
+
+
               </div>
+            </div>
+          ) : null}
+
+          {scheduledBillingChange ? (
+            <div className="account-note" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                {lang === "pt"
+                  ? "Mudança agendada"
+                  : lang === "es"
+                  ? "Cambio programado"
+                  : "Scheduled change"}
+              </div>
+
+              <div style={{ display: "grid", gap: 6 }}>
+                <div>
+                  {lang === "pt"
+                    ? `Novo plano: ${scheduledBillingChangeDescription ?? "—"}`
+                    : lang === "es"
+                    ? `Nuevo plan: ${scheduledBillingChangeDescription ?? "—"}`
+                    : `New plan: ${scheduledBillingChangeDescription ?? "—"}`}
+                </div>
+
+                <div>
+                  {lang === "pt"
+                    ? `Data efetiva: ${scheduledBillingChangeEffectiveAt ?? "—"}`
+                    : lang === "es"
+                    ? `Fecha efectiva: ${scheduledBillingChangeEffectiveAt ?? "—"}`
+                    : `Effective date: ${scheduledBillingChangeEffectiveAt ?? "—"}`}
+                </div>
+              </div>
+
+              {billingActions.can_cancel_scheduled_change ? (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="product-secondary"
+                    disabled={isBillingChangeCancelLoading}
+                    onClick={() => void handleBillingChangeCancel()}
+                  >
+                    {isBillingChangeCancelLoading
+                      ? lang === "pt"
+                        ? "Cancelando..."
+                        : lang === "es"
+                        ? "Cancelando..."
+                        : "Cancelling..."
+                      : lang === "pt"
+                      ? "Cancelar mudança agendada"
+                      : lang === "es"
+                      ? "Cancelar cambio programado"
+                      : "Cancel scheduled change"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

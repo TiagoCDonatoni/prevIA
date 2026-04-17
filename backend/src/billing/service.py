@@ -2076,6 +2076,7 @@ def preview_subscription_change_for_user(
             "effective_mode": decision["effective_mode"],
             "reason_code": reason_code,
         },
+        "scheduled_change": existing_scheduled_change,
         "preview": preview_payload,
         "policy": {
             "can_apply_now": can_apply_now,

@@ -2568,6 +2568,55 @@
   gap: 18px;
 }
 
+.public-product-embed-surface .pi-grid {
+  align-items: stretch;
+}
+
+.public-product-embed-surface .pi-card-analysis {
+  min-height: 0;
+  align-self: stretch;
+}
+
+.public-product-embed-surface .pi-card-analysis-box {
+  max-height: clamp(420px, 62vh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 6px;
+}
+
+/* padroniza a scrollbar da lista e da análise só no embed */
+.public-product-embed-surface .pi-card-list .pi-list,
+.public-product-embed-surface .pi-card-analysis-box {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.42) transparent;
+}
+
+.public-product-embed-surface .pi-card-list .pi-list::-webkit-scrollbar,
+.public-product-embed-surface .pi-card-analysis-box::-webkit-scrollbar {
+  width: 10px;
+}
+
+.public-product-embed-surface .pi-card-list .pi-list::-webkit-scrollbar-track,
+.public-product-embed-surface .pi-card-analysis-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.public-product-embed-surface .pi-card-list .pi-list::-webkit-scrollbar-thumb,
+.public-product-embed-surface .pi-card-analysis-box::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.42);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.public-product-embed-surface .pi-card-list .pi-list::-webkit-scrollbar-thumb:hover,
+.public-product-embed-surface .pi-card-analysis-box::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.56);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 
 @media (max-width: 900px) {
   .public-product-embed-toolbar {

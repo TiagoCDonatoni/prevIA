@@ -33,9 +33,9 @@
   "metaCount": "Showing: {showing} ({loaded} loaded)",
   "revealHint": "Click “View analysis” to see probabilities.",
   "filterLeague": "Filter by league",
-  "opportunityDetected": "🔥 Opportunity",
+  "opportunityDetected": "✦ Opportunity",
   "sortEdge": "Sort by edge",
-  "onlyOpportunities": "🔥 Only opportunities",
+  "onlyOpportunities": "✦ Only opportunities",
   "upcomingFallbackNotice": "No matches found in the next 24 hours. Showing the next available matches.",
   "todayEmptyNotice": "No matches found for today in the current selection."
 }
