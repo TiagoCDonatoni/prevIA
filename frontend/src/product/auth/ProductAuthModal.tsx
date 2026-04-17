@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AuthRequestError,
@@ -13,6 +13,76 @@ import {
 import { t, type Lang } from "../i18n";
 
 type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword";
+
+let googleIdentityScriptPromise: Promise<void> | null = null;
+let googleIdentityScriptUrl = "";
+let googleIdentityInitializedClientId = "";
+let googleIdentityCredentialHandler: ((credential: string) => void) | null = null;
+
+function ensureGoogleIdentityScript(hl: string): Promise<void> {
+  const scriptSrc = `https://accounts.google.com/gsi/client?hl=${encodeURIComponent(hl)}`;
+
+  if (
+    googleIdentityScriptPromise &&
+    googleIdentityScriptUrl === scriptSrc &&
+    window.google?.accounts?.id
+  ) {
+    return googleIdentityScriptPromise;
+  }
+
+  if (googleIdentityScriptPromise && googleIdentityScriptUrl === scriptSrc) {
+    return googleIdentityScriptPromise;
+  }
+
+  googleIdentityScriptUrl = scriptSrc;
+  googleIdentityInitializedClientId = "";
+
+  googleIdentityScriptPromise = new Promise((resolve, reject) => {
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      'script[data-google-gsi="true"]'
+    );
+
+    if (existingScript?.src === scriptSrc && window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+
+    if (existingScript) {
+      existingScript.remove();
+    }
+
+    const script = document.createElement("script");
+    script.src = scriptSrc;
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleGsi = "true";
+
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Google Identity script"));
+
+    document.body.appendChild(script);
+  });
+
+  return googleIdentityScriptPromise;
+}
+
+function ensureGoogleIdentityInitialized(clientId: string) {
+  if (!window.google?.accounts?.id) return;
+  if (googleIdentityInitializedClientId === clientId) return;
+
+  window.google.accounts.id.initialize({
+    client_id: clientId,
+    callback: (response) => {
+      const credential = String(response.credential || "");
+      googleIdentityCredentialHandler?.(credential);
+    },
+    auto_select: false,
+    cancel_on_tap_outside: true,
+    use_fedcm_for_prompt: true,
+  });
+
+  googleIdentityInitializedClientId = clientId;
+}
 
 function mapAuthErrorCode(langT: (k: string) => string, code?: string): string {
   if (code === "INVALID_EMAIL") return langT("auth.errorInvalidEmail");
@@ -68,7 +138,7 @@ export function ProductAuthModal(props: {
     String(import.meta.env.VITE_PRODUCT_GOOGLE_AUTH_ENABLED ?? "false").toLowerCase() === "true";
   const googleClientId = String(import.meta.env.VITE_PRODUCT_GOOGLE_CLIENT_ID ?? "").trim();
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
-  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const googleCredentialHandlerRef = useRef<(credential: string) => void>(() => {});
   const googleLoginInFlightRef = useRef(false);
   const googleInitializedRef = useRef(false);
 
@@ -167,69 +237,44 @@ export function ProductAuthModal(props: {
     };
   }, [open, busy]);
 
-  async function handleGoogleCredential(credential: string) {
-    if (!credential) {
-      setErrorText(tr("auth.errorInvalidGoogleCredential"));
-      return;
-    }
-
-    if (googleLoginInFlightRef.current) {
-      return;
-    }
-
-    googleLoginInFlightRef.current = true;
-    setBusy(true);
-    resetFeedback();
-
-    try {
-      const authPayload = await postAuthGoogleLogin({ credential });
-      await props.onAuthSuccess(authPayload);
-    } catch (err) {
-      if (err instanceof AuthRequestError) {
-        setErrorText(mapAuthErrorCode(tr, err.code));
-      } else {
-        setErrorText(tr("auth.genericError"));
+  const handleGoogleCredential = useCallback(
+    async (credential: string) => {
+      if (!credential) {
+        setErrorText(tr("auth.errorInvalidGoogleCredential"));
+        return;
       }
-    } finally {
-      googleLoginInFlightRef.current = false;
-      setBusy(false);
-    }
-  }
+
+      setBusy(true);
+      setErrorText("");
+      setInfoText("");
+
+      try {
+        const authPayload = await postAuthGoogleLogin({ credential });
+        await props.onAuthSuccess(authPayload);
+      } catch (err) {
+        if (err instanceof AuthRequestError) {
+          setErrorText(mapAuthErrorCode(tr, err.code));
+        } else {
+          setErrorText(tr("auth.genericError"));
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [props, tr]
+  );
+
+  useEffect(() => {
+    googleCredentialHandlerRef.current = (credential: string) => {
+      void handleGoogleCredential(credential);
+    };
+  }, [handleGoogleCredential]);
 
   const googleLocale =
     lang === "pt" ? "pt-BR" : lang === "es" ? "es-419" : "en";
 
   const googleScriptHl =
     lang === "pt" ? "pt-BR" : lang === "es" ? "es-419" : "en";
-
-  function loadGoogleIdentityScript(hl: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const scriptSrc = `https://accounts.google.com/gsi/client?hl=${encodeURIComponent(hl)}`;
-      const existingScript = document.querySelector<HTMLScriptElement>(
-        'script[data-google-gsi="true"]'
-      );
-
-      if (existingScript?.src === scriptSrc && window.google?.accounts?.id) {
-        resolve();
-        return;
-      }
-
-      if (existingScript) {
-        existingScript.remove();
-      }
-
-      const script = document.createElement("script");
-      script.src = scriptSrc;
-      script.async = true;
-      script.defer = true;
-      script.dataset.googleGsi = "true";
-
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Failed to load Google Identity script"));
-
-      document.body.appendChild(script);
-    });
-  }
 
   useEffect(() => {
     if (!open || !authEnabled) return;
@@ -241,27 +286,19 @@ export function ProductAuthModal(props: {
 
     async function renderGoogleButton() {
       try {
-        await loadGoogleIdentityScript(googleScriptHl);
+        await ensureGoogleIdentityScript(googleScriptHl);
 
         if (cancelled) return;
         if (!googleButtonRef.current) return;
         if (!window.google?.accounts?.id) return;
 
-        if (!googleInitializedRef.current) {
-          window.google.accounts.id.initialize({
-            client_id: googleClientId,
-            callback: (response) => {
-              void handleGoogleCredential(String(response.credential || ""));
-            },
-            auto_select: false,
-            cancel_on_tap_outside: true,
-            use_fedcm_for_prompt: true,
-          });
+        googleIdentityCredentialHandler = (credential: string) => {
+          if (cancelled) return;
+          googleCredentialHandlerRef.current(credential);
+        };
 
-          googleInitializedRef.current = true;
-        }
+        ensureGoogleIdentityInitialized(googleClientId);
 
-        window.google.accounts.id.cancel();
         googleButtonRef.current.innerHTML = "";
 
         window.google.accounts.id.renderButton(googleButtonRef.current, {
@@ -283,8 +320,8 @@ export function ProductAuthModal(props: {
     return () => {
       cancelled = true;
 
-      if (window.google?.accounts?.id) {
-        window.google.accounts.id.cancel();
+      if (googleIdentityCredentialHandler) {
+        googleIdentityCredentialHandler = null;
       }
 
       if (googleButtonRef.current) {

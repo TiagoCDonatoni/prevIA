@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { Link, Outlet, useNavigate } from "react-router-dom"; 
+import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import {
   PRODUCT_APP_REQUIRE_LOGIN,
@@ -29,8 +29,6 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
 import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
 import { resolveAccountPreferences } from "../preferences/accountPreferences";
-
-import { ProductAuthGate } from "../components/ProductAuthGate";
 
   type FooterSocialId = "instagram" | "x" | "tiktok";
 
@@ -219,6 +217,7 @@ export function ProductLayout() {
   const internalPlanViewOptions = PLAN_LABELS.filter((item) => item.id !== "FREE_ANON");
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [authOpen, setAuthOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<
@@ -339,6 +338,16 @@ React.useEffect(() => {
     !authBootstrapPending &&
     !isAuthenticated;
 
+  const redirectAppPath =
+    `${location.pathname}${location.search}${location.hash}`.trim() || "/app";
+
+  const landingLoginRedirect = (() => {
+    const params = new URLSearchParams();
+    params.set("auth", "login");
+    params.set("next", redirectAppPath.startsWith("/") ? redirectAppPath : "/app");
+    return `/${lang}?${params.toString()}`;
+  })();
+
   const isAccountMenuEligiblePlan =
     plan === "FREE" ||
     plan === "BASIC" ||
@@ -439,6 +448,7 @@ React.useEffect(() => {
   }
 
   async function handleTestingReset(onAfterReset?: () => void) {
+    clearProductPlanOverride();
     store.resetForTesting();
     onAfterReset?.();
 
@@ -485,7 +495,7 @@ React.useEffect(() => {
       setIsAccountMenuOpen(false);
       setIsMobileHeaderMenuOpen(false);
 
-      navigate(PRODUCT_APP_REQUIRE_LOGIN ? "/app" : `/${lang}`, { replace: true });
+    navigate(`/${lang}`, { replace: true });
     } catch (err) {
       console.error("product logout failed", err);
     }
@@ -545,22 +555,11 @@ React.useEffect(() => {
   }
 
   if (shouldShowBlockingAuthSplash) {
-    return <ProductAuthGate lang={lang} loading />;
+    return null;
   }
 
   if (shouldRequireLoginGate) {
-    return (
-      <>
-        <ProductAuthGate
-          lang={lang}
-          busy={authOpen}
-          onLogin={() => openAuthModal("login")}
-          onSignup={() => openAuthModal("signup")}
-          onForgot={() => openAuthModal("forgot")}
-        />
-        {renderAuthModal()}
-      </>
-    );
+    return <Navigate to={landingLoginRedirect} replace />;
   }
 
   const mobileMenuLabel =

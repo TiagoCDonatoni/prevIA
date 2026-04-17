@@ -16,6 +16,7 @@ from src.db.pg import pg_conn
 VALID_PLAN_CODES = {"BASIC", "LIGHT", "PRO"}
 VALID_BILLING_CYCLES = {"monthly", "quarterly", "annual"}
 VALID_CURRENCY_CODES = {"BRL", "USD"}
+VALID_BILLING_RUNTIMES = {"sandbox", "live"}
 
 SUBSCRIPTION_STATUS_MAP = {
     "trialing": "trialing",
@@ -75,6 +76,30 @@ def _normalize_currency_code(currency_code: Optional[str]) -> str:
     if value not in VALID_CURRENCY_CODES:
         return "BRL"
     return value
+
+def _normalize_billing_runtime(billing_runtime: Optional[str]) -> str:
+    value = str(billing_runtime or "").strip().lower()
+    if value not in VALID_BILLING_RUNTIMES:
+        return "live"
+    return value
+
+
+def _resolve_stripe_runtime_config(settings, *, billing_runtime: Optional[str]) -> Dict[str, str]:
+    runtime = _normalize_billing_runtime(billing_runtime)
+    if runtime == "sandbox":
+        return {
+            "billing_runtime": "sandbox",
+            "secret_key": str(settings.stripe_sandbox_secret_key or "").strip(),
+            "publishable_key": str(settings.stripe_sandbox_publishable_key or "").strip(),
+            "webhook_secret": str(settings.stripe_sandbox_webhook_secret or "").strip(),
+        }
+
+    return {
+        "billing_runtime": "live",
+        "secret_key": str(settings.stripe_live_secret_key or "").strip(),
+        "publishable_key": str(settings.stripe_live_publishable_key or "").strip(),
+        "webhook_secret": str(settings.stripe_live_webhook_secret or "").strip(),
+    }
 
 def _ts_from_unix(value: Any) -> Optional[datetime]:
     if value in (None, "", 0):
@@ -136,9 +161,15 @@ def _extract_price_from_subscription(subscription: Dict[str, Any]) -> Dict[str, 
     }
 
 
-def _resolve_plan_price_by_provider_price_id(provider_price_id: Optional[str]) -> Optional[Dict[str, Any]]:
+def _resolve_plan_price_by_provider_price_id(
+    provider_price_id: Optional[str],
+    *,
+    billing_runtime: Optional[str] = "live",
+) -> Optional[Dict[str, Any]]:
     if not provider_price_id:
         return None
+
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -147,10 +178,17 @@ def _resolve_plan_price_by_provider_price_id(provider_price_id: Optional[str]) -
                 SELECT plan_price_id, price_code, plan_code, billing_cycle, currency_code
                 FROM billing.plan_prices
                 WHERE provider = 'stripe'
-                  AND provider_price_id = %(provider_price_id)s
+                  AND (
+                    (%(billing_runtime)s = 'sandbox' AND provider_price_id = %(provider_price_id)s)
+                    OR
+                    (%(billing_runtime)s = 'live' AND provider_price_id_live = %(provider_price_id)s)
+                  )
                 LIMIT 1
                 """,
-                {"provider_price_id": provider_price_id},
+                {
+                    "billing_runtime": normalized_runtime,
+                    "provider_price_id": provider_price_id,
+                },
             )
             row = cur.fetchone()
         conn.commit()
@@ -167,7 +205,11 @@ def _resolve_plan_price_by_provider_price_id(provider_price_id: Optional[str]) -
     }
 
 
-def _resolve_user_id_from_subscription_payload(subscription: Dict[str, Any]) -> Optional[int]:
+def _resolve_user_id_from_subscription_payload(
+    subscription: Dict[str, Any],
+    *,
+    billing_runtime: Optional[str] = "live",
+) -> Optional[int]:
     metadata = subscription.get("metadata") or {}
     user_id = metadata.get("user_id")
     if user_id:
@@ -180,6 +222,8 @@ def _resolve_user_id_from_subscription_payload(subscription: Dict[str, Any]) -> 
     if not customer_id:
         return None
 
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
     with pg_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -187,11 +231,15 @@ def _resolve_user_id_from_subscription_payload(subscription: Dict[str, Any]) -> 
                 SELECT user_id
                 FROM billing.subscriptions
                 WHERE provider = 'stripe'
+                  AND billing_runtime = %(billing_runtime)s
                   AND provider_customer_id = %(customer_id)s
                 ORDER BY updated_at_utc DESC, subscription_id DESC
                 LIMIT 1
                 """,
-                {"customer_id": str(customer_id)},
+                {
+                    "billing_runtime": normalized_runtime,
+                    "customer_id": str(customer_id),
+                },
             )
             row = cur.fetchone()
         conn.commit()
@@ -281,25 +329,28 @@ def create_checkout_session_for_user(
     plan_code: str,
     billing_cycle: str,
     currency_code: str,
+    billing_runtime: str = "live",
 ) -> Dict[str, Any]:
     settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=billing_runtime)
+    normalized_runtime = runtime_config["billing_runtime"]
 
-    if not settings.stripe_secret_key:
-        raise RuntimeError("stripe_not_configured")
-    if not settings.stripe_publishable_key:
-        raise RuntimeError("stripe_publishable_key_not_configured")
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
+    if not runtime_config["publishable_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_publishable_key_not_configured")
 
     plan_code = _normalize_plan_code(plan_code)
     billing_cycle = _normalize_billing_cycle(billing_cycle)
     currency_code = _normalize_currency_code(currency_code)
 
-    effective = get_effective_subscription_for_user(user_id)
+    effective = get_effective_subscription_for_user(user_id, billing_runtime=normalized_runtime)
     if effective is not None:
         provider = str(effective.get("provider") or "").strip().lower()
         provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
         billing_status = str(effective.get("billing_status") or "").strip().lower()
 
-        if provider == "stripe" and provider_subscription_id and billing_status not in {"canceled", "expired"}:
+        if provider == "stripe" and provider_subscription_id and not _is_terminal_billing_status(billing_status):
             raise ValueError("subscription_change_must_use_account_billing")
 
     with pg_conn() as conn:
@@ -318,7 +369,6 @@ def create_checkout_session_for_user(
                 raise ValueError("user_not_found")
 
             email = str(user_row[0])
-            full_name = str(user_row[1]) if user_row[1] is not None else None
 
             cur.execute(
                 """
@@ -328,7 +378,9 @@ def create_checkout_session_for_user(
                     currency_code,
                     unit_amount_cents,
                     provider_product_id,
-                    provider_price_id
+                    provider_price_id,
+                    provider_product_id_live,
+                    provider_price_id_live
                 FROM billing.plan_prices
                 WHERE plan_code = %(plan_code)s
                   AND billing_cycle = %(billing_cycle)s
@@ -350,11 +402,16 @@ def create_checkout_session_for_user(
             plan_price_id = int(price_row[0])
             price_code = str(price_row[1])
             executable_currency_code = str(price_row[2] or "BRL").upper()
-            provider_product_id = price_row[4]
-            provider_price_id = price_row[5]
+
+            if normalized_runtime == "sandbox":
+                provider_product_id = price_row[4]
+                provider_price_id = price_row[5]
+            else:
+                provider_product_id = price_row[6]
+                provider_price_id = price_row[7]
 
             if not provider_price_id:
-                raise ValueError("stripe_price_not_configured")
+                raise ValueError(f"stripe_price_not_configured_for_{normalized_runtime}")
 
             cur.execute(
                 """
@@ -362,18 +419,22 @@ def create_checkout_session_for_user(
                 FROM billing.subscriptions
                 WHERE user_id = %(user_id)s
                   AND provider = 'stripe'
+                  AND billing_runtime = %(billing_runtime)s
                   AND provider_customer_id IS NOT NULL
                 ORDER BY updated_at_utc DESC, subscription_id DESC
                 LIMIT 1
                 """,
-                {"user_id": user_id},
+                {
+                    "user_id": user_id,
+                    "billing_runtime": normalized_runtime,
+                },
             )
             customer_row = cur.fetchone()
             provider_customer_id = str(customer_row[0]) if customer_row and customer_row[0] else None
 
         conn.commit()
 
-    stripe.api_key = settings.stripe_secret_key
+    stripe.api_key = runtime_config["secret_key"]
 
     return_url = _build_checkout_return_url(settings)
 
@@ -398,6 +459,7 @@ def create_checkout_session_for_user(
             "plan_price_id": str(plan_price_id),
             "price_code": price_code,
             "provider_price_id": provider_price_id,
+            "billing_runtime": normalized_runtime,
         },
         "subscription_data": {
             "metadata": {
@@ -408,6 +470,7 @@ def create_checkout_session_for_user(
                 "plan_price_id": str(plan_price_id),
                 "price_code": price_code,
                 "provider_price_id": provider_price_id,
+                "billing_runtime": normalized_runtime,
             }
         },
     }
@@ -432,16 +495,21 @@ def create_checkout_session_for_user(
         "ui_mode": "elements",
         "session_id": session.id,
         "checkout_client_secret": client_secret,
-        "publishable_key": settings.stripe_publishable_key,
+        "publishable_key": runtime_config["publishable_key"],
         "price_code": price_code,
         "plan_code": plan_code,
         "billing_cycle": billing_cycle,
         "currency_code": executable_currency_code,
         "provider_product_id": provider_product_id,
         "provider_price_id": provider_price_id,
+        "billing_runtime": normalized_runtime,
     }
 
-def _resolve_user_id_from_checkout_session_payload(checkout_session: Dict[str, Any]) -> Optional[int]:
+def _resolve_user_id_from_checkout_session_payload(
+    checkout_session: Dict[str, Any],
+    *,
+    billing_runtime: Optional[str] = "live",
+) -> Optional[int]:
     metadata = checkout_session.get("metadata") or {}
 
     for candidate in (metadata.get("user_id"), checkout_session.get("client_reference_id")):
@@ -454,6 +522,8 @@ def _resolve_user_id_from_checkout_session_payload(checkout_session: Dict[str, A
 
     customer_id = str(checkout_session.get("customer") or "").strip()
     if customer_id:
+        normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
         with pg_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -461,11 +531,15 @@ def _resolve_user_id_from_checkout_session_payload(checkout_session: Dict[str, A
                     SELECT user_id
                     FROM billing.subscriptions
                     WHERE provider = 'stripe'
+                      AND billing_runtime = %(billing_runtime)s
                       AND provider_customer_id = %(customer_id)s
                     ORDER BY updated_at_utc DESC, subscription_id DESC
                     LIMIT 1
                     """,
-                    {"customer_id": customer_id},
+                    {
+                        "billing_runtime": normalized_runtime,
+                        "customer_id": customer_id,
+                    },
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -629,6 +703,9 @@ def _normalize_subscription_row_status(billing_status: Optional[str]) -> str:
         return "cancelled"
     return "expired"
 
+def _is_terminal_billing_status(billing_status: Optional[str]) -> bool:
+    value = str(billing_status or "").strip().lower()
+    return value in {"canceled", "cancelled", "expired", "incomplete_expired"}
 
 def _build_entitlements_for_plan(plan_code: str) -> Dict[str, Any]:
     plan = str(plan_code or "FREE").strip().upper()
@@ -710,18 +787,28 @@ def _upsert_entitlements_snapshot(cur, *, user_id: int, plan_code: str) -> Dict[
     return entitlements
 
 
-def _insert_subscription_event(cur, *, subscription_id: int, user_id: int, event_type: str, payload_json: Dict[str, Any]) -> None:
+def _insert_subscription_event(
+    cur,
+    *,
+    subscription_id: int,
+    user_id: int,
+    event_type: str,
+    billing_runtime: str,
+    payload_json: Dict[str, Any],
+) -> None:
     cur.execute(
         """
         INSERT INTO billing.subscription_events (
             subscription_id,
             user_id,
+            billing_runtime,
             event_type,
             payload_json
         )
         VALUES (
             %(subscription_id)s,
             %(user_id)s,
+            %(billing_runtime)s,
             %(event_type)s,
             %(payload_json)s::jsonb
         )
@@ -729,16 +816,22 @@ def _insert_subscription_event(cur, *, subscription_id: int, user_id: int, event
         {
             "subscription_id": subscription_id,
             "user_id": user_id,
+            "billing_runtime": _normalize_billing_runtime(billing_runtime),
             "event_type": event_type,
             "payload_json": _json_dumps_safe(payload_json),
         },
     )
 
 
-def _extract_webhook_context(event: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_webhook_context(
+    event: Dict[str, Any],
+    *,
+    billing_runtime: Optional[str] = "live",
+) -> Dict[str, Any]:
     event_id = str(event.get("id") or "")
     event_type = str(event.get("type") or "")
     data_object = (((event or {}).get("data") or {}).get("object") or {})
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
 
     provider_customer_id = None
     provider_checkout_session_id = None
@@ -753,7 +846,10 @@ def _extract_webhook_context(event: Dict[str, Any]) -> Dict[str, Any]:
         provider_checkout_session_id = str(checkout_session.get("id") or "").strip() or None
         provider_subscription_id = str(checkout_session.get("subscription") or "").strip() or None
         provider_price_id = str((checkout_session.get("metadata") or {}).get("provider_price_id") or "").strip() or None
-        user_id = _resolve_user_id_from_checkout_session_payload(checkout_session)
+        user_id = _resolve_user_id_from_checkout_session_payload(
+            checkout_session,
+            billing_runtime=normalized_runtime,
+        )
         resolved = _resolve_plan_price_from_checkout_session_payload(checkout_session)
         if resolved is not None:
             plan_price_id = int(resolved["plan_price_id"])
@@ -763,14 +859,21 @@ def _extract_webhook_context(event: Dict[str, Any]) -> Dict[str, Any]:
         provider_subscription_id = str(subscription.get("id") or "").strip() or None
         extracted_price = _extract_price_from_subscription(subscription)
         provider_price_id = str(extracted_price.get("provider_price_id") or "").strip() or None
-        user_id = _resolve_user_id_from_subscription_payload(subscription)
-        resolved = _resolve_plan_price_by_provider_price_id(provider_price_id)
+        user_id = _resolve_user_id_from_subscription_payload(
+            subscription,
+            billing_runtime=normalized_runtime,
+        )
+        resolved = _resolve_plan_price_by_provider_price_id(
+            provider_price_id,
+            billing_runtime=normalized_runtime,
+        )
         if resolved is not None:
             plan_price_id = int(resolved["plan_price_id"])
 
     return {
         "event_id": event_id,
         "event_type": event_type,
+        "billing_runtime": normalized_runtime,
         "user_id": user_id,
         "plan_price_id": plan_price_id,
         "provider_customer_id": provider_customer_id,
@@ -784,11 +887,13 @@ def _upsert_stripe_webhook_event(
     *,
     event: Dict[str, Any],
     status: str,
+    billing_runtime: str,
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
     sync_result: Optional[Dict[str, Any]] = None,
 ) -> None:
-    context = _extract_webhook_context(event)
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    context = _extract_webhook_context(event, billing_runtime=normalized_runtime)
     payload_json: Dict[str, Any] = {"event": event}
     if sync_result is not None:
         payload_json["sync_result"] = sync_result
@@ -799,6 +904,7 @@ def _upsert_stripe_webhook_event(
                 """
                 INSERT INTO billing.webhook_events (
                     provider,
+                    billing_runtime,
                     provider_event_id,
                     event_type,
                     status,
@@ -817,6 +923,7 @@ def _upsert_stripe_webhook_event(
                 )
                 VALUES (
                     'stripe',
+                    %(billing_runtime)s,
                     %(provider_event_id)s,
                     %(event_type)s,
                     %(status)s,
@@ -833,7 +940,7 @@ def _upsert_stripe_webhook_event(
                     NOW(),
                     NOW()
                 )
-                ON CONFLICT (provider, provider_event_id)
+                ON CONFLICT (provider, billing_runtime, provider_event_id)
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
                     status = EXCLUDED.status,
@@ -850,6 +957,7 @@ def _upsert_stripe_webhook_event(
                     updated_at_utc = NOW()
                 """,
                 {
+                    "billing_runtime": normalized_runtime,
                     "provider_event_id": context["event_id"],
                     "event_type": context["event_type"],
                     "status": status,
@@ -868,15 +976,52 @@ def _upsert_stripe_webhook_event(
         conn.commit()
 
 
-def process_stripe_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    _safe_upsert_stripe_webhook_event(event=event, status="received")
+def process_stripe_webhook_event(
+    event: Dict[str, Any],
+    *,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        raise ValueError("invalid_event_id")
+
+    existing_status = _get_existing_stripe_webhook_event_status(
+        event_id,
+        billing_runtime=normalized_runtime,
+    )
+    if existing_status in {"processed", "ignored"}:
+        logger.info(
+            "stripe webhook duplicate ignored runtime=%s event_id=%s existing_status=%s",
+            normalized_runtime,
+            event_id,
+            existing_status,
+        )
+        return {
+            "ok": True,
+            "ignored": True,
+            "duplicate": True,
+            "billing_runtime": normalized_runtime,
+            "event_id": event_id,
+            "existing_status": existing_status,
+        }
+
+    _safe_upsert_stripe_webhook_event(
+        event=event,
+        status="received",
+        billing_runtime=normalized_runtime,
+    )
 
     try:
-        result = sync_subscription_from_stripe_event(event)
+        result = sync_subscription_from_stripe_event(
+            event,
+            billing_runtime=normalized_runtime,
+        )
         final_status = "ignored" if result.get("ignored") else "processed"
         _safe_upsert_stripe_webhook_event(
             event=event,
             status=final_status,
+            billing_runtime=normalized_runtime,
             sync_result=result,
         )
         return result
@@ -884,6 +1029,7 @@ def process_stripe_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
         _safe_upsert_stripe_webhook_event(
             event=event,
             status="failed",
+            billing_runtime=normalized_runtime,
             error_code=str(exc),
             error_message=str(exc),
         )
@@ -892,16 +1038,22 @@ def process_stripe_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
         _safe_upsert_stripe_webhook_event(
             event=event,
             status="failed",
+            billing_runtime=normalized_runtime,
             error_code="stripe_webhook_processing_failed",
             error_message=str(exc),
         )
         raise
 
 
-def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]:
+def sync_subscription_from_stripe_event(
+    event: Dict[str, Any],
+    *,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
     event_id = str(event.get("id") or "")
     incoming_event_type = str(event.get("type") or "")
     data_object = (((event or {}).get("data") or {}).get("object") or {})
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
 
     if not event_id:
         raise ValueError("invalid_event_id")
@@ -917,10 +1069,11 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
             return {"ok": True, "ignored": True, "event_type": incoming_event_type}
 
         settings = load_settings()
-        if not settings.stripe_secret_key:
-            raise RuntimeError("stripe_not_configured")
+        runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=normalized_runtime)
+        if not runtime_config["secret_key"]:
+            raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
 
-        stripe.api_key = settings.stripe_secret_key
+        stripe.api_key = runtime_config["secret_key"]
         subscription = stripe.Subscription.retrieve(provider_subscription_id)
         data_object = subscription._to_dict_recursive()
 
@@ -933,20 +1086,27 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
         raise ValueError("invalid_subscription_id")
 
     provider_customer_id = str(subscription.get("customer") or "").strip() or None
-    provider_checkout_session_id = (
-        str(checkout_session.get("id") or "").strip() if checkout_session is not None else None
-    )
+    provider_checkout_session_id = str(checkout_session.get("id") or "").strip() if checkout_session is not None else None
 
-    user_id = _resolve_user_id_from_checkout_session_payload(checkout_session) if checkout_session is not None else None
+    user_id = _resolve_user_id_from_checkout_session_payload(
+        checkout_session,
+        billing_runtime=normalized_runtime,
+    ) if checkout_session is not None else None
     if user_id is None:
-        user_id = _resolve_user_id_from_subscription_payload(subscription)
+        user_id = _resolve_user_id_from_subscription_payload(
+            subscription,
+            billing_runtime=normalized_runtime,
+        )
     if user_id is None:
         raise ValueError("subscription_user_not_found")
 
     extracted_price = _extract_price_from_subscription(subscription)
     provider_price_id = str(extracted_price["provider_price_id"] or "").strip() or None
 
-    resolved_plan_price = _resolve_plan_price_by_provider_price_id(provider_price_id)
+    resolved_plan_price = _resolve_plan_price_by_provider_price_id(
+        provider_price_id,
+        billing_runtime=normalized_runtime,
+    )
     if resolved_plan_price is None and checkout_session is not None:
         resolved_plan_price = _resolve_plan_price_from_checkout_session_payload(checkout_session)
     if resolved_plan_price is None:
@@ -969,6 +1129,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
         {
             "event_id": event_id,
             "incoming_event_type": incoming_event_type,
+            "billing_runtime": normalized_runtime,
             "subscription": subscription,
             "checkout_session": checkout_session,
         }
@@ -983,10 +1144,14 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                 SELECT subscription_id
                 FROM billing.subscriptions
                 WHERE provider = 'stripe'
+                  AND billing_runtime = %(billing_runtime)s
                   AND provider_subscription_id = %(provider_subscription_id)s
                 LIMIT 1
                 """,
-                {"provider_subscription_id": provider_subscription_id},
+                {
+                    "billing_runtime": normalized_runtime,
+                    "provider_subscription_id": provider_subscription_id,
+                },
             )
             existing = cur.fetchone()
 
@@ -999,6 +1164,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                 "status": row_status,
                 "billing_status": billing_status,
                 "provider": "stripe",
+                "billing_runtime": normalized_runtime,
                 "provider_customer_id": provider_customer_id,
                 "provider_checkout_session_id": provider_checkout_session_id,
                 "provider_subscription_id": provider_subscription_id,
@@ -1026,6 +1192,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                         status,
                         billing_status,
                         provider,
+                        billing_runtime,
                         provider_customer_id,
                         provider_checkout_session_id,
                         provider_subscription_id,
@@ -1054,6 +1221,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                         %(status)s,
                         %(billing_status)s,
                         %(provider)s,
+                        %(billing_runtime)s,
                         %(provider_customer_id)s,
                         %(provider_checkout_session_id)s,
                         %(provider_subscription_id)s,
@@ -1091,6 +1259,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                         currency_code = %(currency_code)s,
                         status = %(status)s,
                         billing_status = %(billing_status)s,
+                        billing_runtime = %(billing_runtime)s,
                         provider_customer_id = %(provider_customer_id)s,
                         provider_checkout_session_id = COALESCE(%(provider_checkout_session_id)s, provider_checkout_session_id),
                         provider_price_id = %(provider_price_id)s,
@@ -1112,26 +1281,26 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                     {**params, "subscription_id": subscription_id},
                 )
 
-            cur.execute(
-                """
-                UPDATE billing.subscriptions
-                SET
-                    status = 'cancelled',
-                    billing_status = CASE
-                        WHEN COALESCE(NULLIF(billing_status, ''), '') IN ('active', 'trialing', 'past_due')
-                            THEN 'canceled'
-                        ELSE COALESCE(NULLIF(billing_status, ''), 'canceled')
-                    END,
-                    cancel_at_period_end = TRUE,
-                    canceled_at_utc = COALESCE(canceled_at_utc, NOW()),
-                    cancelled_at_utc = COALESCE(cancelled_at_utc, NOW()),
-                    updated_at_utc = NOW()
-                WHERE user_id = %(user_id)s
-                  AND subscription_id <> %(subscription_id)s
-                  AND COALESCE(NULLIF(status, ''), NULLIF(billing_status, ''), 'expired') IN ('active', 'trialing', 'past_due')
-                """,
-                {"user_id": user_id, "subscription_id": subscription_id},
-            )
+                cur.execute(
+                    """
+                    UPDATE billing.subscriptions
+                    SET
+                        status = 'cancelled',
+                        billing_status = CASE
+                            WHEN COALESCE(NULLIF(billing_status, ''), '') IN ('active', 'trialing', 'past_due')
+                                THEN 'canceled'
+                            ELSE COALESCE(NULLIF(billing_status, ''), 'canceled')
+                        END,
+                        cancel_at_period_end = TRUE,
+                        canceled_at_utc = COALESCE(canceled_at_utc, NOW()),
+                        cancelled_at_utc = COALESCE(cancelled_at_utc, NOW()),
+                        updated_at_utc = NOW()
+                    WHERE user_id = %(user_id)s
+                      AND subscription_id <> %(subscription_id)s
+                      AND COALESCE(NULLIF(status, ''), NULLIF(billing_status, ''), 'expired') IN ('active', 'trialing', 'past_due')
+                    """,
+                    {"user_id": user_id, "subscription_id": subscription_id},
+                )
 
             _upsert_entitlements_snapshot(cur, user_id=user_id, plan_code=access_plan_code)
 
@@ -1139,10 +1308,12 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
                 cur,
                 subscription_id=subscription_id,
                 user_id=user_id,
+                billing_runtime=normalized_runtime,
                 event_type=f"stripe_{incoming_event_type.replace('.', '_')}",
                 payload_json={
                     "provider_event_id": event_id,
                     "incoming_event_type": incoming_event_type,
+                    "billing_runtime": normalized_runtime,
                     "provider_subscription_id": provider_subscription_id,
                     "provider_checkout_session_id": provider_checkout_session_id,
                     "provider_price_id": provider_price_id,
@@ -1161,6 +1332,7 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
         "ok": True,
         "subscription_id": subscription_id,
         "user_id": user_id,
+        "billing_runtime": normalized_runtime,
         "plan_code": resolved_plan_price["plan_code"],
         "plan_price_id": resolved_plan_price["plan_price_id"],
         "billing_cycle": resolved_plan_price["billing_cycle"],
@@ -1173,7 +1345,8 @@ def sync_subscription_from_stripe_event(event: Dict[str, Any]) -> Dict[str, Any]
         "event_type": incoming_event_type,
     }
 
-def sync_checkout_session_for_user(*, user_id: int, session_id: str) -> Dict[str, Any]:
+
+def sync_checkout_session_for_user(*, user_id: int, session_id: str, billing_runtime: str = "live") -> Dict[str, Any]:
     normalized_session_id = str(session_id or "").strip()
     if not normalized_session_id:
         raise ValueError("missing_checkout_session_id")
@@ -1186,10 +1359,12 @@ def sync_checkout_session_for_user(*, user_id: int, session_id: str) -> Dict[str
         raise ValueError("invalid_checkout_session_id")
 
     settings = load_settings()
-    if not settings.stripe_secret_key:
-        raise RuntimeError("stripe_not_configured")
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=billing_runtime)
+    normalized_runtime = runtime_config["billing_runtime"]
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
 
-    stripe.api_key = settings.stripe_secret_key
+    stripe.api_key = runtime_config["secret_key"]
 
     try:
         session = stripe.checkout.Session.retrieve(normalized_session_id)
@@ -1206,7 +1381,10 @@ def sync_checkout_session_for_user(*, user_id: int, session_id: str) -> Dict[str
     if checkout_mode != "subscription":
         raise ValueError("checkout_session_invalid_mode")
 
-    resolved_user_id = _resolve_user_id_from_checkout_session_payload(checkout_session)
+    resolved_user_id = _resolve_user_id_from_checkout_session_payload(
+        checkout_session,
+        billing_runtime=normalized_runtime,
+    )
     if resolved_user_id is None:
         raise ValueError("checkout_session_user_not_found")
 
@@ -1222,10 +1400,14 @@ def sync_checkout_session_for_user(*, user_id: int, session_id: str) -> Dict[str
                 "id": f"manual_checkout_session_sync_{normalized_session_id}",
                 "type": "checkout.session.completed",
                 "data": {"object": checkout_session},
-            }
+            },
+            billing_runtime=normalized_runtime,
         )
 
-    summary = get_billing_subscription_summary_for_user(user_id)
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
 
     return {
         "ok": True,
@@ -1237,7 +1419,14 @@ def sync_checkout_session_for_user(*, user_id: int, session_id: str) -> Dict[str
         **summary,
     }
 
-def get_effective_subscription_for_user(user_id: int) -> Optional[Dict[str, Any]]:
+
+def get_effective_subscription_for_user(
+    user_id: int,
+    *,
+    billing_runtime: str = "live",
+) -> Optional[Dict[str, Any]]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+
     with pg_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1250,6 +1439,7 @@ def get_effective_subscription_for_user(user_id: int) -> Optional[Dict[str, Any]
                     currency_code,
                     COALESCE(NULLIF(billing_status, ''), status) AS effective_billing_status,
                     provider,
+                    billing_runtime,
                     provider_customer_id,
                     provider_subscription_id,
                     provider_price_id,
@@ -1263,6 +1453,7 @@ def get_effective_subscription_for_user(user_id: int) -> Optional[Dict[str, Any]
                     status
                 FROM billing.subscriptions
                 WHERE user_id = %(user_id)s
+                  AND billing_runtime = %(billing_runtime)s
                 ORDER BY
                     CASE COALESCE(NULLIF(billing_status, ''), NULLIF(status, ''), 'expired')
                         WHEN 'active' THEN 0
@@ -1278,7 +1469,10 @@ def get_effective_subscription_for_user(user_id: int) -> Optional[Dict[str, Any]
                     subscription_id DESC
                 LIMIT 1
                 """,
-                {"user_id": user_id},
+                {
+                    "user_id": user_id,
+                    "billing_runtime": normalized_runtime,
+                },
             )
             row = cur.fetchone()
         conn.commit()
@@ -1294,22 +1488,28 @@ def get_effective_subscription_for_user(user_id: int) -> Optional[Dict[str, Any]
         "currency_code": row[4],
         "billing_status": row[5],
         "provider": row[6],
-        "provider_customer_id": row[7],
-        "provider_subscription_id": row[8],
-        "provider_price_id": row[9],
-        "current_period_start": row[10].isoformat() if row[10] else None,
-        "current_period_end": row[11].isoformat() if row[11] else None,
-        "cancel_at_period_end": bool(row[12]),
-        "canceled_at_utc": row[13].isoformat() if row[13] else None,
-        "trial_start_utc": row[14].isoformat() if row[14] else None,
-        "trial_end_utc": row[15].isoformat() if row[15] else None,
-        "updated_at_utc": row[16].isoformat() if row[16] else None,
-        "status": row[17],
+        "billing_runtime": row[7],
+        "provider_customer_id": row[8],
+        "provider_subscription_id": row[9],
+        "provider_price_id": row[10],
+        "current_period_start": row[11].isoformat() if row[11] else None,
+        "current_period_end": row[12].isoformat() if row[12] else None,
+        "cancel_at_period_end": bool(row[13]),
+        "canceled_at_utc": row[14].isoformat() if row[14] else None,
+        "trial_start_utc": row[15].isoformat() if row[15] else None,
+        "trial_end_utc": row[16].isoformat() if row[16] else None,
+        "updated_at_utc": row[17].isoformat() if row[17] else None,
+        "status": row[18],
     }
 
 
-def get_billing_subscription_summary_for_user(user_id: int) -> Dict[str, Any]:
-    effective = get_effective_subscription_for_user(user_id)
+def get_billing_subscription_summary_for_user(
+    user_id: int,
+    *,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    effective = get_effective_subscription_for_user(user_id, billing_runtime=normalized_runtime)
 
     if effective is None:
         return {
@@ -1355,7 +1555,7 @@ def get_billing_subscription_summary_for_user(user_id: int) -> Dict[str, Any]:
     can_manage_stripe_subscription = (
         provider == "stripe"
         and bool(provider_subscription_id)
-        and billing_status not in {"canceled", "expired"}
+        and not _is_terminal_billing_status(billing_status)
     )
 
     return {
@@ -1369,7 +1569,7 @@ def get_billing_subscription_summary_for_user(user_id: int) -> Dict[str, Any]:
             "price_version": price_version,
         },
         "actions": {
-            "can_checkout": True,
+            "can_checkout": not can_manage_stripe_subscription,
             "can_change_plan": True,
             "can_cancel_renewal": can_manage_stripe_subscription and not cancel_at_period_end,
             "can_resume_renewal": can_manage_stripe_subscription and cancel_at_period_end,
@@ -1377,23 +1577,31 @@ def get_billing_subscription_summary_for_user(user_id: int) -> Dict[str, Any]:
     }
 
 
-def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_end: bool) -> Dict[str, Any]:
+def _update_subscription_cancel_at_period_end(
+    *,
+    user_id: int,
+    cancel_at_period_end: bool,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
     settings = load_settings()
+    runtime_config = _resolve_stripe_runtime_config(settings, billing_runtime=billing_runtime)
+    normalized_runtime = runtime_config["billing_runtime"]
 
-    if not settings.stripe_secret_key:
-        raise RuntimeError("stripe_not_configured")
+    if not runtime_config["secret_key"]:
+        raise RuntimeError(f"stripe_{normalized_runtime}_not_configured")
 
-    effective = get_effective_subscription_for_user(user_id)
+    effective = get_effective_subscription_for_user(user_id, billing_runtime=normalized_runtime)
     if effective is None:
         raise ValueError("subscription_not_found")
 
     provider = str(effective.get("provider") or "").strip().lower()
     provider_subscription_id = str(effective.get("provider_subscription_id") or "").strip()
+    billing_status = str(effective.get("billing_status") or "").strip().lower()
 
-    if provider != "stripe" or not provider_subscription_id:
+    if provider != "stripe" or not provider_subscription_id or _is_terminal_billing_status(billing_status):
         raise ValueError("subscription_not_manageable")
 
-    stripe.api_key = settings.stripe_secret_key
+    stripe.api_key = runtime_config["secret_key"]
 
     try:
         subscription = stripe.Subscription.modify(
@@ -1408,10 +1616,14 @@ def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_
             "id": f"manual_subscription_update_{provider_subscription_id}_{'resume' if not cancel_at_period_end else 'cancel'}",
             "type": "customer.subscription.updated",
             "data": {"object": dict(subscription)},
-        }
+        },
+        billing_runtime=normalized_runtime,
     )
 
-    summary = get_billing_subscription_summary_for_user(user_id)
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
 
     return {
         "ok": True,
@@ -1421,23 +1633,264 @@ def _update_subscription_cancel_at_period_end(*, user_id: int, cancel_at_period_
     }
 
 
-def cancel_subscription_renewal_for_user(user_id: int) -> Dict[str, Any]:
+def cancel_subscription_renewal_for_user(user_id: int, *, billing_runtime: str = "live") -> Dict[str, Any]:
     return _update_subscription_cancel_at_period_end(
         user_id=user_id,
         cancel_at_period_end=True,
+        billing_runtime=billing_runtime,
     )
 
 
-def resume_subscription_renewal_for_user(user_id: int) -> Dict[str, Any]:
+def resume_subscription_renewal_for_user(user_id: int, *, billing_runtime: str = "live") -> Dict[str, Any]:
     return _update_subscription_cancel_at_period_end(
         user_id=user_id,
         cancel_at_period_end=False,
+        billing_runtime=billing_runtime,
     )
+
+def reset_internal_testing_subscription_for_user(
+    user_id: int,
+    *,
+    billing_runtime: str = "live",
+) -> Dict[str, Any]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    effective = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+
+    stripe_cancel_attempted = False
+    stripe_cancelled = False
+    stripe_cancel_error: Optional[str] = None
+
+    provider = str((effective or {}).get("provider") or "").strip().lower()
+    provider_subscription_id = str((effective or {}).get("provider_subscription_id") or "").strip()
+    billing_status = str((effective or {}).get("billing_status") or "").strip().lower()
+
+    if (
+        provider == "stripe"
+        and provider_subscription_id
+        and billing_status in {"active", "trialing", "past_due", "paused", "incomplete", "unpaid"}
+    ):
+        settings = load_settings()
+        runtime_config = _resolve_stripe_runtime_config(
+            settings,
+            billing_runtime=normalized_runtime,
+        )
+        stripe_secret_key = str(runtime_config.get("secret_key") or "").strip()
+
+        if stripe_secret_key:
+            stripe_cancel_attempted = True
+            stripe.api_key = stripe_secret_key
+
+            try:
+                stripe.Subscription.cancel(provider_subscription_id)
+                stripe_cancelled = True
+            except stripe.error.StripeError as exc:
+                stripe_cancel_error = getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+                logger.warning(
+                    "internal testing reset could not cancel stripe subscription user_id=%s billing_runtime=%s subscription_id=%s error=%s",
+                    user_id,
+                    normalized_runtime,
+                    provider_subscription_id,
+                    stripe_cancel_error,
+                )
+        else:
+            stripe_cancel_error = "stripe_not_configured"
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE billing.subscriptions
+                SET
+                    status = 'expired',
+                    billing_status = 'expired',
+                    cancel_at_period_end = FALSE,
+                    canceled_at_utc = COALESCE(canceled_at_utc, NOW()),
+                    cancelled_at_utc = COALESCE(cancelled_at_utc, NOW()),
+                    updated_at_utc = NOW()
+                WHERE user_id = %(user_id)s
+                  AND billing_runtime = %(billing_runtime)s
+                  AND plan_code IN ('BASIC', 'LIGHT', 'PRO')
+                  AND COALESCE(NULLIF(billing_status, ''), NULLIF(status, ''), 'expired')
+                      IN ('active', 'trialing', 'past_due', 'paused', 'incomplete', 'unpaid')
+                """,
+                {
+                    "user_id": user_id,
+                    "billing_runtime": normalized_runtime,
+                },
+            )
+
+            cur.execute(
+                """
+                SELECT subscription_id
+                FROM billing.subscriptions
+                WHERE user_id = %(user_id)s
+                  AND billing_runtime = %(billing_runtime)s
+                  AND plan_code = 'FREE'
+                  AND provider = 'manual'
+                ORDER BY
+                    CASE COALESCE(NULLIF(billing_status, ''), NULLIF(status, ''), 'inactive')
+                        WHEN 'active' THEN 0
+                        ELSE 1
+                    END,
+                    updated_at_utc DESC,
+                    subscription_id DESC
+                LIMIT 1
+                """,
+                {
+                    "user_id": user_id,
+                    "billing_runtime": normalized_runtime,
+                },
+            )
+            existing_free = cur.fetchone()
+
+            payload_json = json.dumps(
+                {
+                    "source": "internal_testing_reset",
+                    "billing_runtime": normalized_runtime,
+                    "stripe_cancel_attempted": stripe_cancel_attempted,
+                    "stripe_cancelled": stripe_cancelled,
+                    "stripe_cancel_error": stripe_cancel_error,
+                }
+            )
+
+            if existing_free is None:
+                cur.execute(
+                    """
+                    INSERT INTO billing.subscriptions (
+                        user_id,
+                        plan_code,
+                        provider,
+                        billing_runtime,
+                        status,
+                        billing_status,
+                        starts_at_utc,
+                        current_period_start,
+                        current_period_start_utc,
+                        current_period_end,
+                        current_period_end_utc,
+                        cancel_at_period_end,
+                        canceled_at_utc,
+                        cancelled_at_utc,
+                        raw_payload_json,
+                        created_at_utc,
+                        updated_at_utc
+                    )
+                    VALUES (
+                        %(user_id)s,
+                        'FREE',
+                        'manual',
+                        %(billing_runtime)s,
+                        'active',
+                        'active',
+                        NOW(),
+                        NOW(),
+                        NOW(),
+                        NULL,
+                        NULL,
+                        FALSE,
+                        NULL,
+                        NULL,
+                        %(payload_json)s::jsonb,
+                        NOW(),
+                        NOW()
+                    )
+                    RETURNING subscription_id
+                    """,
+                    {
+                        "user_id": user_id,
+                        "billing_runtime": normalized_runtime,
+                        "payload_json": payload_json,
+                    },
+                )
+                subscription_id = int(cur.fetchone()[0])
+            else:
+                subscription_id = int(existing_free[0])
+
+                cur.execute(
+                    """
+                    UPDATE billing.subscriptions
+                    SET
+                        plan_code = 'FREE',
+                        plan_price_id = NULL,
+                        billing_cycle = NULL,
+                        currency_code = NULL,
+                        status = 'active',
+                        billing_status = 'active',
+                        provider = 'manual',
+                        billing_runtime = %(billing_runtime)s,
+                        provider_customer_id = NULL,
+                        provider_checkout_session_id = NULL,
+                        provider_subscription_id = NULL,
+                        provider_price_id = NULL,
+                        provider_event_id = 'internal_testing_reset_to_free',
+                        starts_at_utc = COALESCE(starts_at_utc, NOW()),
+                        current_period_start = NOW(),
+                        current_period_start_utc = NOW(),
+                        current_period_end = NULL,
+                        current_period_end_utc = NULL,
+                        cancel_at_period_end = FALSE,
+                        canceled_at_utc = NULL,
+                        cancelled_at_utc = NULL,
+                        trial_start_utc = NULL,
+                        trial_end_utc = NULL,
+                        raw_payload_json = %(payload_json)s::jsonb,
+                        updated_at_utc = NOW()
+                    WHERE subscription_id = %(subscription_id)s
+                    """,
+                    {
+                        "subscription_id": subscription_id,
+                        "billing_runtime": normalized_runtime,
+                        "payload_json": payload_json,
+                    },
+                )
+
+            cur.execute(
+                """
+                INSERT INTO billing.subscription_events (
+                    subscription_id,
+                    user_id,
+                    event_type,
+                    payload_json
+                )
+                VALUES (
+                    %(subscription_id)s,
+                    %(user_id)s,
+                    'internal_testing_reset_to_free',
+                    %(payload_json)s::jsonb
+                )
+                """,
+                {
+                    "subscription_id": subscription_id,
+                    "user_id": user_id,
+                    "payload_json": payload_json,
+                },
+            )
+
+        conn.commit()
+
+    summary = get_billing_subscription_summary_for_user(
+        user_id,
+        billing_runtime=normalized_runtime,
+    )
+
+    return {
+        "ok": True,
+        "action": "internal_testing_reset_to_free",
+        "billing_runtime": normalized_runtime,
+        "stripe_cancel_attempted": stripe_cancel_attempted,
+        "stripe_cancelled": stripe_cancelled,
+        "stripe_cancel_error": stripe_cancel_error,
+        **summary,
+    }
 
 def _safe_upsert_stripe_webhook_event(
     *,
     event: Dict[str, Any],
     status: str,
+    billing_runtime: str,
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
     sync_result: Optional[Dict[str, Any]] = None,
@@ -1446,6 +1899,7 @@ def _safe_upsert_stripe_webhook_event(
         _upsert_stripe_webhook_event(
             event=event,
             status=status,
+            billing_runtime=billing_runtime,
             error_code=error_code,
             error_message=error_message,
             sync_result=sync_result,
@@ -1457,3 +1911,37 @@ def _safe_upsert_stripe_webhook_event(
             event.get("type"),
             status,
         )
+
+def _get_existing_stripe_webhook_event_status(
+    event_id: str,
+    *,
+    billing_runtime: str,
+) -> Optional[str]:
+    normalized_event_id = str(event_id or "").strip()
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    if not normalized_event_id:
+        return None
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status
+                FROM billing.webhook_events
+                WHERE provider = 'stripe'
+                  AND billing_runtime = %(billing_runtime)s
+                  AND provider_event_id = %(event_id)s
+                LIMIT 1
+                """,
+                {
+                    "billing_runtime": normalized_runtime,
+                    "event_id": normalized_event_id,
+                },
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None or row[0] is None:
+        return None
+
+    return str(row[0]).strip().lower() or None

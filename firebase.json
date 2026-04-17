@@ -28,8 +28,7 @@
           "source": "**",
           "run": {
             "serviceId": "previa-api",
-            "region": "southamerica-east1",
-            "pinTag": true
+            "region": "southamerica-east1"
           }
         }
       ]

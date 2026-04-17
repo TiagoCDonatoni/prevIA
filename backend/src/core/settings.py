@@ -83,13 +83,17 @@ class Settings:
     product_session_ttl_days: int
     product_session_cookie_secure: bool
     product_session_cookie_samesite: str
+    product_session_cookie_domain: Optional[str]
     product_password_reset_ttl_minutes: int
     product_password_reset_debug_token_enabled: bool
     product_google_client_ids: List[str]
 
-    stripe_secret_key: str
-    stripe_publishable_key: str
-    stripe_webhook_secret: str
+    stripe_sandbox_secret_key: str
+    stripe_sandbox_publishable_key: str
+    stripe_sandbox_webhook_secret: str
+    stripe_live_secret_key: str
+    stripe_live_publishable_key: str
+    stripe_live_webhook_secret: str
     stripe_checkout_success_url: str
     stripe_checkout_cancel_url: str
     stripe_portal_return_url: str
@@ -150,7 +154,7 @@ def load_settings() -> Settings:
     ]
 
     default_cookie_secure = app_env in {"prod", "production"}
-    product_session_cookie_name = _env_str("PRODUCT_SESSION_COOKIE_NAME", "previa_product_session")
+    product_session_cookie_name = _env_str("PRODUCT_SESSION_COOKIE_NAME", "__session")
     product_session_ttl_days = max(1, _env_int("PRODUCT_SESSION_TTL_DAYS", 30))
     product_session_cookie_secure = _env_bool(
         "PRODUCT_SESSION_COOKIE_SECURE",
@@ -159,6 +163,8 @@ def load_settings() -> Settings:
     product_session_cookie_samesite = _env_str("PRODUCT_SESSION_COOKIE_SAMESITE", "lax").lower()
     if product_session_cookie_samesite not in {"lax", "strict", "none"}:
         product_session_cookie_samesite = "lax"
+
+    product_session_cookie_domain = _env_str("PRODUCT_SESSION_COOKIE_DOMAIN", "") or None
 
     product_password_reset_ttl_minutes = max(5, _env_int("PRODUCT_PASSWORD_RESET_TTL_MINUTES", 60))
     product_password_reset_debug_token_enabled = _env_bool(
@@ -171,9 +177,12 @@ def load_settings() -> Settings:
         if item.strip()
     ]
 
-    stripe_secret_key = _env_str("STRIPE_SECRET_KEY")
-    stripe_publishable_key = _env_str("STRIPE_PUBLISHABLE_KEY")
-    stripe_webhook_secret = _env_str("STRIPE_WEBHOOK_SECRET")
+    stripe_sandbox_secret_key = _env_str("STRIPE_SANDBOX_SECRET_KEY") or _env_str("STRIPE_SECRET_KEY")
+    stripe_sandbox_publishable_key = _env_str("STRIPE_SANDBOX_PUBLISHABLE_KEY") or _env_str("STRIPE_PUBLISHABLE_KEY")
+    stripe_sandbox_webhook_secret = _env_str("STRIPE_SANDBOX_WEBHOOK_SECRET") or _env_str("STRIPE_WEBHOOK_SECRET")
+    stripe_live_secret_key = _env_str("STRIPE_LIVE_SECRET_KEY")
+    stripe_live_publishable_key = _env_str("STRIPE_LIVE_PUBLISHABLE_KEY")
+    stripe_live_webhook_secret = _env_str("STRIPE_LIVE_WEBHOOK_SECRET")
     stripe_checkout_success_url = _env_str("STRIPE_CHECKOUT_SUCCESS_URL")
     stripe_checkout_cancel_url = _env_str("STRIPE_CHECKOUT_CANCEL_URL")
     stripe_portal_return_url = _env_str("STRIPE_PORTAL_RETURN_URL")
@@ -213,12 +222,16 @@ def load_settings() -> Settings:
         product_session_ttl_days=product_session_ttl_days,
         product_session_cookie_secure=product_session_cookie_secure,
         product_session_cookie_samesite=product_session_cookie_samesite,
+        product_session_cookie_domain=product_session_cookie_domain,
         product_password_reset_ttl_minutes=product_password_reset_ttl_minutes,
         product_password_reset_debug_token_enabled=product_password_reset_debug_token_enabled,
         product_google_client_ids=product_google_client_ids,
-        stripe_secret_key=stripe_secret_key,
-        stripe_publishable_key=stripe_publishable_key,
-        stripe_webhook_secret=stripe_webhook_secret,
+        stripe_sandbox_secret_key=stripe_sandbox_secret_key,
+        stripe_sandbox_publishable_key=stripe_sandbox_publishable_key,
+        stripe_sandbox_webhook_secret=stripe_sandbox_webhook_secret,
+        stripe_live_secret_key=stripe_live_secret_key,
+        stripe_live_publishable_key=stripe_live_publishable_key,
+        stripe_live_webhook_secret=stripe_live_webhook_secret,
         stripe_checkout_success_url=stripe_checkout_success_url,
         stripe_checkout_cancel_url=stripe_checkout_cancel_url,
         stripe_portal_return_url=stripe_portal_return_url,

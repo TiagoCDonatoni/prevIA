@@ -6,6 +6,7 @@ from typing import Any, Dict
 from fastapi import HTTPException, Request, status
 
 from src.auth.service import get_auth_me_payload
+from src.billing.service import reset_internal_testing_subscription_for_user
 from src.db.pg import pg_conn
 
 
@@ -397,6 +398,8 @@ def reset_testing_state(request: Request) -> Dict[str, Any]:
     user = actor["user"]
     user_id = int(user["user_id"])
     date_key = _today_date_key()
+    access_context = actor.get("access") or {}
+    billing_runtime = str(access_context.get("billing_runtime") or "live").strip().lower() or "live"
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -420,6 +423,23 @@ def reset_testing_state(request: Request) -> Dict[str, Any]:
                 },
             )
 
+            cur.execute(
+                """
+                DELETE FROM access.user_daily_credit_grants
+                WHERE user_id = %(user_id)s
+                  AND date_key = %(date_key)s
+                """,
+                {
+                    "user_id": user_id,
+                    "date_key": date_key,
+                },
+            )
+
         conn.commit()
+
+    reset_internal_testing_subscription_for_user(
+        user_id,
+        billing_runtime=billing_runtime,
+    )
 
     return get_usage_payload(request)

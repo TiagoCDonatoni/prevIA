@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
@@ -32,6 +33,8 @@ from src.internal_access.service import (
     resolve_user_access_context,
 )
 
+logger = logging.getLogger(__name__)
+
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
 
 def normalize_email(email: str) -> str:
@@ -41,6 +44,13 @@ def normalize_email(email: str) -> str:
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+def _mask_session_token(raw: str | None) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return "-"
+    if len(token) <= 12:
+        return f"{token[:3]}...{token[-3:]}"
+    return f"{token[:6]}...{token[-6:]}"
 
 def _today_date_key():
     return datetime.now(timezone.utc).date()
@@ -703,7 +713,19 @@ def _build_authenticated_payload(
     if str(user_row[4]) == "deleted":
         return _build_anonymous_payload()
 
-    effective_subscription = get_effective_subscription_for_user(user_id)
+    access_context = resolve_user_access_context(
+        cur,
+        user_id=user_id,
+        email=str(user_row[1]),
+        email_verified=bool(user_row[5]),
+        auth_mode=auth_mode,
+    )
+    billing_runtime = str(access_context.get("billing_runtime") or "live")
+
+    effective_subscription = get_effective_subscription_for_user(
+        user_id,
+        billing_runtime=billing_runtime,
+    )
 
     if effective_subscription:
         subscription = {
@@ -714,14 +736,6 @@ def _build_authenticated_payload(
         }
     else:
         subscription = _get_or_create_active_subscription(cur, user_id=user_id)
-
-    access_context = resolve_user_access_context(
-        cur,
-        user_id=user_id,
-        email=str(user_row[1]),
-        email_verified=bool(user_row[5]),
-        auth_mode=auth_mode,
-    )
     product_plan_code = _resolve_effective_product_plan_code(
         subscription_plan_code=subscription["plan_code"],
         access_context=access_context,
@@ -786,6 +800,18 @@ def _insert_session(cur, *, user_id: int, request: Request) -> str:
     expires_at_utc = build_session_expires_at()
     fingerprints = build_request_fingerprints(request)
 
+    # Mantém compatibilidade com a constraint atual do banco:
+    # apenas uma sessão aberta por usuário.
+    cur.execute(
+        """
+        UPDATE auth.sessions
+        SET revoked_at_utc = NOW()
+        WHERE user_id = %(user_id)s
+          AND revoked_at_utc IS NULL
+        """,
+        {"user_id": user_id},
+    )
+
     cur.execute(
         """
         INSERT INTO auth.sessions (
@@ -832,6 +858,11 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
     row = cur.fetchone()
 
     if row is None:
+        logger.warning(
+            "[AUTH_SESSION_LOOKUP_DEBUG] status=miss session_cookie=%s token_hash_prefix=%s",
+            _mask_session_token(raw_session_token),
+            session_token_hash[:12],
+        )
         return None
 
     session_id = int(row[0])
@@ -844,6 +875,14 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
         WHERE session_id = %(session_id)s
         """,
         {"session_id": session_id},
+    )
+
+    logger.warning(
+        "[AUTH_SESSION_LOOKUP_DEBUG] status=hit session_id=%s user_id=%s session_cookie=%s token_hash_prefix=%s",
+        session_id,
+        user_id,
+        _mask_session_token(raw_session_token),
+        session_token_hash[:12],
     )
 
     return user_id
@@ -1123,6 +1162,13 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
 
     raw_session_token = read_product_session_cookie(request)
     if not raw_session_token:
+        logger.warning(
+            "[AUTH_ME_SERVICE_DEBUG] status=no_cookie origin=%s referer=%s host=%s xfwd_proto=%s",
+            str(request.headers.get("origin") or "").strip() or "-",
+            str(request.headers.get("referer") or "").strip() or "-",
+            str(request.headers.get("host") or "").strip() or "-",
+            str(request.headers.get("x-forwarded-proto") or "").strip() or "-",
+        )
         return _build_anonymous_payload()
 
     with pg_conn() as conn:
@@ -1130,10 +1176,28 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
             user_id = _resolve_session_user_id(cur, raw_session_token=raw_session_token)
             if user_id is None:
                 conn.commit()
+                logger.warning(
+                    "[AUTH_ME_SERVICE_DEBUG] status=session_not_found session_cookie=%s origin=%s referer=%s host=%s xfwd_proto=%s",
+                    _mask_session_token(raw_session_token),
+                    str(request.headers.get("origin") or "").strip() or "-",
+                    str(request.headers.get("referer") or "").strip() or "-",
+                    str(request.headers.get("host") or "").strip() or "-",
+                    str(request.headers.get("x-forwarded-proto") or "").strip() or "-",
+                )
                 return _build_anonymous_payload()
 
             payload = _build_authenticated_payload(cur, user_id=user_id, auth_mode="session", request=request)
         conn.commit()
+
+    logger.warning(
+        "[AUTH_ME_SERVICE_DEBUG] status=authenticated user_id=%s session_cookie=%s origin=%s referer=%s host=%s xfwd_proto=%s",
+        user_id,
+        _mask_session_token(raw_session_token),
+        str(request.headers.get("origin") or "").strip() or "-",
+        str(request.headers.get("referer") or "").strip() or "-",
+        str(request.headers.get("host") or "").strip() or "-",
+        str(request.headers.get("x-forwarded-proto") or "").strip() or "-",
+    )
 
     return payload
 
