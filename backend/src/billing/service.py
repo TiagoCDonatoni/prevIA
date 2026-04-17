@@ -1283,24 +1283,33 @@ def sync_subscription_from_stripe_event(
 
                 cur.execute(
                     """
-                    UPDATE billing.subscriptions
-                    SET
-                        status = 'cancelled',
-                        billing_status = CASE
-                            WHEN COALESCE(NULLIF(billing_status, ''), '') IN ('active', 'trialing', 'past_due')
-                                THEN 'canceled'
-                            ELSE COALESCE(NULLIF(billing_status, ''), 'canceled')
-                        END,
-                        cancel_at_period_end = TRUE,
-                        canceled_at_utc = COALESCE(canceled_at_utc, NOW()),
-                        cancelled_at_utc = COALESCE(cancelled_at_utc, NOW()),
-                        updated_at_utc = NOW()
+                    SELECT COUNT(*)
+                    FROM billing.subscriptions
                     WHERE user_id = %(user_id)s
+                      AND provider = 'stripe'
+                      AND billing_runtime = %(billing_runtime)s
                       AND subscription_id <> %(subscription_id)s
                       AND COALESCE(NULLIF(status, ''), NULLIF(billing_status, ''), 'expired') IN ('active', 'trialing', 'past_due')
                     """,
-                    {"user_id": user_id, "subscription_id": subscription_id},
+                    {
+                        "user_id": user_id,
+                        "billing_runtime": normalized_runtime,
+                        "subscription_id": subscription_id,
+                    },
                 )
+                sibling_active_count = int((cur.fetchone() or [0])[0] or 0)
+
+                if sibling_active_count > 0:
+                    logger.warning(
+                        "billing sync detected sibling active subscriptions; keeping rows untouched "
+                        "user_id=%s billing_runtime=%s subscription_id=%s provider_subscription_id=%s sibling_active_count=%s event_id=%s",
+                        user_id,
+                        normalized_runtime,
+                        subscription_id,
+                        provider_subscription_id,
+                        sibling_active_count,
+                        event_id,
+                    )
 
             _upsert_entitlements_snapshot(cur, user_id=user_id, plan_code=access_plan_code)
 
