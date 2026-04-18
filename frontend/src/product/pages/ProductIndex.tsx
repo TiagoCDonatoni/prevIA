@@ -33,6 +33,10 @@ import {
   buildLeagueOptions,
   buildTeamOptions,
 } from "../filters/productFilterOptions";
+import {
+  readPersistedProductIndexFilters,
+  writePersistedProductIndexFilters,
+} from "../filters/productIndexFilterSession";
 
 const UI_DEFAULTS = {
   hoursAheadFallback: 720,
@@ -63,6 +67,26 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
 };
 
 const EVENT_FETCH_CONCURRENCY = 4;
+
+function sanitizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function sanitizeWindowMode(value: unknown): WindowMode {
+  return value === "UPCOMING" || value === "TODAY" || value === "3" || value === "7" || value === "30"
+    ? value
+    : "UPCOMING";
+}
+
+function sanitizeSortBy(value: unknown): SortBy {
+  return value === "DATE" || value === "CONFIDENCE" || value === "EDGE"
+    ? value
+    : "DATE";
+}
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -603,6 +627,8 @@ export default function ProductIndex() {
     Array<ProductLeagueItem & { assume_season: number; artifact_filename: string | null }>
   >([]);
 
+  const persistedFilters = useMemo(() => readPersistedProductIndexFilters(), []);
+
   const [sportKey, setSportKey] = useState<string>("");
   const league = useMemo(() => {
     const list = leagues;
@@ -614,15 +640,25 @@ export default function ProductIndex() {
     return new Map(leagues.map((item) => [item.sport_key, item]));
   }, [leagues]);
 
-  const [windowMode, setWindowMode] = useState<WindowMode>("UPCOMING");
-  const [sortBy, setSortBy] = useState<SortBy>("DATE");
-  const [onlyOpportunities, setOnlyOpportunities] = useState(false);
+  const [windowMode, setWindowMode] = useState<WindowMode>(() => sanitizeWindowMode(persistedFilters?.windowMode));
+  const [sortBy, setSortBy] = useState<SortBy>(() => sanitizeSortBy(persistedFilters?.sortBy));
+  const [onlyOpportunities, setOnlyOpportunities] = useState<boolean>(
+    () => persistedFilters?.onlyOpportunities === true
+  );
 
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [selectedCountryCodes, setSelectedCountryCodes] = useState<string[]>([]);
-  const [selectedLeagueSportKeys, setSelectedLeagueSportKeys] = useState<string[]>([]);
-  const [selectedBookKeys, setSelectedBookKeys] = useState<string[]>([]);
-  const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
+  const [selectedCountryCodes, setSelectedCountryCodes] = useState<string[]>(
+    () => sanitizeStringArray(persistedFilters?.selectedCountryCodes)
+  );
+  const [selectedLeagueSportKeys, setSelectedLeagueSportKeys] = useState<string[]>(
+    () => sanitizeStringArray(persistedFilters?.selectedLeagueSportKeys)
+  );
+  const [selectedBookKeys, setSelectedBookKeys] = useState<string[]>(
+    () => sanitizeStringArray(persistedFilters?.selectedBookKeys)
+  );
+  const [selectedTeams, setSelectedTeams] = useState<string[]>(
+    () => sanitizeStringArray(persistedFilters?.selectedTeams)
+  );
 
   const countryOptions = useMemo(() => buildCountryOptions(leagues, lang), [leagues, lang]);
 
@@ -934,6 +970,11 @@ export default function ProductIndex() {
   }
 
   useEffect(() => {
+    const allowed = new Set(countryOptions.map((item) => item.value));
+    setSelectedCountryCodes((prev) => prev.filter((item) => allowed.has(item)));
+  }, [countryOptions]);
+
+  useEffect(() => {
     const allowed = new Set(leagueOptions.map((item) => item.value));
     setSelectedLeagueSportKeys((prev) => prev.filter((item) => allowed.has(item)));
   }, [leagueOptions]);
@@ -947,6 +988,26 @@ export default function ProductIndex() {
     const allowed = new Set(teamOptions.map((item) => item.value));
     setSelectedTeams((prev) => prev.filter((item) => allowed.has(item)));
   }, [teamOptions]);
+
+  useEffect(() => {
+    writePersistedProductIndexFilters({
+      windowMode,
+      sortBy,
+      onlyOpportunities,
+      selectedCountryCodes,
+      selectedLeagueSportKeys,
+      selectedBookKeys,
+      selectedTeams,
+    });
+  }, [
+    windowMode,
+    sortBy,
+    onlyOpportunities,
+    selectedCountryCodes,
+    selectedLeagueSportKeys,
+    selectedBookKeys,
+    selectedTeams,
+  ]);
 
   const loadEvents = useCallback(async () => {
     if (!fetchLeagues.length) {

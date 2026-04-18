@@ -16,6 +16,7 @@ import {
   type AuthMeResponse,
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
+import { clearPersistedProductIndexFilters } from "../filters/productIndexFilterSession";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import {
   useProductStore,
@@ -470,6 +471,7 @@ React.useEffect(() => {
     try {
       store.promoteCurrentSessionToDeviceAnonShadow();
       clearProductPlanOverride();
+      clearPersistedProductIndexFilters();
       await postAuthLogout();
 
       store.applyBackendBootstrap({
