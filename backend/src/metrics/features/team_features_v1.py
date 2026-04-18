@@ -1,36 +1,9 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
-from src.db.pg import pg_conn
+from src.metrics.features.team_stats_resolver_v1 import resolve_team_season_stats_row
 
 
 FEATURE_VERSION = "features_v1"
-
-
-@lru_cache(maxsize=200_000)
-def _get_team_season_row_or_none(*, team_id: int, league_id: int, season: int):
-    """
-    Retorna a row da core.team_season_stats ou None.
-    Importantíssimo: cacheia também o 'None' (miss), evitando query repetida.
-    """
-    sql = """
-    SELECT
-      played,
-      points_per_game,
-      goals_for::numeric / NULLIF(played, 0) AS gf_pg,
-      goals_against::numeric / NULLIF(played, 0) AS ga_pg,
-      goal_diff::numeric / NULLIF(played, 0) AS gd_pg,
-      CASE WHEN home_played > 0 THEN home_points::numeric / home_played ELSE 0 END AS home_ppg,
-      CASE WHEN away_played > 0 THEN away_points::numeric / away_played ELSE 0 END AS away_ppg,
-      metric_version
-    FROM core.team_season_stats
-    WHERE league_id = %s AND season = %s AND team_id = %s
-    """
-    with pg_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(sql, (league_id, season, team_id))
-        return cur.fetchone()  # None se não existir
 
 
 def build_team_features(
@@ -38,9 +11,21 @@ def build_team_features(
     team_id: int,
     league_id: int,
     season: int,
+    allow_season_fallback: bool = False,
 ) -> dict:
-    row = _get_team_season_row_or_none(team_id=team_id, league_id=league_id, season=season)
+    resolved = resolve_team_season_stats_row(
+        team_id=int(team_id),
+        league_id=int(league_id),
+        requested_season=int(season),
+        allow_season_fallback=bool(allow_season_fallback),
+    )
+
+    row = resolved["row"]
     if row is None:
+        if allow_season_fallback:
+            raise ValueError(
+                "team_season_stats missing for same league across requested/fallback seasons"
+            )
         raise ValueError("team_season_stats not found for given inputs")
 
     (
@@ -54,10 +39,16 @@ def build_team_features(
         metric_version,
     ) = row
 
+    season_used = int(resolved["season_used"]) if resolved["season_used"] is not None else int(season)
+
     return {
-        "team_id": team_id,
-        "league_id": league_id,
-        "season": season,
+        "team_id": int(team_id),
+        "league_id": int(league_id),
+        "season": season_used,
+        "season_requested": int(season),
+        "season_used": season_used,
+        "season_mode": str(resolved["season_mode"]),
+        "stats_found": bool(resolved["stats_found"]),
         "played": int(played),
         "ppg": float(ppg),
         "gf_pg": float(gf_pg),
@@ -66,5 +57,5 @@ def build_team_features(
         "home_ppg": float(home_ppg),
         "away_ppg": float(away_ppg),
         "feature_version": FEATURE_VERSION,
-        "metric_version": metric_version,
+        "metric_version": str(metric_version),
     }

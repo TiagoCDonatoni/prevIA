@@ -1400,6 +1400,7 @@ def admin_matchup_whatif(
         # útil para depurar “sempre igual”: se isso variar, o modelo está variando
         "debug": pred.get("debug"),
         "features": pred.get("features"),
+        "runtime": pred.get("runtime"),
     }
 
 @admin_router.get("/matchup/by-fixture")
@@ -1474,6 +1475,7 @@ def admin_matchup_by_fixture(
         "fair_odds_1x2": fair,
         "debug": pred.get("debug"),
         "features": pred.get("features"),
+        "runtime": pred.get("runtime"),
         "competition_name": str(competition_name) if competition_name else None,
 
     }

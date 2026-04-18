@@ -44,6 +44,17 @@ class AdminLeagueCountryUpdateBody(BaseModel):
 # MVP: default artifact (ajuste se você quiser centralizar isso em settings)
 DEFAULT_EPL_ARTIFACT = "epl_1x2_logreg_v1_C_2021_2023_C0.3.json"
 
+def _classify_model_runtime_error(msg: Optional[str]) -> str:
+    txt = (msg or "").lower()
+
+    if "same league" in txt and "requested/fallback" in txt:
+        return "MISSING_TEAM_STATS_SAME_LEAGUE"
+
+    if "team_season_stats not found for given inputs" in txt:
+        return "MISSING_TEAM_STATS_EXACT"
+
+    return "MODEL_ERROR"
+
 _STOPWORDS = {"fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"}
 
 def _load_approved_league_map(conn, *, sport_key: str) -> Optional[Dict[str, Any]]:
@@ -2760,24 +2771,34 @@ def admin_odds_upcoming_intel_live(
                             best_ev = v
                             best_side = side
 
+                    runtime = pred.get("runtime") or {}
+                    stats_runtime = runtime.get("stats_runtime") or {}
+                    match_stats_mode = stats_runtime.get("match_stats_mode")
+
                     model_block = {
                         "artifact_filename": artifact_filename,
-                        "league_id": int(assume_league_id),
-                        "season": int(assume_season),
+                        "league_id": league_id,
+                        "season": season,
                         "probs_model": p_model,
                         "edge_vs_market": edge,
                         "ev_decimal": evv,
                         "best_ev": best_ev,
                         "best_side": best_side,
                         "artifact_meta": pred.get("artifact"),
+                        "runtime": runtime,
+                        "model_status": "OK_FALLBACK" if match_stats_mode in ("partial_fallback", "full_fallback") else "OK_EXACT",
                     }
                     counts["ok_model"] += 1
 
             except Exception as e:
+                err_msg = str(e)
                 status = "incomplete"
-                reason = str(e)
-                counts["model_error"] += 1
-                model_block = {"error": str(e)}
+                reason = _classify_model_runtime_error(err_msg)
+                counters["model_error"] += 1
+                model_block = {
+                    "error": err_msg,
+                    "model_status": reason,
+                }
 
         out.append({**it, "model": model_block, "status": status, "reason": reason})
 

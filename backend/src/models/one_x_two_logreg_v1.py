@@ -151,27 +151,28 @@ def predict_1x2_from_artifact(
         away_team_id=away_team_id,
         league_id=league_id,
         season=season,
+        allow_season_fallback=True,
     )
 
-    x = np.array([float(feats[k]) for k in art["feature_order"]], dtype=float)  # (n_features,)
-    coef = np.array(art["coef"], dtype=float)  # (3, n_features)
-    intercept = np.array(art["intercept"], dtype=float)  # (3,)
+    x = np.array([float(feats[k]) for k in art["feature_order"]], dtype=float)
+    coef = np.array(art["coef"], dtype=float)
+    intercept = np.array(art["intercept"], dtype=float)
 
-    # logits: shape (3,)
     logits = intercept + coef @ x
 
-    # default: no calibration
     T = 1.0
     cal = art.get("calibration")
     if cal and cal.get("type") == "temperature":
         T = float(cal.get("T", 1.0))
 
-    # IMPORTANT: use scaled logits to compute probs
     probs_vec = _softmax(logits / T)
-    probs = {"H": float(probs_vec[0]), "D": float(probs_vec[1]), "A": float(probs_vec[2])}
+    probs = {
+        "H": float(probs_vec[0]),
+        "D": float(probs_vec[1]),
+        "A": float(probs_vec[2]),
+    }
 
-    # debug: top contributions per class
-    contrib = coef * x  # (3, n_features)
+    contrib = coef * x
     debug = {}
     for i, cls in enumerate(art["classes"]):
         pairs = list(zip(art["feature_order"], contrib[i].tolist()))
@@ -184,12 +185,16 @@ def predict_1x2_from_artifact(
     return {
         "model_version": art.get("model_version", "1x2_logreg_v1"),
         "feature_version": art.get("feature_version", "features_v1"),
-        "league_id": league_id,
-        "season": season,
-        "home_team_id": home_team_id,
-        "away_team_id": away_team_id,
+        "league_id": int(league_id),
+        "season": int(season),
+        "home_team_id": int(home_team_id),
+        "away_team_id": int(away_team_id),
         "probs": probs,
         "features": {k: float(feats[k]) for k in art["feature_order"]},
+        "runtime": {
+            "requested_season": int(season),
+            "stats_runtime": feats.get("stats_runtime"),
+        },
         "debug": debug,
         "artifact": {
             "train_seasons": art.get("train_seasons"),
