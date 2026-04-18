@@ -2617,6 +2617,29 @@
   background-clip: padding-box;
 }
 
+/* mobile: no embed da landing, a lista de jogos volta a ter altura fixa + scroll interno */
+@media (max-width: 980px) {
+  .public-product-embed-surface .pi-card-list {
+    height: auto;
+    min-height: 0;
+    max-height: clamp(320px, 46vh, 420px);
+    overflow: hidden;
+  }
+
+  .public-product-embed-surface .pi-card-list .pi-list {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 6px;
+  }
+}
+
+@media (max-width: 640px) {
+  .public-product-embed-surface .pi-card-list {
+    max-height: clamp(300px, 42vh, 380px);
+  }
+}
+
 
 @media (max-width: 900px) {
   .public-product-embed-toolbar {
