@@ -1153,6 +1153,7 @@ def _insert_subscription_event(
             "billing_runtime": _normalize_billing_runtime(billing_runtime),
             "event_type": event_type,
             "payload_json": _json_dumps_safe(payload_json),
+
         },
     )
 
@@ -1421,6 +1422,7 @@ def sync_subscription_from_stripe_event(
 
     provider_customer_id = str(subscription.get("customer") or "").strip() or None
     provider_checkout_session_id = str(checkout_session.get("id") or "").strip() if checkout_session is not None else None
+    provider_schedule_id = str(subscription.get("schedule") or "").strip() or None
 
     user_id = _resolve_user_id_from_checkout_session_payload(
         checkout_session,
@@ -1513,6 +1515,8 @@ def sync_subscription_from_stripe_event(
                 "trial_end_utc": trial_end_utc,
                 "raw_payload_json": raw_payload_json,
             }
+
+            reconciliation_result: Optional[Dict[str, Any]] = None
 
             if existing is None:
                 cur.execute(
@@ -1645,6 +1649,15 @@ def sync_subscription_from_stripe_event(
                         event_id,
                     )
 
+            reconciliation_result = _reconcile_scheduled_subscription_change_from_subscription_sync(
+                cur,
+                subscription_id=subscription_id,
+                billing_runtime=normalized_runtime,
+                current_plan_code=resolved_plan_price["plan_code"],
+                current_billing_cycle=resolved_plan_price["billing_cycle"],
+                provider_schedule_id=provider_schedule_id,
+            )
+
             _upsert_entitlements_snapshot(cur, user_id=user_id, plan_code=access_plan_code)
 
             _insert_subscription_event(
@@ -1666,6 +1679,8 @@ def sync_subscription_from_stripe_event(
                     "billing_status": billing_status,
                     "status": row_status,
                     "access_plan_code": access_plan_code,
+                    "provider_schedule_id": provider_schedule_id,
+                    "scheduled_change_reconciliation": reconciliation_result,
                 },
             )
 
@@ -1684,8 +1699,10 @@ def sync_subscription_from_stripe_event(
         "provider_customer_id": provider_customer_id,
         "provider_checkout_session_id": provider_checkout_session_id,
         "provider_subscription_id": provider_subscription_id,
+        "provider_schedule_id": provider_schedule_id,
         "provider_price_id": provider_price_id,
         "event_type": incoming_event_type,
+        "scheduled_change_reconciliation": reconciliation_result,
     }
 
 
@@ -2965,6 +2982,164 @@ def _get_scheduled_subscription_change(
         "provider_schedule_id": str(row[11]) if row[11] else None,
         "created_at_utc": row[12].isoformat() if row[12] else None,
         "updated_at_utc": row[13].isoformat() if row[13] else None,
+    }
+
+
+
+def _reconcile_scheduled_subscription_change_from_subscription_sync(
+    cur,
+    *,
+    subscription_id: int,
+    billing_runtime: str,
+    current_plan_code: str,
+    current_billing_cycle: str,
+    provider_schedule_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    normalized_runtime = _normalize_billing_runtime(billing_runtime)
+    normalized_current_plan_code = _normalize_plan_code(current_plan_code)
+    normalized_current_billing_cycle = _normalize_billing_cycle(current_billing_cycle)
+    normalized_provider_schedule_id = str(provider_schedule_id or "").strip() or None
+
+    cur.execute(
+        """
+        SELECT
+            change_request_id,
+            provider_schedule_id,
+            from_plan_code,
+            from_billing_cycle,
+            to_plan_code,
+            to_billing_cycle
+        FROM billing.subscription_change_requests
+        WHERE subscription_id = %(subscription_id)s
+          AND billing_runtime = %(billing_runtime)s
+          AND status = 'scheduled'
+        ORDER BY updated_at_utc DESC, change_request_id DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        {
+            "subscription_id": int(subscription_id),
+            "billing_runtime": normalized_runtime,
+        },
+    )
+    row = cur.fetchone()
+
+    if row is None:
+        return None
+
+    change_request_id = int(row[0])
+    local_provider_schedule_id = str(row[1] or "").strip() or None
+    from_plan_code = _normalize_plan_code(str(row[2] or ""))
+    from_billing_cycle = _normalize_billing_cycle(str(row[3] or ""))
+    to_plan_code = _normalize_plan_code(str(row[4] or ""))
+    to_billing_cycle = _normalize_billing_cycle(str(row[5] or ""))
+
+    if (
+        normalized_current_plan_code == to_plan_code
+        and normalized_current_billing_cycle == to_billing_cycle
+    ):
+        cur.execute(
+            """
+            UPDATE billing.subscription_change_requests
+            SET
+                status = 'applied',
+                updated_at_utc = NOW()
+            WHERE change_request_id = %(change_request_id)s
+            """,
+            {"change_request_id": change_request_id},
+        )
+        logger.info(
+            "scheduled subscription change reconciled as applied subscription_id=%s billing_runtime=%s change_request_id=%s",
+            subscription_id,
+            normalized_runtime,
+            change_request_id,
+        )
+        return {
+            "change_request_id": change_request_id,
+            "reconciled_status": "applied",
+            "reason": "target_state_reached",
+        }
+
+    if not normalized_provider_schedule_id:
+        if (
+            normalized_current_plan_code == from_plan_code
+            and normalized_current_billing_cycle == from_billing_cycle
+        ):
+            cur.execute(
+                """
+                UPDATE billing.subscription_change_requests
+                SET
+                    status = 'cancelled',
+                    updated_at_utc = NOW()
+                WHERE change_request_id = %(change_request_id)s
+                """,
+                {"change_request_id": change_request_id},
+            )
+            logger.info(
+                "scheduled subscription change reconciled as cancelled subscription_id=%s billing_runtime=%s change_request_id=%s",
+                subscription_id,
+                normalized_runtime,
+                change_request_id,
+            )
+            return {
+                "change_request_id": change_request_id,
+                "reconciled_status": "cancelled",
+                "reason": "schedule_detached_without_target_change",
+            }
+
+        cur.execute(
+            """
+            UPDATE billing.subscription_change_requests
+            SET
+                status = 'failed',
+                updated_at_utc = NOW()
+            WHERE change_request_id = %(change_request_id)s
+            """,
+            {"change_request_id": change_request_id},
+        )
+        logger.warning(
+            "scheduled subscription change reconciled as failed after schedule detachment subscription_id=%s billing_runtime=%s change_request_id=%s current_plan=%s current_cycle=%s",
+            subscription_id,
+            normalized_runtime,
+            change_request_id,
+            normalized_current_plan_code,
+            normalized_current_billing_cycle,
+        )
+        return {
+            "change_request_id": change_request_id,
+            "reconciled_status": "failed",
+            "reason": "schedule_detached_with_unexpected_state",
+        }
+
+    if local_provider_schedule_id and normalized_provider_schedule_id != local_provider_schedule_id:
+        cur.execute(
+            """
+            UPDATE billing.subscription_change_requests
+            SET
+                status = 'failed',
+                updated_at_utc = NOW()
+            WHERE change_request_id = %(change_request_id)s
+            """,
+            {"change_request_id": change_request_id},
+        )
+        logger.warning(
+            "scheduled subscription change reconciled as failed due schedule mismatch subscription_id=%s billing_runtime=%s change_request_id=%s local_schedule_id=%s provider_schedule_id=%s",
+            subscription_id,
+            normalized_runtime,
+            change_request_id,
+            local_provider_schedule_id,
+            normalized_provider_schedule_id,
+        )
+        return {
+            "change_request_id": change_request_id,
+            "reconciled_status": "failed",
+            "reason": "provider_schedule_mismatch",
+        }
+
+    return {
+        "change_request_id": change_request_id,
+        "reconciled_status": "scheduled",
+        "reason": "schedule_still_attached",
     }
 
 

@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_PLAN_CODES = {"FREE", "BASIC", "LIGHT", "PRO"}
 
+VALID_ACCOUNT_BETTOR_PROFILES = {"recreativo", "profissional", "criador"}
+VALID_ACCOUNT_NARRATIVE_STYLES = {"leve", "equilibrado", "pro"}
+
 def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
@@ -195,6 +198,194 @@ def _build_anonymous_payload() -> Dict[str, Any]:
             "product_plan_code": None,
             "domain_rule": None,
         },
+        "meta": {
+            "generated_at_utc": utc_now_iso(),
+        },
+    }
+
+def _default_narrative_style_for_bettor_profile(bettor_profile: str | None) -> str:
+    if bettor_profile == "profissional":
+        return "equilibrado"
+    if bettor_profile == "criador":
+        return "pro"
+    return "leve"
+
+
+def _resolve_account_preferences(raw: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload = raw or {}
+
+    bettor_profile_raw = payload.get("bettor_profile")
+    bettor_profile = (
+        str(bettor_profile_raw).strip().lower()
+        if bettor_profile_raw is not None
+        else None
+    )
+    if bettor_profile not in VALID_ACCOUNT_BETTOR_PROFILES:
+        bettor_profile = None
+
+    narrative_style_raw = payload.get("narrative_style")
+    narrative_style = (
+        str(narrative_style_raw).strip().lower()
+        if narrative_style_raw is not None
+        else ""
+    )
+    if narrative_style not in VALID_ACCOUNT_NARRATIVE_STYLES:
+        narrative_style = _default_narrative_style_for_bettor_profile(bettor_profile)
+
+    return {
+        "bettor_profile": bettor_profile,
+        "narrative_style": narrative_style,
+        "completed_onboarding": bool(payload.get("completed_onboarding")),
+    }
+
+
+def _load_user_account_preferences(cur, *, user_id: int) -> Dict[str, Any]:
+    cur.execute(
+        """
+        SELECT bettor_profile, narrative_style, completed_onboarding
+        FROM app.user_product_preferences
+        WHERE user_id = %(user_id)s
+        LIMIT 1
+        """,
+        {"user_id": user_id},
+    )
+    row = cur.fetchone()
+
+    if row is None:
+        return _resolve_account_preferences()
+
+    return _resolve_account_preferences(
+        {
+            "bettor_profile": row[0],
+            "narrative_style": row[1],
+            "completed_onboarding": row[2],
+        }
+    )
+
+
+def _upsert_user_account_preferences(
+    cur,
+    *,
+    user_id: int,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    resolved = _resolve_account_preferences(payload)
+
+    cur.execute(
+        """
+        INSERT INTO app.user_product_preferences (
+            user_id,
+            bettor_profile,
+            narrative_style,
+            completed_onboarding
+        )
+        VALUES (
+            %(user_id)s,
+            %(bettor_profile)s,
+            %(narrative_style)s,
+            %(completed_onboarding)s
+        )
+        ON CONFLICT (user_id) DO UPDATE
+        SET bettor_profile = EXCLUDED.bettor_profile,
+            narrative_style = EXCLUDED.narrative_style,
+            completed_onboarding = EXCLUDED.completed_onboarding,
+            updated_at_utc = NOW()
+        RETURNING bettor_profile, narrative_style, completed_onboarding
+        """,
+        {
+            "user_id": user_id,
+            "bettor_profile": resolved["bettor_profile"],
+            "narrative_style": resolved["narrative_style"],
+            "completed_onboarding": resolved["completed_onboarding"],
+        },
+    )
+    row = cur.fetchone()
+
+    return _resolve_account_preferences(
+        {
+            "bettor_profile": row[0],
+            "narrative_style": row[1],
+            "completed_onboarding": row[2],
+        }
+    )
+
+
+def get_authenticated_account_preferences(*, request: Request) -> Dict[str, Any]:
+    raw_session_token = read_product_session_cookie(request)
+    if not raw_session_token:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "AUTH_REQUIRED",
+            "message": "authentication required",
+        }
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            user_id = _resolve_session_user_id(cur, raw_session_token=raw_session_token)
+            if user_id is None:
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required",
+                }
+
+            account_preferences = _load_user_account_preferences(cur, user_id=user_id)
+        conn.commit()
+
+    return {
+        "ok": True,
+        "account_preferences": account_preferences,
+        "meta": {
+            "generated_at_utc": utc_now_iso(),
+        },
+    }
+
+
+def patch_authenticated_account_preferences(
+    *,
+    request: Request,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    raw_session_token = read_product_session_cookie(request)
+    if not raw_session_token:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "code": "AUTH_REQUIRED",
+            "message": "authentication required",
+        }
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            user_id = _resolve_session_user_id(cur, raw_session_token=raw_session_token)
+            if user_id is None:
+                return {
+                    "ok": False,
+                    "status_code": 401,
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required",
+                }
+
+            current = _load_user_account_preferences(cur, user_id=user_id)
+            merged = dict(current)
+
+            if "bettor_profile" in payload:
+                merged["bettor_profile"] = payload.get("bettor_profile")
+
+            if "narrative_style" in payload:
+                merged["narrative_style"] = payload.get("narrative_style")
+
+            if "completed_onboarding" in payload:
+                merged["completed_onboarding"] = payload.get("completed_onboarding")
+
+            saved = _upsert_user_account_preferences(cur, user_id=user_id, payload=merged)
+        conn.commit()
+
+    return {
+        "ok": True,
+        "account_preferences": saved,
         "meta": {
             "generated_at_utc": utc_now_iso(),
         },
@@ -749,6 +940,7 @@ def _build_authenticated_payload(
     )
     usage_row = cur.fetchone()
     credits_used_today = int(usage_row[0]) if usage_row else 0
+    account_preferences = _load_user_account_preferences(cur, user_id=user_id)
 
     return {
         "ok": True,
@@ -779,6 +971,7 @@ def _build_authenticated_payload(
         "meta": {
             "generated_at_utc": utc_now_iso(),
         },
+        "account_preferences": account_preferences,
     }
 
 
@@ -846,10 +1039,10 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
     row = cur.fetchone()
 
     if row is None:
-        logger.warning(
-            "[AUTH_SESSION_LOOKUP_DEBUG] status=miss session_cookie=%s token_hash_prefix=%s",
+        logger.debug(
+            "[AUTH_SESSION_LOOKUP] status=miss session_cookie=%s token_hash_prefix=%s",
             _mask_session_token(raw_session_token),
-            session_token_hash[:12],
+            token_hash[:12],
         )
         return None
 
@@ -865,12 +1058,12 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
         {"session_id": session_id},
     )
 
-    logger.warning(
-        "[AUTH_SESSION_LOOKUP_DEBUG] status=hit session_id=%s user_id=%s session_cookie=%s token_hash_prefix=%s",
-        session_id,
-        user_id,
+    logger.debug(
+        "[AUTH_SESSION_LOOKUP] status=hit session_id=%s user_id=%s session_cookie=%s token_hash_prefix=%s",
+        session_row.get("session_id"),
+        session_row.get("user_id"),
         _mask_session_token(raw_session_token),
-        session_token_hash[:12],
+        token_hash[:12],
     )
 
     return user_id
@@ -1081,6 +1274,10 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                     email=settings.product_dev_auto_login_email,
                     plan_code=settings.product_dev_auto_login_plan,
                 )
+                account_preferences = _load_user_account_preferences(
+                    cur,
+                    user_id=int(actor["user_id"]),
+                )
             conn.commit()
 
         dev_plan_code = str(actor["plan_code"])
@@ -1109,6 +1306,7 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
                 "domain": "dev-auto-login",
                 "source": "dev_auto_login_bridge",
             },
+            "account_preferences": account_preferences,
         }
 
         dev_plan_code = resolve_runtime_product_plan_code(
@@ -1146,6 +1344,7 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
             "meta": {
                 "generated_at_utc": utc_now_iso(),
             },
+            "account_preferences": account_preferences,
         }
 
     raw_session_token = read_product_session_cookie(request)

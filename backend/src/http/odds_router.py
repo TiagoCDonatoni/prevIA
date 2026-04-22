@@ -4,12 +4,20 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from src.db.pg import pg_conn
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 from src.odds.matchup_resolver import resolve_odds_event
+
+from src.auth.service import get_auth_me_payload
+from src.access.service import (
+    _is_fixture_currently_revealed,
+    _resolve_product_plan_code,
+    _today_date_key,
+)
+from src.product.model_registry import get_active_model_version
 
 import json
 from pathlib import Path
@@ -72,6 +80,7 @@ class OddsEventRow(BaseModel):
     odds_books: Optional[List[OddsBook]] = None
     probs_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
     has_model: Optional[bool] = None
+    has_opportunity: Optional[bool] = None
     edge_summary: Optional[EdgeSummary] = None
     snapshot_summary: Optional[Dict[str, Any]] = None
     resolved_home_team_id: Optional[int] = None
@@ -125,6 +134,8 @@ class QuoteResponse(BaseModel):
     probs: Optional[Dict[str, float]] = None
     odds: Optional[Dict[str, Any]] = None
     value: Optional[Dict[str, Any]] = None
+    edge_summary: Optional[EdgeSummary] = None
+    snapshot_summary: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------
@@ -142,6 +153,104 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+def _get_authenticated_actor(request: Request) -> Optional[Dict[str, Any]]:
+    payload = get_auth_me_payload(request)
+    if not payload.get("is_authenticated") or not payload.get("user"):
+        return None
+    return payload
+
+
+def _require_reveal_for_authenticated_request(conn, request: Request, *, fixture_key: str) -> None:
+    actor = _get_authenticated_actor(request)
+    if not actor:
+        return
+
+    with conn.cursor() as cur:
+        unlocked = _is_fixture_currently_revealed(
+            cur,
+            user_id=int(actor["user"]["user_id"]),
+            date_key=_today_date_key(),
+            fixture_key=str(fixture_key),
+            plan_code=_resolve_product_plan_code(actor),
+        )
+
+    if unlocked:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "ok": False,
+            "code": "ANALYSIS_LOCKED",
+            "message": "reveal required before reading analysis",
+        },
+    )
+
+
+def _require_authenticated_and_revealed(conn, request: Request, *, fixture_key: str) -> None:
+    actor = _get_authenticated_actor(request)
+    if not actor:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "ok": False,
+                "code": "UNAUTHENTICATED",
+                "message": "authentication required",
+            },
+        )
+
+    with conn.cursor() as cur:
+        unlocked = _is_fixture_currently_revealed(
+            cur,
+            user_id=int(actor["user"]["user_id"]),
+            date_key=_today_date_key(),
+            fixture_key=str(fixture_key),
+            plan_code=_resolve_product_plan_code(actor),
+        )
+
+    if unlocked:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "ok": False,
+            "code": "ANALYSIS_LOCKED",
+            "message": "reveal required before reading analysis",
+        },
+    )
+
+
+def _fetch_latest_snapshot_payload_for_event(conn, event_id: str) -> Dict[str, Any]:
+    model_version = get_active_model_version()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT payload
+            FROM product.matchup_snapshot_v1
+            WHERE model_version = %(model_version)s
+              AND event_id = %(event_id)s
+            ORDER BY updated_at_utc DESC
+            LIMIT 1
+            """,
+            {
+                "model_version": str(model_version),
+                "event_id": str(event_id),
+            },
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return {}
+
+    return _coerce_payload(row[0])
+
+
+def _fetch_snapshot_summary_for_event(conn, event_id: str) -> Optional[Dict[str, Any]]:
+    payload = _fetch_latest_snapshot_payload_for_event(conn, event_id)
+    return _build_snapshot_summary(payload)
 
 
 def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -169,6 +278,7 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
     btts = mk.get("btts") or {}
     btts_p = btts.get("p_model") or {}
     inputs = snapshot_payload_obj.get("inputs") or {}
+    confidence = snapshot_payload_obj.get("confidence") or {}
 
     snapshot_summary_candidate = {
         "totals": {
@@ -187,6 +297,11 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
             "lambda_away": inputs.get("lambda_away"),
             "lambda_total": inputs.get("lambda_total"),
         },
+        "confidence": {
+            "overall": confidence.get("overall"),
+            "level": confidence.get("level"),
+            "source": confidence.get("source"),
+        },
     }
 
     has_snapshot_data = any(
@@ -197,8 +312,6 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
     )
 
     return snapshot_summary_candidate if has_snapshot_data else None
-
-_AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
 
 def _book_key(raw: Optional[str]) -> str:
     v = (raw or "").strip().lower()
@@ -1039,8 +1152,15 @@ def resolve_matchup(req: ResolveRequest) -> ResolveResponse:
 
 
 @router.post("/quote", response_model=QuoteResponse)
-def quote(req: QuoteRequest) -> QuoteResponse:
+def quote(req: QuoteRequest, request: Request) -> QuoteResponse:
     with pg_conn() as conn:
+        _require_reveal_for_authenticated_request(conn, request, fixture_key=req.event_id)
+
+        snapshot_payload_obj = _fetch_latest_snapshot_payload_for_event(conn, req.event_id)
+        snapshot_summary = _build_snapshot_summary(snapshot_payload_obj)
+
+        snapshot_probs = ((snapshot_payload_obj.get("markets") or {}).get("1x2") or {}).get("p_model") or {}
+
         # 1) resolver (persiste status/score + resolved ids)
         res = resolve_odds_event(
             conn,
@@ -1072,6 +1192,7 @@ def quote(req: QuoteRequest) -> QuoteResponse:
         odds_block = None
         value_block = None
         probs_block = None
+        edge_summary = None
 
         if ev.get("odds_best"):
             odds_block = {
@@ -1081,8 +1202,23 @@ def quote(req: QuoteRequest) -> QuoteResponse:
                 "books": [b.dict() for b in odds_books],
             }
 
-        # 3) modelo (só se tiver ids resolvidos)
-        if res.resolved_home_team_id and res.resolved_away_team_id:
+        # 3) snapshot-first: usa o modelo já materializado no snapshot se existir
+        snapshot_has_model = (
+            snapshot_probs.get("home") is not None
+            and snapshot_probs.get("draw") is not None
+            and snapshot_probs.get("away") is not None
+        )
+
+        if snapshot_has_model:
+            probs_block = {
+                "H": float(snapshot_probs["home"]),
+                "D": float(snapshot_probs["draw"]),
+                "A": float(snapshot_probs["away"]),
+            }
+            matchup["model_status"] = "SNAPSHOT_MODEL"
+
+        # 4) fallback legado por artifact, só se ainda não houver probs do snapshot
+        if not probs_block and res.resolved_home_team_id and res.resolved_away_team_id:
             pick = _pick_model_season(conn, league_id=int(req.assume_league_id), requested_season=int(req.assume_season))
 
             matchup["model_season_requested"] = int(req.assume_season)
@@ -1092,7 +1228,6 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             if pick["season_mode"] == "none":
                 matchup["model_status"] = "NO_STATS_ANY_SEASON"
             else:
-                # resolve artifact automaticamente se o client não enviar
                 artifact_filename = (req.artifact_filename or "").strip()
                 if not artifact_filename:
                     artifact_filename = _fetch_artifact_filename_for_league(
@@ -1115,14 +1250,19 @@ def quote(req: QuoteRequest) -> QuoteResponse:
                         )
                         probs = pred.get("probs") or pred.get("probs_1x2") or None
                         if probs:
-                            probs_block = {"H": float(probs["H"]), "D": float(probs["D"]), "A": float(probs["A"])}
+                            probs_block = {
+                                "H": float(probs["H"]),
+                                "D": float(probs["D"]),
+                                "A": float(probs["A"]),
+                            }
                     except ValueError as e:
                         matchup["model_status"] = "NO_STATS_FOR_MATCH"
                         matchup["model_error"] = str(e)
 
-        # 4) value/edge (opcional)
+        # 5) value / edge
         if probs_block and odds_books:
             value_block = _build_value_block_from_books(probs_block, odds_books)
+            edge_summary = _build_edge_summary_from_books(probs_block, odds_books)
 
         return QuoteResponse(
             ok=True,
@@ -1131,10 +1271,13 @@ def quote(req: QuoteRequest) -> QuoteResponse:
             probs=probs_block,
             odds=odds_block,
             value=value_block,
+            edge_summary=edge_summary,
+            snapshot_summary=snapshot_summary,
         )
 
 @router.get("/matchup/snapshot")
 def get_matchup_snapshot(
+    request: Request,
     fixture_id: int | None = Query(default=None),
     event_id: str | None = Query(default=None),
     model_version: str = Query(default="model_v0"),
@@ -1173,8 +1316,10 @@ def get_matchup_snapshot(
             cur.execute(sql, params)
             r = cur.fetchone()
 
-    if not r:
-        raise HTTPException(status_code=404, detail="snapshot_not_found")
+        if not r:
+            raise HTTPException(status_code=404, detail="snapshot_not_found")
+
+        _require_authenticated_and_revealed(conn, request, fixture_key=str(r[2]))
 
     return {
         "snapshot_id": r[0],

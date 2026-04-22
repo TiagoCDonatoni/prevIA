@@ -151,13 +151,84 @@ export function featuresForPlan(plan: PlanId): Entitlements["features"] {
 
 const LS_KEY = "previa_product_state_v1";
 
+type PreferencesByAccount = Record<string, ProductAccountPreferences>;
+
 type PersistedState = {
   plan: PlanId;
   lang: Lang;
   auth: { is_logged_in: boolean; email?: string | null };
   credits: { date_key: string; used_today: number; revealed_today: Record<string, true> };
   preferences: ProductAccountPreferences;
+  preferences_by_account?: PreferencesByAccount;
 };
+
+const ACCOUNT_PREFERENCES_SCOPE_ANON = "__anon__";
+
+type ProductAuthState = PersistedState["auth"];
+
+function normalizeAuthEmailKey(raw: string | null | undefined): string | null {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return value || null;
+}
+
+export function resolvePreferencesScopeKey(
+  auth: ProductAuthState | null | undefined
+): string {
+  if (!auth?.is_logged_in) return ACCOUNT_PREFERENCES_SCOPE_ANON;
+  return normalizeAuthEmailKey(auth.email) ?? ACCOUNT_PREFERENCES_SCOPE_ANON;
+}
+
+function normalizePreferencesByAccount(raw: unknown): PreferencesByAccount {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+
+  const next: PreferencesByAccount = {};
+
+  for (const [rawKey, rawValue] of Object.entries(raw as Record<string, unknown>)) {
+    const normalizedKey =
+      rawKey === ACCOUNT_PREFERENCES_SCOPE_ANON
+        ? ACCOUNT_PREFERENCES_SCOPE_ANON
+        : normalizeAuthEmailKey(rawKey);
+
+    if (!normalizedKey) continue;
+
+    next[normalizedKey] = resolveAccountPreferences(
+      rawValue as ProductAccountPreferences
+    );
+  }
+
+  return next;
+}
+
+export function resolvePersistedPreferencesForAuth(
+  state: Pick<PersistedState, "auth" | "preferences" | "preferences_by_account">,
+  auth: ProductAuthState = state.auth
+): ProductAccountPreferences {
+  const bucket = normalizePreferencesByAccount(state.preferences_by_account);
+  const scopeKey = resolvePreferencesScopeKey(auth);
+  const scoped = bucket[scopeKey];
+
+  if (scoped) {
+    return resolveAccountPreferences(scoped);
+  }
+
+  if (scopeKey === ACCOUNT_PREFERENCES_SCOPE_ANON) {
+    return resolveAccountPreferences(
+      bucket[ACCOUNT_PREFERENCES_SCOPE_ANON] ?? state.preferences
+    );
+  }
+
+  return DEFAULT_ACCOUNT_PREFERENCES;
+}
+
+function buildPreferencesByAccount(state: PersistedState): PreferencesByAccount {
+  const bucket = normalizePreferencesByAccount(state.preferences_by_account);
+  const scopeKey = resolvePreferencesScopeKey(state.auth);
+
+  return {
+    ...bucket,
+    [scopeKey]: resolveAccountPreferences(state.preferences),
+  };
+}
 
 function dateKeyUtc(now = new Date()): string {
   // UTC-0 product boundary.
@@ -208,6 +279,9 @@ export function loadProductState(): PersistedState {
     auth: { is_logged_in: false, email: null },
     credits: { date_key: today, used_today: 0, revealed_today: {} },
     preferences: DEFAULT_ACCOUNT_PREFERENCES,
+    preferences_by_account: {
+      [ACCOUNT_PREFERENCES_SCOPE_ANON]: DEFAULT_ACCOUNT_PREFERENCES,
+    },
   };
 
   let state: PersistedState = fallback;
@@ -221,7 +295,19 @@ export function loadProductState(): PersistedState {
       parsed.lang = normalizeLang(parsed.lang);
       parsed.plan = normalizePlanId(parsed.plan);
       parsed.preferences = resolveAccountPreferences(parsed.preferences);
-      
+
+      const normalizedPreferencesByAccount = normalizePreferencesByAccount(
+        parsed.preferences_by_account
+      );
+
+      if (!Object.keys(normalizedPreferencesByAccount).length) {
+        normalizedPreferencesByAccount[resolvePreferencesScopeKey(parsed.auth)] =
+          resolveAccountPreferences(parsed.preferences);
+      }
+
+      parsed.preferences_by_account = normalizedPreferencesByAccount;
+      parsed.preferences = resolvePersistedPreferencesForAuth(parsed, parsed.auth);
+
       if (!parsed?.credits?.date_key || parsed.credits.date_key !== today) {
         parsed.credits = { date_key: today, used_today: 0, revealed_today: {} };
       }
@@ -235,14 +321,26 @@ export function loadProductState(): PersistedState {
   // DEV helper: injeta sessão local para acelerar a fase de desenvolvimento.
   // Não é source of truth final; é só scaffolding até auth backend entrar.
   if (PRODUCT_DEV_AUTO_LOGIN_ENABLED) {
-    state = {
+    const nextAuth = {
+      is_logged_in: true,
+      email: PRODUCT_DEV_AUTO_LOGIN_EMAIL || "dev@previa.local",
+    };
+
+    const baseState: PersistedState = {
       ...state,
       plan: normalizePlanId(PRODUCT_DEV_AUTO_LOGIN_PLAN),
-      auth: {
-        is_logged_in: true,
-        email: PRODUCT_DEV_AUTO_LOGIN_EMAIL || "dev@previa.local",
-      },
-      preferences: resolveAccountPreferences(state.preferences),
+      auth: nextAuth,
+    };
+
+    const scopedPreferences = resolvePersistedPreferencesForAuth(baseState, nextAuth);
+
+    state = {
+      ...baseState,
+      preferences: scopedPreferences,
+      preferences_by_account: buildPreferencesByAccount({
+        ...baseState,
+        preferences: scopedPreferences,
+      }),
     };
 
     // se alguém habilitar dev auto-login mas deixar FREE_ANON, sobe para FREE
@@ -255,7 +353,13 @@ export function loadProductState(): PersistedState {
 }
 
 export function saveProductState(state: PersistedState) {
-  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  const normalizedState: PersistedState = {
+    ...state,
+    preferences: resolveAccountPreferences(state.preferences),
+    preferences_by_account: buildPreferencesByAccount(state),
+  };
+
+  localStorage.setItem(LS_KEY, JSON.stringify(normalizedState));
 }
 
 export function buildEntitlements(state: PersistedState): Entitlements {

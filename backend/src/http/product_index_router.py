@@ -4,16 +4,24 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from src.db.pg import pg_conn
 from src.product.model_registry import get_active_model_version
 from src.http.odds_router import (
+    EdgeSummary,
     OddsEventRow,
     OddsEventsResponse,
     _fetch_latest_books_for_events,
     _build_snapshot_summary,
     _build_edge_summary_from_books,
+)
+
+from src.auth.service import get_auth_me_payload
+from src.access.service import (
+    _fetch_revealed_fixture_rows,
+    _resolve_product_plan_code,
+    _today_date_key,
 )
 
 router = APIRouter(prefix="/product", tags=["product"])
@@ -31,9 +39,52 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
             return {}
     return {}
 
+OPPORTUNITY_EDGE_THRESHOLD = 0.05
+OPPORTUNITY_EV_THRESHOLD = 0.03
+OPPORTUNITY_MIN_BOOKS = 4
+OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60
+
+
+def _has_public_opportunity(summary: Optional[EdgeSummary]) -> bool:
+    if not summary:
+        return False
+
+    side = summary.opportunity_outcome
+    edge = summary.opportunity_edge
+    ev = summary.opportunity_ev
+    books = summary.market_complete_books_count or summary.market_books_count or 0
+    freshness = summary.opportunity_book_freshness_seconds
+
+    return (
+        (side == "H" or side == "D" or side == "A")
+        and isinstance(edge, (int, float))
+        and isinstance(ev, (int, float))
+        and float(edge) >= OPPORTUNITY_EDGE_THRESHOLD
+        and float(ev) >= OPPORTUNITY_EV_THRESHOLD
+        and int(books) >= OPPORTUNITY_MIN_BOOKS
+        and (freshness is None or int(freshness) <= OPPORTUNITY_MAX_FRESHNESS_SECONDS)
+    )
+
+
+def _load_revealed_fixture_keys(conn, request: Request) -> set[str]:
+    actor = get_auth_me_payload(request)
+    if not actor.get("is_authenticated") or not actor.get("user"):
+        return set()
+
+    with conn.cursor() as cur:
+        rows = _fetch_revealed_fixture_rows(
+            cur,
+            user_id=int(actor["user"]["user_id"]),
+            date_key=_today_date_key(),
+            plan_code=_resolve_product_plan_code(actor),
+        )
+
+    return {str(r[0]) for r in rows}
+
 
 @router.get("/index", response_model=OddsEventsResponse, response_model_exclude_none=False)
 def product_index(
+    request: Request,
     sport_key: str = Query(...),
     hours_ahead: int = Query(168, ge=1, le=24 * 60),
     limit: int = Query(200, ge=1, le=1000),
@@ -119,6 +170,7 @@ def product_index(
 
         event_ids = [str(r[0]) for r in rows]
         books_map = _fetch_latest_books_for_events(conn, event_ids)
+        revealed_fixture_keys = _load_revealed_fixture_keys(conn, request)
 
         for (
             event_id,
@@ -165,6 +217,9 @@ def product_index(
                 books = books_map.get(str(event_id), []) or []
                 edge_summary = _build_edge_summary_from_books(probs_block, books)
 
+            is_unlocked = str(event_id) in revealed_fixture_keys
+            has_public_opportunity = _has_public_opportunity(edge_summary)
+
             events.append(
                 OddsEventRow(
                     event_id=str(event_id),
@@ -185,14 +240,15 @@ def product_index(
                         "A": float(odds_away) if odds_away is not None else None,
                     } if (odds_home is not None or odds_draw is not None or odds_away is not None) else None,
                     odds_books=books_map.get(str(event_id), []),
-                    edge_summary=edge_summary,
+                    edge_summary=edge_summary if is_unlocked else None,
                     probs_1x2={
                         "H": float(probs_1x2["home"]),
                         "D": float(probs_1x2["draw"]),
                         "A": float(probs_1x2["away"]),
-                    } if has_model else None,
+                    } if (has_model and is_unlocked) else None,
                     has_model=bool(has_model),
-                    snapshot_summary=snapshot_summary,
+                    has_opportunity=bool(has_public_opportunity),
+                    snapshot_summary=snapshot_summary if is_unlocked else None,
                     resolved_home_team_id=(
                         int(inputs["home_team_id"]) if inputs.get("home_team_id") is not None else None
                     ),

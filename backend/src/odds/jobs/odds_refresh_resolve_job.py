@@ -311,18 +311,18 @@ def _build_btts_event_records(
                         "error": str(e),
                     }
                 )
-            logger.warning("[BTTS DEBUG] event_id=%s provider_error=%s", event_id, str(e))
+            logger.debug("[BTTS] event_id=%s provider_error=%s", event_id, str(e))
             continue
 
-        logger.warning("[BTTS DEBUG] event_id=%s", event_id)
+        logger.debug("[BTTS] event_id=%s", event_id)
 
         if isinstance(raw, dict):
-            logger.warning("[BTTS DEBUG] raw_keys=%s", list(raw.keys()))
-            logger.warning("[BTTS DEBUG] bookmakers_count=%s", len(raw.get("bookmakers") or []))
-            logger.warning("[BTTS DEBUG] bookmakers_sample=%s", (raw.get("bookmakers") or [])[:1])
+            logger.debug("[BTTS] raw_keys=%s", list(raw.keys()))
+            logger.debug("[BTTS] bookmakers_count=%s", len(raw.get("bookmakers") or []))
+            logger.debug("[BTTS] bookmakers_sample=%s", (raw.get("bookmakers") or [])[:1])
         else:
-            logger.warning("[BTTS DEBUG] raw_type=%s", type(raw))
-            logger.warning("[BTTS DEBUG] raw_value=%s", raw)
+            logger.debug("[BTTS] raw_type=%s", type(raw))
+            logger.debug("[BTTS] raw_value=%s", raw)
             counters["events_fail"] += 1
             if len(sample_issues) < 8:
                 sample_issues.append(

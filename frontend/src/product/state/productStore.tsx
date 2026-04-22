@@ -19,6 +19,7 @@ import {
   consumeCreditForReveal,
   loadProductState,
   normalizeLang,
+  resolvePersistedPreferencesForAuth,
   saveProductState,
   type Entitlements,
   type PlanId,
@@ -168,6 +169,7 @@ export type ProductStore = {
     subscription_provider?: string | null;
     subscription_billing_cycle?: "monthly" | "quarterly" | "semiannual" | "annual" | null;
     access_context?: AuthAccessResponse | null;
+    account_preferences?: ProductAccountPreferences | null;
   }) => void;
 
   applyBackendUsage: (payload: {
@@ -382,15 +384,24 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
 
   const setAuth = useCallback(
     (opts: { is_logged_in: boolean; email?: string | null }) => {
-      persistWith((prev) => ({
-        ...prev,
-        auth: {
-          is_logged_in: opts.is_logged_in,
-          email: opts.email ?? null,
-        },
-      }));
+      const nextAuth = {
+        is_logged_in: opts.is_logged_in,
+        email: opts.email ?? null,
+      };
+
+      persistWith((prev) => {
+        const base = {
+          ...prev,
+          auth: nextAuth,
+        };
+
+        return {
+          ...base,
+          preferences: resolvePersistedPreferencesForAuth(base, nextAuth),
+        };
+      });
     },
-    [persistWith, state.preferences]
+    [persistWith]
   );
 
   const setInternalNarrativeView = useCallback(
@@ -466,8 +477,31 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       subscription_provider?: string | null;
       subscription_billing_cycle?: "monthly" | "quarterly" | "semiannual" | "annual" | null;
       access_context?: AuthAccessResponse | null;
+      account_preferences?: ProductAccountPreferences | null;
     }) => {
-      const localPreferences = resolveAccountPreferences(state.preferences);
+      const nextAuth = payload.is_authenticated
+        ? {
+            is_logged_in: true,
+            email: payload.email ?? null,
+          }
+        : {
+            is_logged_in: false,
+            email: null,
+          };
+
+      const localScopedPreferences = resolvePersistedPreferencesForAuth(
+        {
+          auth: nextAuth,
+          preferences: state.preferences,
+          preferences_by_account: state.preferences_by_account,
+        },
+        nextAuth
+      );
+
+      const backendPreferences = payload.is_authenticated
+        ? resolveAccountPreferences(payload.account_preferences ?? null)
+        : localScopedPreferences;
+
       persistWith((prev) => {
         if (payload.is_authenticated) {
           const nextLang =
@@ -478,32 +512,36 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
           const runtimePlanRaw = payload.access_context?.product_plan_code ?? payload.plan;
           const runtimePlan = normalizeBackendPlanCode(runtimePlanRaw);
 
-          return {
+          const base = {
             ...prev,
             plan: runtimePlan,
             lang: nextLang,
-            auth: {
-              is_logged_in: true,
-              email: payload.email ?? null,
-            },
+            auth: nextAuth,
+          };
+
+          return {
+            ...base,
+            preferences: backendPreferences,
           };
         }
 
         const deviceAnon = readDeviceAnonUsage();
         const today = deviceAnon.date_key || dateKeyUtc();
 
-        return {
+        const base = {
           ...prev,
-          plan: "FREE_ANON",
-          auth: {
-            is_logged_in: false,
-            email: null,
-          },
+          plan: "FREE_ANON" as const,
+          auth: nextAuth,
           credits: {
             date_key: today,
             used_today: Math.max(0, Math.min(FREE_ANON_DAILY_LIMIT, deviceAnon.used_today)),
             revealed_today: {},
           },
+        };
+
+        return {
+          ...base,
+          preferences: localScopedPreferences,
         };
       });
 
@@ -535,9 +573,9 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
           preferred_lang: payload.preferred_lang ?? null,
           status: payload.user_status ?? null,
           email_verified: payload.email_verified ?? null,
-          bettor_profile: localPreferences.bettor_profile,
-          narrative_style: localPreferences.narrative_style,
-          preferences_completed: localPreferences.completed_onboarding,
+          bettor_profile: backendPreferences.bettor_profile,
+          narrative_style: backendPreferences.narrative_style,
+          preferences_completed: backendPreferences.completed_onboarding,
           subscription: {
             plan_code: payload.subscription_plan_code ?? payload.plan ?? null,
             status: payload.subscription_status ?? null,
@@ -548,9 +586,9 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
       } else {
         setAccountSnapshot({
           ...DEFAULT_ACCOUNT_SNAPSHOT,
-          bettor_profile: localPreferences.bettor_profile,
-          narrative_style: localPreferences.narrative_style,
-          preferences_completed: localPreferences.completed_onboarding,
+          bettor_profile: localScopedPreferences.bettor_profile,
+          narrative_style: localScopedPreferences.narrative_style,
+          preferences_completed: localScopedPreferences.completed_onboarding,
         });
         setAccessContext(DEFAULT_ACCESS_CONTEXT);
       }
@@ -568,7 +606,7 @@ export function ProductStoreProvider({ children }: { children: React.ReactNode }
         subscription_provider: payload.is_authenticated ? payload.subscription_provider ?? null : null,
       });
     },
-    [persistWith, state.preferences]
+    [persistWith, state.preferences, state.preferences_by_account]
   );
 
   const promoteCurrentSessionToDeviceAnonShadow = useCallback(() => {

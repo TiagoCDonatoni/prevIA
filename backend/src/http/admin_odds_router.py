@@ -1,36 +1,36 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import math
 import re
+import time
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
-
-from fastapi import Body, Query
-from pydantic import BaseModel
-
-from src.odds.matchup_resolver import _norm_name, _upsert_team_alias_auto
 
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
 from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
+from src.internal_access.guards import require_admin_access
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
-from src.odds.matchup_resolver import resolve_odds_event, resolve_odds_event_team_ids
-from src.odds.matchup_resolver import _norm_name, _upsert_team_alias_auto
-from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
 from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
-
+from src.odds.matchup_resolver import (
+    _norm_name,
+    _upsert_team_alias_auto,
+    resolve_odds_event,
+    resolve_odds_event_team_ids,
+)
 from src.ops.job_runs import (
-    JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
     CALC_VERSION_SNAPSHOT_V1,
-    start_job_run,
+    JOB_PRODUCT_SNAPSHOT_REBUILD_V1,
     finish_job_run,
     get_last_success_finished_at,
+    start_job_run,
 )
+from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
 from src.product.model_registry import get_active_model_version, get_calc_version
-from src.internal_access.guards import require_admin_access
 
 router = APIRouter(
     prefix="/admin/odds",
@@ -43,6 +43,26 @@ class AdminLeagueCountryUpdateBody(BaseModel):
 
 # MVP: default artifact (ajuste se você quiser centralizar isso em settings)
 DEFAULT_EPL_ARTIFACT = "epl_1x2_logreg_v1_C_2021_2023_C0.3.json"
+
+def _empty_runtime_counts() -> Dict[str, int]:
+    return {
+        "ok_exact": 0,
+        "ok_fallback": 0,
+        "missing_same_league": 0,
+        "missing_exact": 0,
+        "other_model_error": 0,
+    }
+
+
+def _read_match_stats_mode_from_pred(pred: Dict[str, Any]) -> str:
+    runtime = (pred or {}).get("runtime") or {}
+    stats_runtime = runtime.get("stats_runtime") or {}
+    return str(stats_runtime.get("match_stats_mode") or "unknown")
+
+def _coverage_pct(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return float(part) / float(total)
 
 def _classify_model_runtime_error(msg: Optional[str]) -> str:
     txt = (msg or "").lower()
@@ -257,6 +277,7 @@ def _audit_insert_prediction(
     fixture_id: Optional[int],
     home_team_id: Optional[int],
     away_team_id: Optional[int],
+    match_confidence: Optional[str],
     artifact_filename: str,
     odds_h: Optional[float],
     odds_d: Optional[float],
@@ -389,6 +410,7 @@ def _audit_insert_prediction(
         "best_ev": best_ev,
         "status": status,
         "reason": reason,
+        "match_confidence": match_confidence,
     }
 
     with conn.cursor() as cur:
@@ -1418,6 +1440,7 @@ def admin_odds_resolve_batch(
         counters=counters,
         sample_issues=sample_issues,
     )
+
 @router.get("/upcoming/orchestrate")
 def admin_odds_upcoming_orchestrate(
     sport_key: str = Query(..., min_length=2),
@@ -1428,11 +1451,16 @@ def admin_odds_upcoming_orchestrate(
     assume_season: Optional[int] = Query(default=None, ge=1900, le=2100),
 ) -> List[Dict[str, Any]]:
     try:
-        raw = _client().get_odds_h2h(sport_key=sport_key, regions=effective_regions)
+        raw = _client().get_odds_h2h(
+            sport_key=sport_key,
+            regions=regions,
+            markets="h2h,totals",
+        )
     except TheOddsApiError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     out: List[Dict[str, Any]] = []
+
     with pg_conn() as conn:
         for ev in raw[:limit]:
             event_id = ev.get("id")
@@ -1485,18 +1513,16 @@ def admin_odds_upcoming_orchestrate(
                         home_team_id=int(home_id),
                         away_team_id=int(away_id),
                     )
-                except FileNotFoundError as e:
-                    raise HTTPException(status_code=404, detail=str(e))
 
                     p_model = pred["probs"]
-                    p_mkt = market["novig"]
+                    p_mkt = market.get("novig")
 
                     edge = None
                     if p_mkt:
                         edge = {
-                            "H": (p_model["H"] - (p_mkt["H"] or 0.0)) if p_mkt["H"] is not None else None,
-                            "D": (p_model["D"] - (p_mkt["D"] or 0.0)) if p_mkt["D"] is not None else None,
-                            "A": (p_model["A"] - (p_mkt["A"] or 0.0)) if p_mkt["A"] is not None else None,
+                            "H": (p_model["H"] - (p_mkt["H"] or 0.0)) if p_mkt.get("H") is not None else None,
+                            "D": (p_model["D"] - (p_mkt["D"] or 0.0)) if p_mkt.get("D") is not None else None,
+                            "A": (p_model["A"] - (p_mkt["A"] or 0.0)) if p_mkt.get("A") is not None else None,
                         }
 
                     evv = {
@@ -1504,6 +1530,9 @@ def admin_odds_upcoming_orchestrate(
                         "D": (p_model["D"] * odds_d - 1.0) if odds_d else None,
                         "A": (p_model["A"] * odds_a - 1.0) if odds_a else None,
                     }
+
+                    match_stats_mode = _read_match_stats_mode_from_pred(pred)
+                    model_status = "OK_FALLBACK" if match_stats_mode in ("partial_fallback", "full_fallback") else "OK_EXACT"
 
                     model_block = {
                         "league_id": int(league_id),
@@ -1513,10 +1542,17 @@ def admin_odds_upcoming_orchestrate(
                         "edge_vs_market": edge,
                         "ev_decimal": evv,
                         "features": pred.get("features"),
+                        "runtime": pred.get("runtime"),
                         "artifact_meta": pred.get("artifact"),
+                        "model_status": model_status,
                     }
+                except FileNotFoundError as e:
+                    raise HTTPException(status_code=404, detail=str(e))
                 except Exception as e:
-                    model_block = {"error": str(e)}
+                    model_block = {
+                        "error": str(e),
+                        "model_status": _classify_model_runtime_error(str(e)),
+                    }
 
             out.append(
                 {
@@ -1537,6 +1573,7 @@ def admin_odds_upcoming_orchestrate(
                     "model": model_block,
                 }
             )
+
     return out
 
 
@@ -1758,7 +1795,13 @@ def admin_odds_queue_intel(
         raise HTTPException(status_code=500, detail=str(e))
 
     items: List[Dict[str, Any]] = []
-    counters = {"total": 0, "ok_model": 0, "missing_team": 0, "model_error": 0}
+    counters = {
+        "total": 0,
+        "ok_model": 0,
+        "missing_team": 0,
+        "model_error": 0,
+    }
+    runtime_counts = _empty_runtime_counts()
 
     matchup_snapshots_error_msg: Optional[str] = None
 
@@ -1826,6 +1869,9 @@ def admin_odds_queue_intel(
                 )
                 p_model = pred["probs"]
 
+                match_stats_mode = _read_match_stats_mode_from_pred(pred)
+                model_status = "OK_FALLBACK" if match_stats_mode in ("partial_fallback", "full_fallback") else "OK_EXACT"
+
                 edge = None
                 if p_mkt:
                     edge = {
@@ -1860,10 +1906,16 @@ def admin_odds_queue_intel(
                     "best_ev": best_ev,
                     "best_side": best_side,
                     "artifact_meta": pred.get("artifact"),
+                    "runtime": pred.get("runtime"),
+                    "model_status": model_status,
                 }
                 counters["ok_model"] += 1
 
-                # Persist audit snapshot (não impede retorno se falhar)
+                if model_status == "OK_FALLBACK":
+                    runtime_counts["ok_fallback"] += 1
+                else:
+                    runtime_counts["ok_exact"] += 1
+
                 try:
                     with pg_conn() as conn:
                         _audit_insert_prediction(
@@ -1889,18 +1941,32 @@ def admin_odds_queue_intel(
                             best_ev=best_ev,
                             status="ok",
                             reason=None,
+                            match_confidence=match_confidence,
                         )
                         conn.commit()
                 except Exception as pe:
                     persist_error = str(pe)
 
             except Exception as e:
-                status = "incomplete"
-                reason = str(e)
-                counters["model_error"] += 1
-                model_block = {"error": str(e)}
+                err_msg = str(e)
+                classified_reason = _classify_model_runtime_error(err_msg)
 
-                # opcional: também persistir falha (se você quiser rastrear por que não calculou)
+                status = "incomplete"
+                reason = classified_reason
+                counters["model_error"] += 1
+
+                if classified_reason == "MISSING_TEAM_STATS_SAME_LEAGUE":
+                    runtime_counts["missing_same_league"] += 1
+                elif classified_reason == "MISSING_TEAM_STATS_EXACT":
+                    runtime_counts["missing_exact"] += 1
+                else:
+                    runtime_counts["other_model_error"] += 1
+
+                model_block = {
+                    "error": err_msg,
+                    "model_status": classified_reason,
+                }
+
                 try:
                     with pg_conn() as conn:
                         _audit_insert_prediction(
@@ -1926,6 +1992,7 @@ def admin_odds_queue_intel(
                             best_ev=None,
                             status="incomplete",
                             reason=reason,
+                            match_confidence=match_confidence,
                         )
                         conn.commit()
                 except Exception as pe:
@@ -2010,6 +2077,15 @@ def admin_odds_queue_intel(
             "sort": sort,
             "order": order,
             "counts": counters,
+            "runtime_counts": runtime_counts,
+            "coverage": {
+                "ok_total_pct": _coverage_pct(counters["ok_model"], counters["total"]),
+                "ok_exact_pct": _coverage_pct(runtime_counts["ok_exact"], counters["total"]),
+                "ok_fallback_pct": _coverage_pct(runtime_counts["ok_fallback"], counters["total"]),
+                "missing_team_pct": _coverage_pct(counters["missing_team"], counters["total"]),
+                "missing_same_league_pct": _coverage_pct(runtime_counts["missing_same_league"], counters["total"]),
+                "model_error_pct": _coverage_pct(counters["model_error"], counters["total"]),
+            },
         },
         "items": items,
     }
@@ -2685,32 +2761,37 @@ def admin_odds_upcoming_intel_live(
     sport_key: str = Query(...),
     regions: str = Query(default="eu"),
     limit: int = Query(default=200, ge=1, le=500),
-
-    # MVP: EPL/season default
     assume_league_id: int = Query(default=39, ge=1),
     assume_season: int = Query(default=2025, ge=1900, le=2100),
-
     artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
 ) -> Dict[str, Any]:
     """
     Intel LIVE: chama o orquestrador (provider) e calcula intel sem persistir no DB.
     Ideal para UI/produto enquanto auditoria/persistência não está 100%.
     """
+
     items = admin_odds_upcoming_orchestrate(
         sport_key=sport_key,
         regions=regions,
         limit=limit,
+        artifact_filename=None,
         assume_league_id=assume_league_id,
         assume_season=assume_season,
     )
 
-    out = []
-    counts = {"total": 0, "resolved_ok": 0, "ok_model": 0, "missing_team": 0, "model_error": 0}
+    out: List[Dict[str, Any]] = []
+    counts = {
+        "total": 0,
+        "resolved_ok": 0,
+        "ok_model": 0,
+        "missing_team": 0,
+        "model_error": 0,
+    }
+    runtime_counts = _empty_runtime_counts()
 
     for it in items:
         counts["total"] += 1
 
-        # payload do orchestrate já vem com resolve + market_probs
         resolve = it.get("resolve") or {}
         ok_resolve = bool(resolve.get("ok"))
         if ok_resolve:
@@ -2728,6 +2809,7 @@ def admin_odds_upcoming_intel_live(
             try:
                 home_id = (resolve.get("home") or {}).get("team_id")
                 away_id = (resolve.get("away") or {}).get("team_id")
+
                 if not home_id or not away_id:
                     status = "incomplete"
                     reason = "missing_team_id"
@@ -2737,14 +2819,21 @@ def admin_odds_upcoming_intel_live(
                     od = (it.get("odds_1x2") or {}).get("D")
                     oa = (it.get("odds_1x2") or {}).get("A")
 
+                    fixture_hint = it.get("fixture_hint") or {}
+                    league_id = fixture_hint.get("league_id") or int(assume_league_id)
+                    season = fixture_hint.get("season") or int(assume_season)
+
                     pred = predict_1x2_from_artifact(
                         artifact_filename=artifact_filename,
-                        league_id=int(assume_league_id),
-                        season=int(assume_season),
+                        league_id=int(league_id),
+                        season=int(season),
                         home_team_id=int(home_id),
                         away_team_id=int(away_id),
                     )
                     p_model = pred["probs"]
+
+                    match_stats_mode = _read_match_stats_mode_from_pred(pred)
+                    model_status = "OK_FALLBACK" if match_stats_mode in ("partial_fallback", "full_fallback") else "OK_EXACT"
 
                     p_mkt = ((it.get("market_probs") or {}).get("novig")) or None
                     edge = None
@@ -2771,44 +2860,83 @@ def admin_odds_upcoming_intel_live(
                             best_ev = v
                             best_side = side
 
-                    runtime = pred.get("runtime") or {}
-                    stats_runtime = runtime.get("stats_runtime") or {}
-                    match_stats_mode = stats_runtime.get("match_stats_mode")
-
                     model_block = {
                         "artifact_filename": artifact_filename,
-                        "league_id": league_id,
-                        "season": season,
+                        "league_id": int(league_id),
+                        "season": int(season),
                         "probs_model": p_model,
                         "edge_vs_market": edge,
                         "ev_decimal": evv,
                         "best_ev": best_ev,
                         "best_side": best_side,
                         "artifact_meta": pred.get("artifact"),
-                        "runtime": runtime,
-                        "model_status": "OK_FALLBACK" if match_stats_mode in ("partial_fallback", "full_fallback") else "OK_EXACT",
+                        "runtime": pred.get("runtime"),
+                        "model_status": model_status,
                     }
                     counts["ok_model"] += 1
 
+                    if model_status == "OK_FALLBACK":
+                        runtime_counts["ok_fallback"] += 1
+                    else:
+                        runtime_counts["ok_exact"] += 1
+
             except Exception as e:
                 err_msg = str(e)
+                classified_reason = _classify_model_runtime_error(err_msg)
+
                 status = "incomplete"
-                reason = _classify_model_runtime_error(err_msg)
-                counters["model_error"] += 1
+                reason = classified_reason
+                counts["model_error"] += 1
+
+                if classified_reason == "MISSING_TEAM_STATS_SAME_LEAGUE":
+                    runtime_counts["missing_same_league"] += 1
+                elif classified_reason == "MISSING_TEAM_STATS_EXACT":
+                    runtime_counts["missing_exact"] += 1
+                else:
+                    runtime_counts["other_model_error"] += 1
+
                 model_block = {
                     "error": err_msg,
-                    "model_status": reason,
+                    "model_status": classified_reason,
                 }
 
-        out.append({**it, "model": model_block, "status": status, "reason": reason})
+        out.append(
+            {
+                **it,
+                "model": model_block,
+                "status": status,
+                "reason": reason,
+            }
+        )
 
-    # sort default: best_ev desc
     def _best_ev_key(x: Dict[str, Any]):
         m = x.get("model") or {}
         v = m.get("best_ev")
         return v if v is not None else -10**9
 
     out.sort(key=_best_ev_key, reverse=True)
+
+    return {
+        "meta": {
+            "sport_key": sport_key,
+            "regions": regions,
+            "limit": int(limit),
+            "artifact_filename": artifact_filename,
+            "assume_league_id": int(assume_league_id),
+            "assume_season": int(assume_season),
+            "counts": counts,
+            "runtime_counts": runtime_counts,
+            "coverage": {
+                "ok_total_pct": _coverage_pct(counts["ok_model"], counts["total"]),
+                "ok_exact_pct": _coverage_pct(runtime_counts["ok_exact"], counts["total"]),
+                "ok_fallback_pct": _coverage_pct(runtime_counts["ok_fallback"], counts["total"]),
+                "missing_team_pct": _coverage_pct(counts["missing_team"], counts["total"]),
+                "missing_same_league_pct": _coverage_pct(runtime_counts["missing_same_league"], counts["total"]),
+                "model_error_pct": _coverage_pct(counts["model_error"], counts["total"]),
+            },
+        },
+        "items": out,
+    }
 
 import time
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 
 import type {
   ProductEdgeSummary,
@@ -48,6 +48,11 @@ type UpgradeReason = "NO_CREDITS" | "FEATURE_LOCKED";
 type SortBy = "DATE" | "CONFIDENCE" | "EDGE";
 type WindowMode = "UPCOMING" | "TODAY" | "3" | "7" | "30";
 
+type ProductIndexMode = "app" | "public_embed";
+type ProductIndexProps = {
+  mode?: ProductIndexMode;
+};
+
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
 const UPCOMING_WINDOW_HOURS = 24;
 const UPCOMING_FALLBACK_MAX_LEAGUES = 12;
@@ -67,6 +72,7 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
 };
 
 const EVENT_FETCH_CONCURRENCY = 4;
+const PUBLIC_EMBED_MAX_LEAGUES = 8;
 
 function sanitizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -86,6 +92,17 @@ function sanitizeSortBy(value: unknown): SortBy {
   return value === "DATE" || value === "CONFIDENCE" || value === "EDGE"
     ? value
     : "DATE";
+}
+
+function sameStringArray(a: string[], b: string[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+
+  return true;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -549,6 +566,12 @@ function hasOpportunity(summary: ProductEdgeSummary | null | undefined) {
   );
 }
 
+function eventHasOpportunity(event: ProductOddsEvent | null | undefined) {
+  if (!event) return false;
+  if (event.has_opportunity === true) return true;
+  return hasOpportunity(event.edge_summary);
+}
+
 function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: Lang) {
   if (!league) return "";
 
@@ -601,8 +624,9 @@ function hasUsableAnalysisStatus(status: string | null | undefined) {
   );
 }
 
-export default function ProductIndex() {
+export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const store = useProductStore();
+  const isPublicEmbed = mode === "public_embed";
   const lang = store.state.lang as Lang;
   const vis = store.entitlements.visibility;
 
@@ -627,7 +651,10 @@ export default function ProductIndex() {
     Array<ProductLeagueItem & { assume_season: number; artifact_filename: string | null }>
   >([]);
 
-  const persistedFilters = useMemo(() => readPersistedProductIndexFilters(), []);
+  const persistedFilters = useMemo(
+    () => (isPublicEmbed ? null : readPersistedProductIndexFilters()),
+    [isPublicEmbed]
+  );
 
   const [sportKey, setSportKey] = useState<string>("");
   const league = useMemo(() => {
@@ -640,10 +667,16 @@ export default function ProductIndex() {
     return new Map(leagues.map((item) => [item.sport_key, item]));
   }, [leagues]);
 
-  const [windowMode, setWindowMode] = useState<WindowMode>(() => sanitizeWindowMode(persistedFilters?.windowMode));
-  const [sortBy, setSortBy] = useState<SortBy>(() => sanitizeSortBy(persistedFilters?.sortBy));
+  const [windowMode, setWindowMode] = useState<WindowMode>(() =>
+    isPublicEmbed ? "UPCOMING" : sanitizeWindowMode(persistedFilters?.windowMode)
+  );
+
+  const [sortBy, setSortBy] = useState<SortBy>(() =>
+    isPublicEmbed ? "DATE" : sanitizeSortBy(persistedFilters?.sortBy)
+  );
+
   const [onlyOpportunities, setOnlyOpportunities] = useState<boolean>(
-    () => persistedFilters?.onlyOpportunities === true
+    () => (isPublicEmbed ? false : persistedFilters?.onlyOpportunities === true)
   );
 
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -659,6 +692,11 @@ export default function ProductIndex() {
   const [selectedTeams, setSelectedTeams] = useState<string[]>(
     () => sanitizeStringArray(persistedFilters?.selectedTeams)
   );
+
+  const [hasLoadedLeaguesOnce, setHasLoadedLeaguesOnce] = useState(false);
+  const [hasLoadedEventsOnce, setHasLoadedEventsOnce] = useState(false);
+
+  const eventsRequestSeqRef = useRef(0);
 
   const countryOptions = useMemo(() => buildCountryOptions(leagues, lang), [leagues, lang]);
 
@@ -726,12 +764,18 @@ export default function ProductIndex() {
   }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowMode]);
 
   const fetchLeagues = useMemo(() => {
-    return activeLeagueSportKeys
+    const items = activeLeagueSportKeys
       .map((key) => leaguesBySportKey.get(key))
       .filter(Boolean) as Array<
       ProductLeagueItem & { assume_season: number; artifact_filename: string | null }
     >;
-  }, [activeLeagueSportKeys, leaguesBySportKey]);
+
+    if (isPublicEmbed) {
+      return items.slice(0, PUBLIC_EMBED_MAX_LEAGUES);
+    }
+
+    return items;
+  }, [activeLeagueSportKeys, leaguesBySportKey, isPublicEmbed]);
 
   const hasActiveFilters =
     selectedCountryCodes.length > 0 ||
@@ -804,10 +848,37 @@ export default function ProductIndex() {
       setLeaguesError(e?.message ?? "Failed to load leagues");
     } finally {
       setLeaguesLoading(false);
+      setHasLoadedLeaguesOnce(true);
     }
   }, []);
 
+  function beginEventsReloadTransition() {
+    eventsRequestSeqRef.current += 1;
+    setLoadingEvents(true);
+    setEventsError("");
+    setEvents([]);
+    setSelectedId("");
+    setBooksModalEventId("");
+    clearQuoteUI();
+  }
+
+  function handleCountryCodesChange(next: string[]) {
+    beginEventsReloadTransition();
+    setSelectedCountryCodes(next);
+    setSelectedLeagueSportKeys([]);
+    setSelectedBookKeys([]);
+    setSelectedTeams([]);
+  }
+
+  function handleLeagueSportKeysChange(next: string[]) {
+    beginEventsReloadTransition();
+    setSelectedLeagueSportKeys(next);
+    setSelectedBookKeys([]);
+    setSelectedTeams([]);
+  }
+
   function clearAdvancedFilters() {
+    beginEventsReloadTransition();
     setSelectedCountryCodes([]);
     setSelectedLeagueSportKeys([]);
     setSelectedBookKeys([]);
@@ -970,26 +1041,48 @@ export default function ProductIndex() {
   }
 
   useEffect(() => {
+    if (!hasLoadedLeaguesOnce) return;
+
     const allowed = new Set(countryOptions.map((item) => item.value));
-    setSelectedCountryCodes((prev) => prev.filter((item) => allowed.has(item)));
-  }, [countryOptions]);
+    setSelectedCountryCodes((prev) => {
+      const next = prev.filter((item) => allowed.has(item));
+      return sameStringArray(prev, next) ? prev : next;
+    });
+  }, [hasLoadedLeaguesOnce, countryOptions]);
 
   useEffect(() => {
+    if (!hasLoadedLeaguesOnce) return;
+
     const allowed = new Set(leagueOptions.map((item) => item.value));
-    setSelectedLeagueSportKeys((prev) => prev.filter((item) => allowed.has(item)));
-  }, [leagueOptions]);
+    setSelectedLeagueSportKeys((prev) => {
+      const next = prev.filter((item) => allowed.has(item));
+      return sameStringArray(prev, next) ? prev : next;
+    });
+  }, [hasLoadedLeaguesOnce, leagueOptions]);
 
   useEffect(() => {
+    if (!hasLoadedEventsOnce) return;
+
     const allowed = new Set(bookOptions.map((item) => item.value));
-    setSelectedBookKeys((prev) => prev.filter((item) => allowed.has(item)));
-  }, [bookOptions]);
+    setSelectedBookKeys((prev) => {
+      const next = prev.filter((item) => allowed.has(item));
+      return sameStringArray(prev, next) ? prev : next;
+    });
+  }, [hasLoadedEventsOnce, bookOptions]);
 
   useEffect(() => {
+    if (!hasLoadedEventsOnce) return;
+
     const allowed = new Set(teamOptions.map((item) => item.value));
-    setSelectedTeams((prev) => prev.filter((item) => allowed.has(item)));
-  }, [teamOptions]);
+    setSelectedTeams((prev) => {
+      const next = prev.filter((item) => allowed.has(item));
+      return sameStringArray(prev, next) ? prev : next;
+    });
+  }, [hasLoadedEventsOnce, teamOptions]);
 
   useEffect(() => {
+    if (isPublicEmbed) return;
+
     writePersistedProductIndexFilters({
       windowMode,
       sortBy,
@@ -1000,6 +1093,7 @@ export default function ProductIndex() {
       selectedTeams,
     });
   }, [
+    isPublicEmbed,
     windowMode,
     sortBy,
     onlyOpportunities,
@@ -1010,12 +1104,20 @@ export default function ProductIndex() {
   ]);
 
   const loadEvents = useCallback(async () => {
+    if (!hasLoadedLeaguesOnce) return;
+
+    const requestSeq = ++eventsRequestSeqRef.current;
+
     if (!fetchLeagues.length) {
+      if (requestSeq !== eventsRequestSeqRef.current) return;
+
       setEvents([]);
       setSelectedId("");
       setQuote(null);
       setQuoteError("");
       setLastLoadedAt(Date.now());
+      setLoadingEvents(false);
+      setHasLoadedEventsOnce(true);
       return;
     }
 
@@ -1042,6 +1144,8 @@ export default function ProductIndex() {
         }
       );
 
+      if (requestSeq !== eventsRequestSeqRef.current) return;
+
       const merged = new Map<string, ProductOddsEvent>();
       let fulfilledCount = 0;
       let firstError: any = null;
@@ -1066,15 +1170,19 @@ export default function ProductIndex() {
       setEvents(Array.from(merged.values()));
       setLastLoadedAt(Date.now());
     } catch (e: any) {
+      if (requestSeq !== eventsRequestSeqRef.current) return;
       setEventsError(e?.message ?? "Failed to load events");
     } finally {
+      if (requestSeq !== eventsRequestSeqRef.current) return;
       setLoadingEvents(false);
+      setHasLoadedEventsOnce(true);
     }
-  }, [fetchLeagues, windowMode]);
+  }, [fetchLeagues, windowMode, hasLoadedLeaguesOnce]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
     // fallback longo
+    if (isPublicEmbed) return;
     const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
     const intervalId = window.setInterval(() => {
@@ -1096,7 +1204,7 @@ export default function ProductIndex() {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [loadEvents]);
+  }, [isPublicEmbed, loadEvents]);
 
   useEffect(() => {
     if (!lastLoadedAt) return;
@@ -1178,19 +1286,8 @@ export default function ProductIndex() {
         return;
       }
 
-      // Snapshot-first:
-      // se já temos modelo no /product/index, não bloquear a experiência
-      // só porque o quote legado ainda depende de artifact antigo.
-      if (!quoteLeague.artifact_filename) {
-        if (selectedEvent?.match_status === "MODEL_FOUND") {
-          setQuote(null);
-          return;
-        }
-        setQuoteError(t(lang, "narrative.v1.headline.noModel"));
-        return;
-      }
-
       const res = await productQuoteOdds({
+        event_id: eventIdStr,
         assume_league_id: Number(quoteLeague.league_id),
         assume_season: Number(quoteLeague.assume_season),
         artifact_filename: quoteLeague.artifact_filename ?? undefined,
@@ -1266,8 +1363,9 @@ export default function ProductIndex() {
   }, []);
 
   useEffect(() => {
+    if (!hasLoadedLeaguesOnce) return;
     loadEvents();
-  }, [loadEvents]);
+  }, [hasLoadedLeaguesOnce, loadEvents]);
 
   // lista visível (filtro client-side)
   const visibleEventsState = useMemo(() => {
@@ -1300,7 +1398,7 @@ export default function ProductIndex() {
         if (!hasSelectedBook) return false;
       }
 
-      if (onlyOpportunities && !hasOpportunity(e.edge_summary)) {
+      if (onlyOpportunities && !eventHasOpportunity(e)) {
         return false;
       }
 
@@ -1353,11 +1451,22 @@ export default function ProductIndex() {
       list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
     } else {
       list.sort((a, b) => {
-        const edgeA = a.edge_summary?.best_edge;
-        const edgeB = b.edge_summary?.best_edge;
+        const edgeA =
+          typeof a.edge_summary?.best_edge === "number" && Number.isFinite(a.edge_summary.best_edge)
+            ? a.edge_summary.best_edge
+            : eventHasOpportunity(a)
+            ? 1
+            : -Infinity;
 
-        const safeA = typeof edgeA === "number" && Number.isFinite(edgeA) ? edgeA : -Infinity;
-        const safeB = typeof edgeB === "number" && Number.isFinite(edgeB) ? edgeB : -Infinity;
+        const edgeB =
+          typeof b.edge_summary?.best_edge === "number" && Number.isFinite(b.edge_summary.best_edge)
+            ? b.edge_summary.best_edge
+            : eventHasOpportunity(b)
+            ? 1
+            : -Infinity;
+
+        const safeA = edgeA;
+        const safeB = edgeB;
 
         if (safeA !== safeB) return safeB - safeA;
 
@@ -1452,23 +1561,35 @@ export default function ProductIndex() {
     return Math.max(0, selectedAllBooks.length - analysisPreviewBooks.length);
   }, [selectedAllBooks.length, analysisPreviewBooks.length]);
 
-  const selectedProbs = useMemo(() => {
-    if (!selected?.probs_1x2) return null;
+  const key = selectedId ? String(selectedId) : "";
+  const alreadyRevealed = key ? store.isRevealed(key) : false;
+  const canReveal = key ? store.canReveal(key) : false;
+
+  const selectedUnlockedProbs = useMemo(() => {
+    if (!alreadyRevealed || !selected?.probs_1x2) return null;
     return {
       H: selected.probs_1x2.H ?? null,
       D: selected.probs_1x2.D ?? null,
       A: selected.probs_1x2.A ?? null,
     };
-  }, [selected]);
+  }, [alreadyRevealed, selected]);
 
-  const effectiveProbs = quote?.probs ?? selectedProbs ?? null;
+  const effectiveProbs = quote?.probs ?? selectedUnlockedProbs ?? null;
 
   const effectiveMatchStatus = quote?.matchup?.status ?? selected?.match_status ?? null;
   const effectiveConfidence =
     quote?.matchup?.confidence ??
     (selected?.match_status === "MODEL_FOUND" ? 1 : 0);
 
-  const selectedSnapshot = selected?.snapshot_summary ?? null;
+  const selectedUnlockedSnapshot =
+    alreadyRevealed ? (selected?.snapshot_summary ?? null) : null;
+
+  const selectedSnapshot =
+    quote?.snapshot_summary ?? selectedUnlockedSnapshot ?? null;
+
+  const effectiveEdgeSummary =
+    quote?.edge_summary ??
+    (alreadyRevealed ? (selected?.edge_summary ?? null) : null);
 
   const totalsLine = selectedSnapshot?.totals?.line ?? null;
   const totalsOver = selectedSnapshot?.totals?.p_over ?? null;
@@ -1512,16 +1633,12 @@ export default function ProductIndex() {
 
   const hasEffectiveAnalysis =
     !!effectiveProbs ||
+    !!effectiveEdgeSummary ||
     effectiveMatchStatus === "MODEL_FOUND" ||
     !!selected?.has_model;
 
-  const key = selectedId ? String(selectedId) : "";
-  const alreadyRevealed = key ? store.isRevealed(key) : false;
-  const canReveal = key ? store.canReveal(key) : false;
-
   const analysisOpened =
     alreadyRevealed ||
-    isAnalysisLoading ||
     !!quote ||
     !!quoteError;
 
@@ -1552,7 +1669,7 @@ export default function ProductIndex() {
                   ) : null}
 
                   {(() => {
-                    const hasOpportunityFlag = hasOpportunity(selected.edge_summary);
+                    const hasOpportunityFlag = eventHasOpportunity(selected);
                     if (!hasOpportunityFlag) return null;
 
                     return (
@@ -2119,7 +2236,7 @@ export default function ProductIndex() {
                           />
                         ) : (
                           (() => {
-                            const summary = selected?.edge_summary ?? null;
+                            const summary = effectiveEdgeSummary;
 
                             const edgeOutcome = summary?.best_outcome ?? null;
                             const bestEvOutcome = summary?.best_ev_outcome ?? null;
@@ -2321,7 +2438,7 @@ return (
               t(lang, "product.filterCountriesPlaceholder")
             )
           }
-          onChange={setSelectedCountryCodes}
+          onChange={handleCountryCodesChange}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
           )}
@@ -2335,7 +2452,7 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedLeagueSportKeys}
           options={leagueOptions}
-          onChange={setSelectedLeagueSportKeys}
+          onChange={handleLeagueSportKeysChange}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
           )}
@@ -2438,7 +2555,7 @@ return (
               <button
                 type="button"
                 onClick={() =>
-                  setSelectedCountryCodes((prev) => prev.filter((x) => x !== value))
+                  handleCountryCodesChange(selectedCountryCodes.filter((x) => x !== value))
                 }
               >
                 ×
@@ -2457,7 +2574,7 @@ return (
               <button
                 type="button"
                 onClick={() =>
-                  setSelectedLeagueSportKeys((prev) => prev.filter((x) => x !== value))
+                  handleLeagueSportKeysChange(selectedLeagueSportKeys.filter((x) => x !== value))
                 }
               >
                 ×
@@ -2539,7 +2656,7 @@ return (
           clearText={t(lang, "product.filtersClear")}
           selectedValues={selectedCountryCodes}
           options={countryOptions}
-          onChange={setSelectedCountryCodes}
+          onChange={handleCountryCodesChange}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
           )}
@@ -2561,7 +2678,7 @@ return (
               t(lang, "product.filterLeaguesPlaceholder")
             )
           }
-          onChange={setSelectedLeagueSportKeys}
+          onChange={handleLeagueSportKeysChange}
           renderLeading={(option) => (
             <span aria-hidden="true">{countryCodeToFlagEmoji(option.flagCode)}</span>
           )}
@@ -2623,8 +2740,7 @@ return (
           {visibleEvents.map((e) => {
             const eventKey = String(e.event_id);
             const active = eventKey === String(selectedId);
-            const es = e.edge_summary ?? null;
-            const hasOpportunityFlag = hasOpportunity(es);
+            const hasOpportunityFlag = eventHasOpportunity(e);
             const isProbableOnly = e.match_status === "PROBABLE";
 
             return (

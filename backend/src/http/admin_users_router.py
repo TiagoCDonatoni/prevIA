@@ -30,6 +30,42 @@ def _utc_now():
 def _today_date_key():
     return _utc_now().date()
 
+def _fetch_bonus_credit_balance(cur, *, user_id: int) -> int:
+    cur.execute(
+        """
+        SELECT balance_credits
+        FROM access.user_bonus_credit_balances
+        WHERE user_id = %(user_id)s
+        LIMIT 1
+        """,
+        {"user_id": user_id},
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _build_usage_today_payload(
+    *,
+    date_key,
+    base_daily_limit: int,
+    credits_used: int,
+    revealed_count: int,
+    bonus_balance: int,
+) -> Dict[str, Any]:
+    base_remaining = max(0, base_daily_limit - credits_used)
+    remaining = base_remaining + max(0, bonus_balance)
+    daily_limit = credits_used + remaining
+
+    return {
+        "date_key": str(date_key),
+        "base_daily_limit": base_daily_limit,
+        "extra_credits": max(0, bonus_balance),  # compat legado
+        "bonus_credits_available": max(0, bonus_balance),
+        "daily_limit": daily_limit,
+        "credits_used": credits_used,
+        "revealed_count": revealed_count,
+        "remaining": remaining,
+    }
 
 def _iso(dt):
     if dt is None:
@@ -183,32 +219,18 @@ def _fetch_usage_today(cur, *, user_id: int, plan_code: str) -> Dict[str, Any]:
     )
     row = cur.fetchone()
 
-    cur.execute(
-        """
-        SELECT COALESCE(SUM(granted_credits), 0)::int
-        FROM access.user_daily_credit_grants
-        WHERE user_id = %(user_id)s
-          AND date_key = %(date_key)s
-        """,
-        {"user_id": user_id, "date_key": date_key},
-    )
-    grant_row = cur.fetchone()
-
     credits_used = int(row[0]) if row else 0
     revealed_count = int(row[1]) if row else 0
-    extra_credits = int(grant_row[0]) if grant_row and grant_row[0] is not None else 0
+    bonus_balance = _fetch_bonus_credit_balance(cur, user_id=user_id)
     base_daily_limit = int(build_entitlements_for_plan(plan_code)["credits"]["daily_limit"])
-    daily_limit = base_daily_limit + extra_credits
 
-    return {
-        "date_key": str(date_key),
-        "base_daily_limit": base_daily_limit,
-        "extra_credits": extra_credits,
-        "daily_limit": daily_limit,
-        "credits_used": credits_used,
-        "revealed_count": revealed_count,
-        "remaining": max(0, daily_limit - credits_used),
-    }
+    return _build_usage_today_payload(
+        date_key=date_key,
+        base_daily_limit=base_daily_limit,
+        credits_used=credits_used,
+        revealed_count=revealed_count,
+        bonus_balance=bonus_balance,
+    )
 
 
 def _fetch_assigned_roles(cur, *, user_id: int) -> List[Dict[str, Any]]:
@@ -534,13 +556,11 @@ def admin_list_users(
         FROM access.user_daily_usage udu
         WHERE udu.date_key = CURRENT_DATE
     ),
-    credit_grants_today AS (
+    bonus_balances AS (
         SELECT
-            udcg.user_id,
-            COALESCE(SUM(udcg.granted_credits), 0)::int AS extra_credits
-        FROM access.user_daily_credit_grants udcg
-        WHERE udcg.date_key = CURRENT_DATE
-        GROUP BY udcg.user_id
+            ub.user_id,
+            ub.balance_credits AS bonus_credits_available
+        FROM access.user_bonus_credit_balances ub
     ),
     current_sub AS (
         SELECT DISTINCT ON (s.user_id)
@@ -579,14 +599,14 @@ def admin_list_users(
         cs.current_period_end_utc,
         COALESCE(ut.credits_used, 0) AS credits_used,
         COALESCE(ut.revealed_count, 0) AS revealed_count,
-        COALESCE(cgt.extra_credits, 0) AS extra_credits
+        COALESCE(bb.bonus_credits_available, 0) AS bonus_credits_available
     FROM app.users u
     LEFT JOIN role_agg ra
       ON ra.user_id = u.user_id
     LEFT JOIN usage_today ut
       ON ut.user_id = u.user_id
-    LEFT JOIN credit_grants_today cgt
-      ON cgt.user_id = u.user_id
+    LEFT JOIN bonus_balances bb
+      ON bb.user_id = u.user_id
     LEFT JOIN current_sub cs
       ON cs.user_id = u.user_id
     WHERE (%(q)s = '' OR u.email_normalized ILIKE %(pattern)s OR COALESCE(u.full_name, '') ILIKE %(pattern)s)
@@ -635,7 +655,7 @@ def admin_list_users(
                     current_period_end_utc,
                     credits_used,
                     revealed_count,
-                    extra_credits,
+                    bonus_credits_available,
                 ) = row
 
                 access_context = resolve_user_access_context(
@@ -647,7 +667,10 @@ def admin_list_users(
                 )
 
                 base_daily_limit = int(build_entitlements_for_plan(subscription_plan_code)["credits"]["daily_limit"])
-                effective_daily_limit = base_daily_limit + int(extra_credits)
+                base_remaining = max(0, base_daily_limit - int(credits_used))
+                bonus_credits_available = int(bonus_credits_available)
+                effective_remaining = base_remaining + bonus_credits_available
+                effective_daily_limit = int(credits_used) + effective_remaining
 
                 items.append(
                     {
@@ -667,11 +690,12 @@ def admin_list_users(
                         },
                         "usage_today": {
                             "base_daily_limit": base_daily_limit,
-                            "extra_credits": int(extra_credits),
+                            "extra_credits": bonus_credits_available,
+                            "bonus_credits_available": bonus_credits_available,
                             "daily_limit": effective_daily_limit,
                             "credits_used": int(credits_used),
                             "revealed_count": int(revealed_count),
-                            "remaining": max(0, effective_daily_limit - int(credits_used)),
+                            "remaining": effective_remaining,
                         },
                         "role_keys": access_context.get("role_keys") or [],
                         "is_internal": bool(access_context.get("is_internal")),
@@ -1088,54 +1112,71 @@ def admin_grant_user_credits(
         with conn.cursor() as cur:
             _ensure_user_exists(cur, user_id=user_id)
 
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(granted_credits), 0)::int
-                FROM access.user_daily_credit_grants
-                WHERE user_id = %(user_id)s
-                  AND date_key = %(date_key)s
-                """,
-                {"user_id": user_id, "date_key": date_key},
-            )
-            before_extra = int(cur.fetchone()[0] or 0)
+            before_extra = _fetch_bonus_credit_balance(cur, user_id=user_id)
 
             cur.execute(
                 """
-                INSERT INTO access.user_daily_credit_grants (
+                INSERT INTO access.user_bonus_credit_balances (
                     user_id,
-                    date_key,
-                    granted_credits,
-                    reason,
-                    granted_by_user_id
+                    balance_credits,
+                    created_at_utc,
+                    updated_at_utc
                 )
                 VALUES (
                     %(user_id)s,
-                    %(date_key)s,
-                    %(granted_credits)s,
+                    %(balance_credits)s,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (user_id) DO UPDATE
+                SET balance_credits = access.user_bonus_credit_balances.balance_credits + EXCLUDED.balance_credits,
+                    updated_at_utc = NOW()
+                RETURNING balance_credits
+                """,
+                {
+                    "user_id": user_id,
+                    "balance_credits": credits,
+                },
+            )
+            after_extra = int(cur.fetchone()[0] or 0)
+
+            cur.execute(
+                """
+                INSERT INTO access.user_bonus_credit_events (
+                    user_id,
+                    event_type,
+                    credits_delta,
+                    balance_after,
+                    reason,
+                    actor_user_id
+                )
+                VALUES (
+                    %(user_id)s,
+                    'grant',
+                    %(credits_delta)s,
+                    %(balance_after)s,
                     %(reason)s,
-                    %(granted_by_user_id)s
+                    %(actor_user_id)s
                 )
                 """,
                 {
                     "user_id": user_id,
-                    "date_key": date_key,
-                    "granted_credits": credits,
+                    "credits_delta": credits,
+                    "balance_after": after_extra,
                     "reason": reason,
-                    "granted_by_user_id": actor_user_id,
+                    "actor_user_id": actor_user_id,
                 },
             )
-
-            after_extra = before_extra + credits
 
             _insert_audit(
                 cur,
                 actor_user_id=actor_user_id,
                 target_user_id=user_id,
                 action_key="admin.user.credits.grant",
-                entity_type="access.user_daily_credit_grants",
-                entity_id=f"{user_id}:{date_key}",
-                before_json={"date_key": str(date_key), "extra_credits": before_extra},
-                after_json={"date_key": str(date_key), "extra_credits": after_extra, "granted_now": credits},
+                entity_type="access.user_bonus_credit_events",
+                entity_id=str(user_id),
+                before_json={"bonus_credits_available": before_extra},
+                after_json={"bonus_credits_available": after_extra, "granted_now": credits},
                 meta_json={"reason": reason},
             )
             conn.commit()
@@ -1145,4 +1186,5 @@ def admin_grant_user_credits(
         "user_id": user_id,
         "date_key": str(date_key),
         "granted_credits": credits,
+        "bonus_balance": after_extra,
     }

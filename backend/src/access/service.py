@@ -24,18 +24,109 @@ def _normalize_plan_code(raw: Any) -> str:
     plan = str(raw or "FREE").strip().upper()
     return plan if plan in {"FREE", "BASIC", "LIGHT", "PRO"} else "FREE"
 
-def _fetch_extra_credits_for_date(cur, *, user_id: int, date_key) -> int:
-    cur.execute(
-        """
-        SELECT COALESCE(SUM(granted_credits), 0)::int
-        FROM access.user_daily_credit_grants
+def _fetch_bonus_credit_balance(cur, *, user_id: int, for_update: bool = False) -> int:
+    sql = """
+        SELECT balance_credits
+        FROM access.user_bonus_credit_balances
         WHERE user_id = %(user_id)s
-          AND date_key = %(date_key)s
-        """,
-        {"user_id": user_id, "date_key": date_key},
-    )
+    """
+    if for_update:
+        sql += " FOR UPDATE"
+    cur.execute(sql, {"user_id": user_id})
     row = cur.fetchone()
     return int(row[0]) if row and row[0] is not None else 0
+
+
+def _append_bonus_credit_event(
+    cur,
+    *,
+    user_id: int,
+    event_type: str,
+    credits_delta: int,
+    balance_after: int,
+    reason: str | None,
+    actor_user_id: int | None,
+) -> None:
+    cur.execute(
+        """
+        INSERT INTO access.user_bonus_credit_events (
+            user_id,
+            event_type,
+            credits_delta,
+            balance_after,
+            reason,
+            actor_user_id
+        )
+        VALUES (
+            %(user_id)s,
+            %(event_type)s,
+            %(credits_delta)s,
+            %(balance_after)s,
+            %(reason)s,
+            %(actor_user_id)s
+        )
+        """,
+        {
+            "user_id": user_id,
+            "event_type": event_type,
+            "credits_delta": credits_delta,
+            "balance_after": balance_after,
+            "reason": reason,
+            "actor_user_id": actor_user_id,
+        },
+    )
+
+
+def _consume_one_bonus_credit(cur, *, user_id: int, reason: str) -> int:
+    current_balance = _fetch_bonus_credit_balance(cur, user_id=user_id, for_update=True)
+    if current_balance <= 0:
+        return 0
+
+    next_balance = current_balance - 1
+    cur.execute(
+        """
+        UPDATE access.user_bonus_credit_balances
+        SET balance_credits = %(balance_credits)s,
+            updated_at_utc = NOW()
+        WHERE user_id = %(user_id)s
+        """,
+        {
+            "user_id": user_id,
+            "balance_credits": next_balance,
+        },
+    )
+    _append_bonus_credit_event(
+        cur,
+        user_id=user_id,
+        event_type="consume",
+        credits_delta=-1,
+        balance_after=next_balance,
+        reason=reason,
+        actor_user_id=None,
+    )
+    return next_balance
+
+
+def _build_usage_payload(
+    *,
+    credits_used: int,
+    revealed_count: int,
+    base_daily_limit: int,
+    bonus_balance: int,
+) -> Dict[str, Any]:
+    base_remaining = max(0, base_daily_limit - credits_used)
+    remaining = base_remaining + max(0, bonus_balance)
+    daily_limit = credits_used + remaining
+
+    return {
+        "credits_used": credits_used,
+        "revealed_count": revealed_count,
+        "base_daily_limit": base_daily_limit,
+        "extra_credits": max(0, bonus_balance),  # compat legado
+        "bonus_credits_available": max(0, bonus_balance),
+        "daily_limit": daily_limit,
+        "remaining": remaining,
+    }
 
 def _plan_has_persistent_reveals(plan_code: Any) -> bool:
     return _normalize_plan_code(plan_code) in PERSISTENT_REVEAL_PLAN_CODES
@@ -192,17 +283,20 @@ def get_usage_payload(request: Request) -> Dict[str, Any]:
                 date_key=date_key,
                 plan_code=plan_code,
             )
-            extra_credits = _fetch_extra_credits_for_date(
+            bonus_balance = _fetch_bonus_credit_balance(
                 cur,
                 user_id=user_id,
-                date_key=date_key,
             )
 
     credits_used = int(row[0]) if row else 0
     revealed_count = int(row[1]) if row else 0
     base_daily_limit = int(entitlements["credits"]["daily_limit"])
-    daily_limit = base_daily_limit + extra_credits
-    remaining = max(0, daily_limit - credits_used)
+    usage = _build_usage_payload(
+        credits_used=credits_used,
+        revealed_count=revealed_count,
+        base_daily_limit=base_daily_limit,
+        bonus_balance=bonus_balance,
+    )
     revealed_fixture_keys = [str(r[0]) for r in revealed_rows]
 
     return {
@@ -211,12 +305,7 @@ def get_usage_payload(request: Request) -> Dict[str, Any]:
         "plan_code": plan_code,
         "date_key": str(date_key),
         "usage": {
-            "credits_used": credits_used,
-            "revealed_count": revealed_count,
-            "base_daily_limit": base_daily_limit,
-            "extra_credits": extra_credits,
-            "daily_limit": daily_limit,
-            "remaining": remaining,
+            **usage,
             "revealed_fixture_keys": revealed_fixture_keys,
         },
     }
@@ -263,25 +352,21 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                 row = cur.fetchone()
                 credits_used = int(row[0]) if row else 0
                 revealed_count = int(row[1]) if row else 0
-                extra_credits = _fetch_extra_credits_for_date(
+                bonus_balance = _fetch_bonus_credit_balance(
                     cur,
                     user_id=user_id,
-                    date_key=date_key,
                 )
-                daily_limit = base_daily_limit + extra_credits
 
                 return {
                     "ok": True,
                     "already_revealed": True,
                     "consumed_credit": False,
-                    "usage": {
-                        "credits_used": credits_used,
-                        "revealed_count": revealed_count,
-                        "base_daily_limit": base_daily_limit,
-                        "extra_credits": extra_credits,
-                        "daily_limit": daily_limit,
-                        "remaining": max(0, daily_limit - credits_used),
-                    },
+                    "usage": _build_usage_payload(
+                        credits_used=credits_used,
+                        revealed_count=revealed_count,
+                        base_daily_limit=base_daily_limit,
+                        bonus_balance=bonus_balance,
+                    ),
                 }
 
             cur.execute(
@@ -317,27 +402,33 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
             credits_used = int(row[0]) if row else 0
             revealed_count = int(row[1]) if row else 0
 
-            extra_credits = _fetch_extra_credits_for_date(
+            using_bonus_credit = credits_used >= base_daily_limit
+            bonus_balance = _fetch_bonus_credit_balance(
                 cur,
                 user_id=user_id,
-                date_key=date_key,
+                for_update=using_bonus_credit,
             )
-            daily_limit = base_daily_limit + extra_credits
 
-            if credits_used >= daily_limit:
+            if using_bonus_credit and bonus_balance <= 0:
                 return {
                     "ok": False,
                     "code": "NO_CREDITS",
                     "message": "daily credit limit reached",
-                    "usage": {
-                        "credits_used": credits_used,
-                        "revealed_count": revealed_count,
-                        "base_daily_limit": base_daily_limit,
-                        "extra_credits": extra_credits,
-                        "daily_limit": daily_limit,
-                        "remaining": 0,
-                    },
+                    "usage": _build_usage_payload(
+                        credits_used=credits_used,
+                        revealed_count=revealed_count,
+                        base_daily_limit=base_daily_limit,
+                        bonus_balance=bonus_balance,
+                    ),
                 }
+
+            bonus_balance_after = bonus_balance
+            if using_bonus_credit:
+                bonus_balance_after = _consume_one_bonus_credit(
+                    cur,
+                    user_id=user_id,
+                    reason=f"reveal_fixture:{fixture_key}",
+                )
 
             cur.execute(
                 """
@@ -381,14 +472,12 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
         "ok": True,
         "already_revealed": False,
         "consumed_credit": True,
-        "usage": {
-            "credits_used": credits_used,
-            "revealed_count": revealed_count,
-            "base_daily_limit": base_daily_limit,
-            "extra_credits": extra_credits,
-            "daily_limit": daily_limit,
-            "remaining": max(0, daily_limit - credits_used),
-        },
+        "usage": _build_usage_payload(
+            credits_used=credits_used,
+            revealed_count=revealed_count,
+            base_daily_limit=base_daily_limit,
+            bonus_balance=bonus_balance_after,
+        ),
     }
 
 def reset_testing_state(request: Request) -> Dict[str, Any]:

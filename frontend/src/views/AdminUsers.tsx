@@ -367,8 +367,8 @@ export default function AdminUsers() {
                   {detail.subscription.provider || "—"} • status: {detail.subscription.status || "—"}
                 </div>
                 <div className="note">
-                  uso hoje: {detail.usage_today.credits_used}/{detail.usage_today.daily_limit} • créditos extra hoje:{" "}
-                  {detail.usage_today.extra_credits}
+                  uso hoje: {detail.usage_today.credits_used}/{detail.usage_today.daily_limit} • bônus disponíveis:{" "}
+                  {detail.usage_today.bonus_credits_available}
                 </div>
               </div>
 
@@ -494,7 +494,7 @@ export default function AdminUsers() {
                 </div>
 
                 <div className="card">
-                  <div className="card-title">Créditos extra do dia</div>
+                  <div className="card-title">Créditos bônus persistentes</div>
                   <input
                     className="input"
                     type="number"

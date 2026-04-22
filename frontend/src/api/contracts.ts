@@ -171,6 +171,25 @@ export type OddsModelMeta = {
   calibration: any | null;
 };
 
+export type OddsModelRuntimeStats = {
+  home: {
+    season_requested: number;
+    season_used: number | null;
+    season_mode: string;
+  };
+  away: {
+    season_requested: number;
+    season_used: number | null;
+    season_mode: string;
+  };
+  match_stats_mode: "exact" | "partial_fallback" | "full_fallback" | "unknown";
+};
+
+export type OddsModelRuntime = {
+  requested_season: number;
+  stats_runtime?: OddsModelRuntimeStats | null;
+};
+
 export type OddsModelEval = {
   artifact_filename: string;
   league_id: number;
@@ -181,6 +200,13 @@ export type OddsModelEval = {
   best_ev: number;
   best_side: "H" | "D" | "A";
   artifact_meta: OddsModelMeta;
+  runtime?: OddsModelRuntime | null;
+  model_status?: string;
+};
+
+export type OddsModelError = {
+  error: string;
+  model_status?: string;
 };
 
 export type OddsIntelItem = {
@@ -192,7 +218,7 @@ export type OddsIntelItem = {
   resolved: OddsResolved;
   latest_snapshot: OddsSnapshot;
   market_probs: OddsMarketProbs | null;
-  model: OddsModelEval | { error: string } | null;
+  model: OddsModelEval | OddsModelError | null;
   status: "ok" | "incomplete";
   reason: string | null;
 };
@@ -212,6 +238,21 @@ export type OddsIntelMeta = {
     ok_model: number;
     missing_team: number;
     model_error: number;
+  };
+  runtime_counts: {
+    ok_exact: number;
+    ok_fallback: number;
+    missing_same_league: number;
+    missing_exact: number;
+    other_model_error: number;
+  };
+  coverage: {
+    ok_total_pct: number;
+    ok_exact_pct: number;
+    ok_fallback_pct: number;
+    missing_team_pct: number;
+    missing_same_league_pct: number;
+    model_error_pct: number;
   };
 };
 
@@ -533,6 +574,7 @@ export type ProductOddsEvent = {
 
   probs_1x2?: ProductOdds1x2 | null;
   has_model?: boolean | null;
+  has_opportunity?: boolean | null;
 
   edge_summary?: ProductEdgeSummary | null;
 
@@ -598,7 +640,7 @@ export type ProductOddsQuoteRequest = {
   event_id: string;
   assume_league_id: number;
   assume_season: number;
-  artifact_filename: string;
+  artifact_filename?: string;
   tol_hours?: number;
 };
 
@@ -641,6 +683,25 @@ export type ProductOddsQuoteResponse = {
     ev_decimal?: ProductOdds1x2 | null;
     best_ev?: number | null;
     best_side?: "H" | "D" | "A" | null;
+  } | null;
+  edge_summary?: ProductEdgeSummary | null;
+  snapshot_summary?: {
+    totals?: {
+      line?: number | null;
+      p_over?: number | null;
+      p_under?: number | null;
+      best_over?: number | null;
+      best_under?: number | null;
+    } | null;
+    btts?: {
+      p_yes?: number | null;
+      p_no?: number | null;
+    } | null;
+    inputs?: {
+      lambda_home?: number | null;
+      lambda_away?: number | null;
+      lambda_total?: number | null;
+    } | null;
   } | null;
 };
 
@@ -836,6 +897,7 @@ export type AdminUserSummary = {
   usage_today: {
     base_daily_limit: number;
     extra_credits: number;
+    bonus_credits_available: number;
     daily_limit: number;
     credits_used: number;
     revealed_count: number;
@@ -903,6 +965,7 @@ export type AdminUserDetailResponse = {
     date_key: string;
     base_daily_limit: number;
     extra_credits: number;
+    bonus_credits_available: number;
     daily_limit: number;
     credits_used: number;
     revealed_count: number;

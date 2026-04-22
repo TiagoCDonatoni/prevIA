@@ -13,6 +13,7 @@ import {
   clearProductPlanOverride,
   fetchAuthMe,
   normalizeBackendPlanCode,
+  patchAuthAccountPreferences,
   patchAuthProfile,
   readProductPlanOverride,
 } from "../api/auth";
@@ -36,6 +37,7 @@ import { PLAN_CATALOG } from "../planCatalog";
 import { PLAN_LABELS, type PlanId } from "../entitlements";
 import { useProductStore } from "../state/productStore";
 import type { ProductLayoutOutletContext } from "../layout/ProductLayout";
+import { PRODUCT_AUTH_ENABLED } from "../../config";
 
 function formatMoney(lang: Lang, amount: number | null, currency: "BRL" | "USD" | "EUR") {
   if (amount == null) return null;
@@ -471,6 +473,7 @@ export default function ProductAccountPage() {
       subscription_provider: authData.subscription?.provider ?? null,
       subscription_billing_cycle: authData.subscription?.billing_cycle ?? null,
       access_context: authData.access ?? null,
+      account_preferences: authData.account_preferences ?? null,
     });
 
     if (!authData.is_authenticated) {
@@ -1698,11 +1701,24 @@ export default function ProductAccountPage() {
           : "Close"
       }
       onClose={() => setPreferencesOpen(false)}
-      onSave={(payload) => {
-        store.applyAccountPreferencesUpdate({
+      onSave={async (payload) => {
+        const nextPayload = {
           ...payload,
           completed_onboarding: true,
-        });
+        };
+
+        try {
+          if (PRODUCT_AUTH_ENABLED && isAuthenticated) {
+            const result = await patchAuthAccountPreferences(nextPayload);
+            store.applyAccountPreferencesUpdate(result.account_preferences);
+          } else {
+            store.applyAccountPreferencesUpdate(nextPayload);
+          }
+        } catch (error) {
+          console.error("account preferences save failed", error);
+          store.applyAccountPreferencesUpdate(nextPayload);
+        }
+
         setPreferencesOpen(false);
       }}
     />

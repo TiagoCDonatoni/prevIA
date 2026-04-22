@@ -11,6 +11,7 @@ import {
   clearProductPlanOverride,
   fetchAuthMe,
   normalizeBackendPlanCode,
+  patchAuthAccountPreferences,
   postAuthLogout,
   writeProductPlanOverride,
   type AuthMeResponse,
@@ -22,7 +23,7 @@ import {
   useProductStore,
   type InternalNarrativeView,
 } from "../state/productStore";
-import { ProductAuthModal } from "../auth/ProductAuthModal";
+import { ProductAuthModal, type AuthSuccessMeta } from "../auth/ProductAuthModal";
 import { PlanChangeModal } from "../components/PlanChangeModal";
 import BrandLogo from "../../shared/BrandLogo";
 
@@ -30,6 +31,8 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
 import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
 import { resolveAccountPreferences } from "../preferences/accountPreferences";
+
+const POST_SIGNUP_SESSION_KEY = "previa_post_signup_pending_v1";
 
   type FooterSocialId = "instagram" | "x" | "tiktok";
 
@@ -398,6 +401,7 @@ React.useEffect(() => {
       subscription_provider: data.subscription?.provider ?? null,
       subscription_billing_cycle: data.subscription?.billing_cycle ?? null,
       access_context: data.access ?? null,
+      account_preferences: data.account_preferences ?? null,
     });
 
     if (!data.is_authenticated) {
@@ -513,6 +517,29 @@ React.useEffect(() => {
     []
   );
 
+  React.useEffect(() => {
+    if (!PRODUCT_AUTH_ENABLED) return;
+    if (authBootstrapPending) return;
+    if (!isAuthenticated) return;
+
+    let shouldResumePostSignup = false;
+
+    try {
+      shouldResumePostSignup =
+        sessionStorage.getItem(POST_SIGNUP_SESSION_KEY) === "1";
+
+      if (shouldResumePostSignup) {
+        sessionStorage.removeItem(POST_SIGNUP_SESSION_KEY);
+      }
+    } catch {}
+
+    if (!shouldResumePostSignup) return;
+
+    setAuthOpen(false);
+    setPlanOpen(false);
+    setPreferencesOpen(true);
+  }, [authBootstrapPending, isAuthenticated]);
+
   function renderAuthModal() {
     return (
       <ProductAuthModal
@@ -520,7 +547,7 @@ React.useEffect(() => {
         lang={lang}
         initialMode={authInitialMode}
         onClose={() => setAuthOpen(false)}
-        onAuthSuccess={async (payload) => {
+        onAuthSuccess={async (payload, meta: AuthSuccessMeta) => {
           let confirmed = payload;
 
           try {
@@ -538,18 +565,12 @@ React.useEffect(() => {
           setAuthOpen(false);
 
           const shouldOpenPostSignupOffer =
-            authInitialMode === "signup" && Boolean(confirmed.is_authenticated);
+            meta.successMode === "signup" && Boolean(confirmed.is_authenticated);
 
           if (shouldOpenPostSignupOffer) {
-            const currentPreferences = resolveAccountPreferences(store.state.preferences);
-
-            if (!currentPreferences.completed_onboarding) {
-              setPreferencesOpen(true);
-              return;
-            }
-
-            setPlanReason("POST_SIGNUP");
-            setPlanOpen(true);
+            setPlanOpen(false);
+            setPreferencesOpen(true);
+            return;
           }
         }}
       />
@@ -1014,17 +1035,43 @@ const mobileHeaderMenuContent = (
             ? "Ahora no"
             : "Not now"
         }
-        onClose={() => {
-          store.applyAccountPreferencesUpdate({ completed_onboarding: true });
+        onClose={async () => {
+          const nextPayload = { completed_onboarding: true };
+
+          try {
+            if (PRODUCT_AUTH_ENABLED && isAuthenticated) {
+              const result = await patchAuthAccountPreferences(nextPayload);
+              store.applyAccountPreferencesUpdate(result.account_preferences);
+            } else {
+              store.applyAccountPreferencesUpdate(nextPayload);
+            }
+          } catch (error) {
+            console.error("post-signup onboarding close failed", error);
+            store.applyAccountPreferencesUpdate(nextPayload);
+          }
+
           setPreferencesOpen(false);
           setPlanReason("POST_SIGNUP");
           setPlanOpen(true);
         }}
-        onSave={(payload) => {
-          store.applyAccountPreferencesUpdate({
+        onSave={async (payload) => {
+          const nextPayload = {
             ...payload,
             completed_onboarding: true,
-          });
+          };
+
+          try {
+            if (PRODUCT_AUTH_ENABLED && isAuthenticated) {
+              const result = await patchAuthAccountPreferences(nextPayload);
+              store.applyAccountPreferencesUpdate(result.account_preferences);
+            } else {
+              store.applyAccountPreferencesUpdate(nextPayload);
+            }
+          } catch (error) {
+            console.error("post-signup onboarding save failed", error);
+            store.applyAccountPreferencesUpdate(nextPayload);
+          }
+
           setPreferencesOpen(false);
           setPlanReason("POST_SIGNUP");
           setPlanOpen(true);

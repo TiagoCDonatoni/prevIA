@@ -1,0 +1,1 @@
+PG_DSN_USADA: postgresql://previa_app:Previa!123@127.0.0.1:5432/previa_dev

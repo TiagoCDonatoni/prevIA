@@ -5,10 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from src.product.matchup_model_v0 import (
-    estimate_lambdas_from_team_season_stats,
-    estimate_lambdas_from_recent_fixtures,
-)
+from src.product.matchup_model_v0 import estimate_lambdas_with_fallback
 
 from src.product.model_registry import get_calc_version
 from src.product.score_engine_v1 import (
@@ -445,7 +442,13 @@ def _build_inputs_dict(
     away_team_id: Optional[int],
     lam_home: Optional[float],
     lam_away: Optional[float],
+    lambda_source: Optional[str] = None,
+    lambda_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    lambda_total = None
+    if lam_home is not None and lam_away is not None:
+        lambda_total = float(lam_home) + float(lam_away)
+
     return {
         "league_id": int(league_id) if league_id is not None else None,
         "season": int(season) if season is not None else None,
@@ -454,6 +457,72 @@ def _build_inputs_dict(
         "away_team_id": int(away_team_id) if away_team_id is not None else None,
         "lambda_home": float(lam_home) if lam_home is not None else None,
         "lambda_away": float(lam_away) if lam_away is not None else None,
+        "lambda_total": float(lambda_total) if lambda_total is not None else None,
+        "lambda_source": str(lambda_source) if lambda_source is not None else None,
+        "lambda_meta": lambda_meta if isinstance(lambda_meta, dict) else None,
+    }
+
+def _confidence_level(score: float) -> str:
+    s = float(score)
+    if s >= 0.75:
+        return "high"
+    if s >= 0.50:
+        return "medium"
+    return "low"
+
+
+def _build_snapshot_confidence(
+    *,
+    estimate=None,
+    fixture_resolved: bool,
+    team_ids_resolved: bool,
+    totals_available: bool,
+) -> Dict[str, Any]:
+    diagnostics = getattr(estimate, "diagnostics", {}) or {}
+    source = getattr(estimate, "source", None)
+
+    confidence_from_model = diagnostics.get("confidence") if isinstance(diagnostics, dict) else None
+    if isinstance(confidence_from_model, dict) and confidence_from_model.get("overall") is not None:
+        base_score = float(confidence_from_model["overall"])
+        level = str(confidence_from_model.get("level") or _confidence_level(base_score))
+        factors = dict(confidence_from_model.get("factors") or {})
+        coverage = dict(confidence_from_model.get("coverage") or {})
+    else:
+        if source == "team_season_stats_blended":
+            base_score = 0.70
+        elif source == "team_season_stats":
+            base_score = 0.58
+        elif source == "recent_fixtures":
+            base_score = 0.46
+        elif source == "league_prior":
+            base_score = 0.28
+        else:
+            base_score = 0.15
+        level = _confidence_level(base_score)
+        factors = {}
+        coverage = {}
+
+    score = float(base_score)
+    if fixture_resolved:
+        score += 0.05
+    if team_ids_resolved:
+        score += 0.05
+    if totals_available:
+        score += 0.02
+
+    score = min(max(score, 0.0), 0.99)
+
+    factors["fixture_resolved"] = bool(fixture_resolved)
+    factors["team_ids_resolved"] = bool(team_ids_resolved)
+    factors["totals_available"] = bool(totals_available)
+    factors["lambda_source"] = source
+
+    return {
+        "overall": round(score, 4),
+        "level": _confidence_level(score),
+        "source": source,
+        "factors": factors,
+        "coverage": coverage,
     }
 
 def _build_empty_snapshot_payload(
@@ -480,6 +549,18 @@ def _build_empty_snapshot_payload(
             lam_home=None,
             lam_away=None,
         ),
+        "confidence": {
+            "overall": 0.12,
+            "level": "low",
+            "source": "empty_snapshot",
+            "factors": {
+                "fixture_resolved": bool(fixture_id is not None),
+                "team_ids_resolved": bool(home_team_id is not None and away_team_id is not None),
+                "totals_available": bool(totals.get("main_line") is not None),
+                "has_model": False,
+            },
+            "coverage": {},
+        },
         "matrix": None,
         "markets": {
             "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
@@ -526,6 +607,10 @@ def rebuild_matchup_snapshots_v1(
         "skipped_no_stats": 0,
         "skipped_no_league_map": 0,
         "skipped_no_team_ids": 0,
+        "lambda_source_team_season_stats": 0,
+        "lambda_source_recent_fixtures": 0,
+        "lambda_source_league_prior": 0,
+        "lambda_source_team_season_stats_blended": 0,
     }
 
     # candidates: normal (window) ou incremental (event_ids)
@@ -566,31 +651,16 @@ def rebuild_matchup_snapshots_v1(
                 c["skipped_no_team_ids"] += 1
 
                 # Mantém fallback vazio (por enquanto) para não "sumir" do produto.
-                payload = {
-                    "model_version": model_version,
-                    "calc_version": calc_version,
-                    "engine": {"type": "poisson_independent", "max_goals": 6},
-                    "inputs": _build_inputs_dict(
-                        league_id=None,
-                        season=None,
-                        fixture_id=None,
-                        home_team_id=None,
-                        away_team_id=None,
-                        lam_home=None,
-                        lam_away=None,
-                    ),
-                    "matrix": None,
-                    "markets": {
-                        "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
-                        "btts": {"p_model": {"yes": None, "no": None}},
-                        "totals": {
-                            "main_line": totals["main_line"],
-                            "best_odds": {"over": totals["best_over"], "under": totals["best_under"]},
-                            "p_model": {"over": None, "under": None},
-                            "lines": {"2.5": {"over": None, "under": None, "push": None}},
-                        },
-                    },
-                }
+                payload = _build_empty_snapshot_payload(
+                    model_version=model_version,
+                    calc_version=calc_version,
+                    totals=totals,
+                    league_id=None,
+                    season=None,
+                    fixture_id=None,
+                    home_team_id=None,
+                    away_team_id=None,
+                )
 
                 upsert_matchup_snapshot_v1(
                     conn,
@@ -612,31 +682,16 @@ def rebuild_matchup_snapshots_v1(
             if not ctx:
                 c["skipped_no_league_map"] += 1
 
-                payload = {
-                    "model_version": model_version,
-                    "calc_version": calc_version,
-                    "engine": {"type": "poisson_independent", "max_goals": 6},
-                    "inputs": _build_inputs_dict(
-                        league_id=None,
-                        season=None,
-                        fixture_id=None,
-                        home_team_id=int(home_team_id),
-                        away_team_id=int(away_team_id),
-                        lam_home=None,
-                        lam_away=None,
-                    ),
-                    "matrix": None,
-                    "markets": {
-                        "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
-                        "btts": {"p_model": {"yes": None, "no": None}},
-                        "totals": {
-                            "main_line": totals["main_line"],
-                            "best_odds": {"over": totals["best_over"], "under": totals["best_under"]},
-                            "p_model": {"over": None, "under": None},
-                            "lines": {"2.5": {"over": None, "under": None, "push": None}},
-                        },
-                    },
-                }
+                payload = _build_empty_snapshot_payload(
+                    model_version=model_version,
+                    calc_version=calc_version,
+                    totals=totals,
+                    league_id=None,
+                    season=None,
+                    fixture_id=None,
+                    home_team_id=int(home_team_id),
+                    away_team_id=int(away_team_id),
+                )
 
                 upsert_matchup_snapshot_v1(
                     conn,
@@ -656,52 +711,16 @@ def rebuild_matchup_snapshots_v1(
             league_id = int(ctx["league_id"])
             season = int(ctx["season"])
 
-            lambdas = estimate_lambdas_from_team_season_stats(
+            estimate = estimate_lambdas_with_fallback(
                 conn,
                 league_id=league_id,
                 season=season,
                 home_team_id=int(home_team_id),
                 away_team_id=int(away_team_id),
+                n_games=10,
             )
-
-            if lambdas is None:
-                lambdas = estimate_lambdas_from_recent_fixtures(
-                    conn,
-                    league_id=league_id,
-                    season=season,
-                    home_team_id=int(home_team_id),
-                    away_team_id=int(away_team_id),
-                    n_games=10,
-                )
-
-            if lambdas is None:
-                c["skipped_no_stats"] += 1
-
-                payload = _build_empty_snapshot_payload(
-                    model_version=model_version,
-                    calc_version=calc_version,
-                    totals=totals,
-                    league_id=league_id,
-                    season=season,
-                    fixture_id=None,
-                    home_team_id=int(home_team_id),
-                    away_team_id=int(away_team_id),
-                )
-
-                upsert_matchup_snapshot_v1(
-                    conn,
-                    event_id=event_id,
-                    sport_key=ev["sport_key"],
-                    kickoff_utc=ev["kickoff_utc"],
-                    home_name=ev["home_name"],
-                    away_name=ev["away_name"],
-                    fixture_id=None,
-                    source_captured_at_utc=totals["source_captured_at_utc"],
-                    payload=payload,
-                    model_version=model_version,
-                )
-                c["snapshots_event_fallback"] += 1
-                continue
+            lambdas = estimate.lambdas
+            c[f"lambda_source_{estimate.source}"] = c.get(f"lambda_source_{estimate.source}", 0) + 1
 
             mx = generate_score_matrix_v1(lambdas.lam_home, lambdas.lam_away, max_goals=6)
             p_1x2 = derive_1x2(mx.matrix)
@@ -722,6 +741,14 @@ def rebuild_matchup_snapshots_v1(
                     away_team_id=int(away_team_id),
                     lam_home=float(lambdas.lam_home),
                     lam_away=float(lambdas.lam_away),
+                    lambda_source=estimate.source,
+                    lambda_meta=estimate.diagnostics,
+                ),
+                "confidence": _build_snapshot_confidence(
+                    estimate=estimate,
+                    fixture_resolved=False,
+                    team_ids_resolved=True,
+                    totals_available=bool(totals["main_line"] is not None),
                 ),
                 "matrix": mx.matrix,
                 "markets": {
@@ -764,56 +791,18 @@ def rebuild_matchup_snapshots_v1(
             c["skipped_no_fixture"] += 1
             continue
 
-        lambdas = estimate_lambdas_from_team_season_stats(
+        estimate = estimate_lambdas_with_fallback(
             conn,
             league_id=fx["league_id"],
             season=fx["season"],
             home_team_id=fx["home_team_id"],
             away_team_id=fx["away_team_id"],
+            n_games=10,
         )
-
-        if lambdas is None:
-            # fallback por últimos N jogos (garante snapshot mesmo sem stats agregadas)
-            lambdas = estimate_lambdas_from_recent_fixtures(
-                conn,
-                league_id=fx["league_id"],
-                season=fx["season"],
-                home_team_id=fx["home_team_id"],
-                away_team_id=fx["away_team_id"],
-                n_games=10,
-            )
-
-        if lambdas is None:
-            c["skipped_no_stats"] += 1
-
-            payload = _build_empty_snapshot_payload(
-                model_version=model_version,
-                calc_version=calc_version,
-                totals=totals,
-                league_id=fx.get("league_id"),
-                season=fx.get("season"),
-                fixture_id=fixture_id,
-                home_team_id=fx.get("home_team_id"),
-                away_team_id=fx.get("away_team_id"),
-            )
-
-            upsert_matchup_snapshot_v1(
-                conn,
-                event_id=event_id,
-                sport_key=ev["sport_key"],
-                kickoff_utc=ev["kickoff_utc"],
-                home_name=ev["home_name"],
-                away_name=ev["away_name"],
-                fixture_id=fixture_id,
-                source_captured_at_utc=totals["source_captured_at_utc"],
-                payload=payload,
-                model_version=model_version,
-            )
-            c["snapshots_event_fallback"] += 1
-            continue
+        lambdas = estimate.lambdas
+        c[f"lambda_source_{estimate.source}"] = c.get(f"lambda_source_{estimate.source}", 0) + 1
 
         # Score Engine v1: matriz -> mercados.
-        # (model_version = como lambda foi estimado; calc_version = como geramos/derivamos)
         mx = generate_score_matrix_v1(lambdas.lam_home, lambdas.lam_away, max_goals=6)
         p_1x2 = derive_1x2(mx.matrix)
         p_btts = derive_btts(mx.matrix)
@@ -832,8 +821,16 @@ def rebuild_matchup_snapshots_v1(
                 fixture_id=fixture_id,
                 home_team_id=fx.get("home_team_id"),
                 away_team_id=fx.get("away_team_id"),
-                lam_home=float(lambdas.lam_home) if lambdas is not None else None,
-                lam_away=float(lambdas.lam_away) if lambdas is not None else None,
+                lam_home=float(lambdas.lam_home),
+                lam_away=float(lambdas.lam_away),
+                lambda_source=estimate.source,
+                lambda_meta=estimate.diagnostics,
+            ),
+            "confidence": _build_snapshot_confidence(
+                estimate=estimate,
+                fixture_resolved=True,
+                team_ids_resolved=True,
+                totals_available=bool(totals["main_line"] is not None),
             ),
             # 7x7 (0..6) => 49 entradas, ok salvar como dict
             "matrix": mx.matrix,

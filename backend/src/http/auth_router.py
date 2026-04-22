@@ -9,10 +9,12 @@ from src.auth.service import (
     change_password_authenticated,
     forgot_password,
     get_auth_me_payload,
+    get_authenticated_account_preferences,
     link_google_identity_for_authenticated_user,
     login_with_google_credential,
     login_with_password,
     logout_with_session_token,
+    patch_authenticated_account_preferences,
     reset_password_with_token,
     signup_with_password,
 )
@@ -64,8 +66,8 @@ def auth_me(request: Request):
     user = payload.get("user") or {}
     access = payload.get("access") or {}
 
-    logger.warning(
-        "[AUTH_ME_DEBUG] origin=%s referer=%s host=%s xfwd_proto=%s cookie_header_present=%s session_cookie=%s auth_mode=%s is_authenticated=%s user_id=%s billing_runtime=%s admin_access=%s",
+    logger.debug(
+        "[AUTH_ME] origin=%s referer=%s host=%s xfwd_proto=%s cookie_header_present=%s session_cookie=%s auth_mode=%s is_authenticated=%s user_id=%s billing_runtime=%s admin_access=%s",
         ctx["origin"],
         ctx["referer"],
         ctx["host"],
@@ -81,6 +83,44 @@ def auth_me(request: Request):
 
     return payload
 
+@router.get("/account-preferences")
+def auth_account_preferences(request: Request):
+    result = get_authenticated_account_preferences(request=request)
+
+    if not result.get("ok"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "ok": False,
+                "code": result.get("code") or "ACCOUNT_PREFERENCES_FETCH_FAILED",
+                "message": result.get("message") or "account preferences fetch failed",
+            },
+        )
+
+    return result
+
+
+@router.patch("/account-preferences")
+def auth_account_preferences_patch(
+    request: Request,
+    payload: dict = Body(...),
+):
+    result = patch_authenticated_account_preferences(
+        request=request,
+        payload=payload,
+    )
+
+    if not result.get("ok"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "ok": False,
+                "code": result.get("code") or "ACCOUNT_PREFERENCES_PATCH_FAILED",
+                "message": result.get("message") or "account preferences patch failed",
+            },
+        )
+
+    return result
 
 @router.post("/signup")
 def auth_signup(
@@ -149,8 +189,8 @@ def auth_google_login(
     )
 
     if not result.get("ok"):
-        logger.warning(
-            "[AUTH_GOOGLE_LOGIN_DEBUG] ok=false origin=%s referer=%s host=%s xfwd_proto=%s cookie_header_present=%s session_cookie_before=%s code=%s message=%s credential_present=%s",
+        logger.debug(
+            "[AUTH_GOOGLE_LOGIN] ok=false origin=%s referer=%s host=%s xfwd_proto=%s cookie_header_present=%s session_cookie_before=%s code=%s message=%s credential_present=%s",
             ctx_before["origin"],
             ctx_before["referer"],
             ctx_before["host"],

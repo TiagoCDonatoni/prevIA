@@ -16,7 +16,7 @@ import { coercePublicLang, isPublicLang, replaceUrlLang } from "../lib/publicLan
 import "../public.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
-import { ProductAuthModal } from "../../product/auth/ProductAuthModal";
+import { ProductAuthModal, type AuthSuccessMeta } from "../../product/auth/ProductAuthModal";
 import { fetchAuthMe } from "../../product/api/auth";
 import { ENABLE_PUBLIC_PRODUCT_LAYER } from "../../config";
 
@@ -89,6 +89,8 @@ function FooterSocialIcon({ id }: { id: FooterSocialId }) {
     </svg>
   );
 }
+
+const POST_SIGNUP_SESSION_KEY = "previa_post_signup_pending_v1";
 
 const PUBLIC_FOOTER_COPY = {
   pt: {
@@ -659,7 +661,7 @@ export function PublicLayout() {
             setAuthInitialResetToken("");
             clearAuthSearchParams();
           }}
-          onAuthSuccess={async (payload) => {
+          onAuthSuccess={async (payload, meta: AuthSuccessMeta) => {
             const nextPath = normalizePublicNextPath(searchParams.get("next"));
 
             let confirmed = payload;
@@ -668,6 +670,12 @@ export function PublicLayout() {
               confirmed = await confirmPublicAuthSession();
             } catch (err) {
               console.error("public post-auth confirmation failed", err);
+            }
+
+            if (meta.successMode === "signup" && confirmed.is_authenticated) {
+              try {
+                sessionStorage.setItem(POST_SIGNUP_SESSION_KEY, "1");
+              } catch {}
             }
 
             setIsPublicAuthenticated(Boolean(confirmed.is_authenticated));

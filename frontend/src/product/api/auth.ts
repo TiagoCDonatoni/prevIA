@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "../../config";
 import type { PlanId } from "../entitlements";
+import type { ProductAccountPreferences } from "../preferences/accountPreferences";
 
 const PRODUCT_PLAN_OVERRIDE_SESSION_KEY = "previa_product_plan_override_v1";
 
@@ -97,6 +98,7 @@ export type AuthMeResponse = {
   meta?: {
     generated_at_utc?: string;
   };
+  account_preferences?: ProductAccountPreferences | null;
 };
 
 export type AuthErrorResponse = {
@@ -141,6 +143,33 @@ export type PatchAuthProfilePayload = {
   preferred_lang: "pt" | "en" | "es";
 };
 
+export async function patchAuthAccountPreferences(
+  payload: PatchAuthAccountPreferencesPayload
+): Promise<PatchAuthAccountPreferencesResponse> {
+  const res = await fetch(`${API_BASE_URL}/auth/account-preferences`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await readJsonSafe<PatchAuthAccountPreferencesResponse | AuthErrorResponse>(res);
+
+  if (!res.ok) {
+    const message =
+      (data && "message" in data && data.message) ||
+      `auth_account_preferences_patch_failed:${res.status}`;
+    const code = data && "code" in data ? data.code : undefined;
+    throw new AuthRequestError(message, res.status, code);
+  }
+
+  return data as PatchAuthAccountPreferencesResponse;
+}
+
 export type PatchAuthProfileResponse = {
   ok: true;
   user: {
@@ -150,6 +179,16 @@ export type PatchAuthProfileResponse = {
     preferred_lang: "pt" | "en" | "es" | null;
     status: string | null;
     email_verified: boolean | null;
+  };
+};
+
+export type PatchAuthAccountPreferencesPayload = Partial<ProductAccountPreferences>;
+
+export type PatchAuthAccountPreferencesResponse = {
+  ok: true;
+  account_preferences: ProductAccountPreferences;
+  meta?: {
+    generated_at_utc?: string;
   };
 };
 

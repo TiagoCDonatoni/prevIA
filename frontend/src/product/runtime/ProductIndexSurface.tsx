@@ -4,7 +4,15 @@ import type { Lang } from "../i18n";
 import ProductIndex from "../pages/ProductIndex";
 import { useProductStore } from "../state/productStore";
 
-export function ProductIndexSurface({ lang }: { lang: Lang }) {
+type ProductIndexSurfaceMode = "app" | "public_embed";
+
+export function ProductIndexSurface({
+  lang,
+  mode = "app",
+}: {
+  lang: Lang;
+  mode?: ProductIndexSurfaceMode;
+}) {
   const store = useProductStore();
   const currentLang = store.state.lang;
   const setLang = store.setLang;
@@ -15,5 +23,5 @@ export function ProductIndexSurface({ lang }: { lang: Lang }) {
     }
   }, [currentLang, lang, setLang]);
 
-  return <ProductIndex />;
+  return <ProductIndex mode={mode} />;
 }

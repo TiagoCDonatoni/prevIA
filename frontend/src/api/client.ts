@@ -1005,7 +1005,7 @@ export async function adminUpsertUserRole(
 export async function adminGrantUserCredits(
   userId: number,
   body: { credits: number; reason?: string | null }
-): Promise<{ ok: boolean; user_id: number; date_key: string; granted_credits: number }> {
+): Promise<{ ok: boolean; user_id: number; date_key: string; granted_credits: number; bonus_balance: number }> {
   const url = new URL(`/admin/users/${userId}/credits/grant`, API_BASE_URL);
 
   return fetchJson(url.toString(), {

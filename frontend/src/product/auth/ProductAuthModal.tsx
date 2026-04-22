@@ -15,6 +15,10 @@ import { t, type Lang } from "../i18n";
 
 type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword" | "linkGoogle";
 
+export type AuthSuccessMeta = {
+  successMode: Mode;
+};
+
 let googleIdentityScriptPromise: Promise<void> | null = null;
 let googleIdentityScriptUrl = "";
 let googleIdentityInitializedClientId = "";
@@ -143,7 +147,7 @@ export function ProductAuthModal(props: {
   initialMode?: Mode;
   initialResetToken?: string;
   onClose: () => void;
-  onAuthSuccess: (payload: AuthMeResponse) => void | Promise<void>;
+  onAuthSuccess: (payload: AuthMeResponse, meta: AuthSuccessMeta) => void | Promise<void>;
 }) {
   const { open, lang } = props;
   const authEnabled =
@@ -268,7 +272,7 @@ export function ProductAuthModal(props: {
             ? await postAuthGoogleLink({ credential })
             : await postAuthGoogleLogin({ credential });
 
-        await props.onAuthSuccess(authPayload);
+        await props.onAuthSuccess(authPayload, { successMode: mode });
       } catch (err) {
         if (err instanceof AuthRequestError) {
           setErrorText(mapAuthErrorCode(tr, err.code));
@@ -409,7 +413,7 @@ export function ProductAuthModal(props: {
           password,
           full_name: fullName.trim(),
         });
-        await props.onAuthSuccess(authPayload);
+        await props.onAuthSuccess(authPayload, { successMode: mode });
         return;
       }
 
@@ -417,8 +421,8 @@ export function ProductAuthModal(props: {
         const authPayload = await postAuthLogin({
           email: email.trim(),
           password,
-        });
-        await props.onAuthSuccess(authPayload);
+        });await props.onAuthSuccess(authPayload, { successMode: mode });
+        
         return;
       }
 

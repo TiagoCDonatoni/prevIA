@@ -104,7 +104,7 @@ def create_beta_lead(req: BetaLeadCreateRequest) -> BetaLeadCreateResponse:
     email_sent = False
     email_error: Optional[str] = None
 
-    subject = f"[prevIA] Novo beta lead #{int(lead_id)}"
+    subject = f"[prevIA] Novo lead público #{int(lead_id)}"
     text_body = (
         f"Novo lead captado pela landing pública.\n\n"
         f"id: {int(lead_id)}\n"
@@ -122,7 +122,7 @@ def create_beta_lead(req: BetaLeadCreateRequest) -> BetaLeadCreateResponse:
     safe_note = escape(params["interest_note"] or "-").replace("\n", "<br />")
 
     html_body = f"""
-      <h2>Novo beta lead</h2>
+      <h2>Novo lead público</h2>
       <ul>
         <li><strong>id:</strong> {int(lead_id)}</li>
         <li><strong>name:</strong> {escape(params['name'])}</li>

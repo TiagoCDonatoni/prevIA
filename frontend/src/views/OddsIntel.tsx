@@ -358,16 +358,50 @@ export default function OddsIntel() {
 
   const buckets = useMemo(() => {
     const items = data?.items ?? [];
-    const ok: OddsIntelItem[] = [];
+    const okExact: OddsIntelItem[] = [];
+    const okFallback: OddsIntelItem[] = [];
     const missingTeam: OddsIntelItem[] = [];
-    const modelError: OddsIntelItem[] = [];
+    const missingSameLeague: OddsIntelItem[] = [];
+    const missingExact: OddsIntelItem[] = [];
+    const otherModelError: OddsIntelItem[] = [];
 
     for (const it of items) {
-      if (it.status === "ok") ok.push(it);
-      else if (it.reason === "missing_team_id") missingTeam.push(it);
-      else modelError.push(it);
+      const modelStatus = (it.model as any)?.model_status;
+
+      if (it.status === "ok") {
+        if (modelStatus === "OK_FALLBACK") okFallback.push(it);
+        else okExact.push(it);
+        continue;
+      }
+
+      if (it.reason === "missing_team_id") {
+        missingTeam.push(it);
+        continue;
+      }
+
+      if (it.reason === "MISSING_TEAM_STATS_SAME_LEAGUE") {
+        missingSameLeague.push(it);
+        continue;
+      }
+
+      if (it.reason === "MISSING_TEAM_STATS_EXACT") {
+        missingExact.push(it);
+        continue;
+      }
+
+      otherModelError.push(it);
     }
-    return { ok, missingTeam, modelError };
+
+    return {
+      okExact,
+      okFallback,
+      ok: [...okExact, ...okFallback],
+      missingTeam,
+      missingSameLeague,
+      missingExact,
+      modelError: [...missingSameLeague, ...missingExact, ...otherModelError],
+      otherModelError,
+    };
   }, [data]);
 
   const kpis = useMemo(() => {
@@ -377,6 +411,10 @@ export default function OddsIntel() {
     const ok = data.meta.counts.ok_model;
     const missingTeam = data.meta.counts.missing_team;
     const modelError = data.meta.counts.model_error;
+
+    const okExact = data.meta.runtime_counts.ok_exact;
+    const okFallback = data.meta.runtime_counts.ok_fallback;
+    const missingSameLeague = data.meta.runtime_counts.missing_same_league;
 
     let overroundSum = 0;
     let overroundCount = 0;
@@ -409,7 +447,10 @@ export default function OddsIntel() {
 
     return {
       coverageOkPct: total > 0 ? ok / total : 0,
+      coverageExactPct: total > 0 ? okExact / total : 0,
+      coverageFallbackPct: total > 0 ? okFallback / total : 0,
       missingTeamPct: total > 0 ? missingTeam / total : 0,
+      missingSameLeaguePct: total > 0 ? missingSameLeague / total : 0,
       modelErrorPct: total > 0 ? modelError / total : 0,
       avgOverround: overroundCount > 0 ? overroundSum / overroundCount : null,
       avgDivergence: divergenceCount > 0 ? divergenceSum / divergenceCount : null,
@@ -799,6 +840,11 @@ export default function OddsIntel() {
             <br />
             total: <b>{data.meta.counts.total}</b> • ok_model: <b>{data.meta.counts.ok_model}</b> • missing_team:{" "}
             <b>{data.meta.counts.missing_team}</b> • model_error: <b>{data.meta.counts.model_error}</b>
+            <br />
+            ok_exact: <b>{data.meta.runtime_counts.ok_exact}</b> • ok_fallback: <b>{data.meta.runtime_counts.ok_fallback}</b> •
+            missing_same_league: <b>{data.meta.runtime_counts.missing_same_league}</b> • missing_exact:{" "}
+            <b>{data.meta.runtime_counts.missing_exact}</b> • other_model_error:{" "}
+            <b>{data.meta.runtime_counts.other_model_error}</b>
           </div>
         )}
       </Card>
@@ -806,15 +852,18 @@ export default function OddsIntel() {
       {kpis && (
         <div className="row" style={{ gap: 12, marginTop: 12, flexWrap: "wrap" }}>
           <Kpi title="Coverage OK" value={`${(kpis.coverageOkPct * 100).toFixed(1)}%`} meta="jogos com modelo aplicado" />
+          <Kpi title="OK Exact" value={`${(kpis.coverageExactPct * 100).toFixed(1)}%`} meta="sem fallback" />
+          <Kpi title="OK Fallback" value={`${(kpis.coverageFallbackPct * 100).toFixed(1)}%`} meta="mesma liga, outra season" />
           <Kpi title="Missing Team" value={`${(kpis.missingTeamPct * 100).toFixed(1)}%`} meta="falha de mapeamento" />
-          <Kpi title="Model Data Missing" value={`${(kpis.modelErrorPct * 100).toFixed(1)}%`} meta="sem stats no banco" />
+          <Kpi title="Missing Same League" value={`${(kpis.missingSameLeaguePct * 100).toFixed(1)}%`} meta="sem stats úteis na mesma liga" />
+          <Kpi title="Model Error" value={`${(kpis.modelErrorPct * 100).toFixed(1)}%`} meta="erros restantes do runtime" />
           <Kpi title="Overround médio" value={kpis.avgOverround != null ? kpis.avgOverround.toFixed(3) : "—"} meta="margem do mercado" />
           <Kpi title="Divergência vs Market" value={kpis.avgDivergence != null ? (kpis.avgDivergence * 100).toFixed(2) + "%" : "—"} meta="|modelo − mercado|" />
           <Kpi title="Top EV" value={kpis.topEv != null ? kpis.topEv.toFixed(3) : "—"} meta="melhor oportunidade" />
         </div>
       )}
 
-      <div className="section-title">Ranking (OK)</div>
+      <div className="section-title">Ranking — Coverage OK</div>
       <Card title="Opportunities">
         {!data ? (
           <div className="note">—</div>
@@ -826,6 +875,7 @@ export default function OddsIntel() {
               <tr>
                 <th>Kickoff</th>
                 <th>Match</th>
+                <th className="mono">Coverage</th>
                 <th className="mono">Book</th>
                 <th className="mono">Odds (H/D/A)</th>
                 <th className="mono">Market p (novig)</th>
@@ -851,9 +901,14 @@ export default function OddsIntel() {
                       <div className="note">
                         confidence: <span className="mono">{it.resolved.match_confidence}</span> • event_id:{" "}
                         <span className="mono">{it.event_id.slice(0, 8)}…</span>
+                        {(it.model as any)?.runtime?.stats_runtime ? (
+                          <>
+                            {" "}• stats_mode: <span className="mono">{(it.model as any).runtime.stats_runtime.match_stats_mode}</span>
+                          </>
+                        ) : null}
                       </div>
                     </td>
-                    <td className="mono">{it.latest_snapshot?.bookmaker ?? "—"}</td>
+                    <td className="mono">{(it.model as any)?.model_status ?? "—"}</td>
                     <td className="mono">{odds ? `${fmt(odds.H, 2)} / ${fmt(odds.D, 2)} / ${fmt(odds.A, 2)}` : "—"}</td>
                     <td className="mono">{mp ? `${pct(mp.H)} / ${pct(mp.D)} / ${pct(mp.A)}` : "—"}</td>
                     <td className="mono">{model ? `${pct(model.H)} / ${pct(model.D)} / ${pct(model.A)}` : "—"}</td>
@@ -906,7 +961,7 @@ export default function OddsIntel() {
       </Card>
 
       <div className="section-title">Pendências — Dados do Modelo</div>
-      <Card title="Model errors / missing snapshots">
+      <Card title="Model coverage gaps / runtime errors">
         {!data ? (
           <div className="note">—</div>
         ) : buckets.modelError.length === 0 ? (
@@ -918,6 +973,7 @@ export default function OddsIntel() {
                 <th>Kickoff</th>
                 <th>Match</th>
                 <th className="mono">Reason</th>
+                <th className="mono">Model status</th>
                 <th className="mono">Model error</th>
               </tr>
             </thead>
@@ -932,6 +988,7 @@ export default function OddsIntel() {
                     </div>
                   </td>
                   <td className="mono">{it.reason ?? "—"}</td>
+                  <td className="mono">{(it.model as any)?.model_status ?? "—"}</td>
                   <td className="mono">{it.model && (it.model as any).error ? String((it.model as any).error) : "—"}</td>
                 </tr>
               ))}

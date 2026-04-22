@@ -31,15 +31,37 @@ type PublicCopy = {
       eyebrow: string;
       title: string;
       body: string;
+      forTitle: string;
+      notForTitle: string;
+      noteTitle: string;
+      noteBody: string;
       items: Array<{
         title: string;
         body: string;
+        badge: string;
       }>;
+      cautionItems: string[];
     };
     freeAnonEmbed: {
       eyebrow: string;
       title: string;
       body: string;
+    };
+    plans: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      selectedLabel: string;
+      recommendedLabel: string;
+      items: Array<{
+        planId: string;
+        badge: string;
+        title: string;
+        body: string;
+        bullets: string[];
+        cta: string;
+        recommended?: boolean;
+      }>;
     };
     preview: {
       eyebrow: string;
@@ -55,6 +77,7 @@ type PublicCopy = {
       eyebrow: string;
       title: string;
       body: string;
+      cta: string;
       steps: Array<{
         step: string;
         title: string;
@@ -67,6 +90,8 @@ type PublicCopy = {
       body: string;
       primaryCta: string;
       secondaryCta: string;
+      points: string[];
+      note: string;
     };
   };
   glossary: {
@@ -94,42 +119,54 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     home: {
       hero: {
-        eyebrow: "Beta público em preparação",
-        title: "Menos ruído. Mais leitura de preço, valor e risco.",
-        body: "O prevIA foi desenhado para transformar dados, probabilidade e mercado em leitura prática para quem aposta com mais critério.",
+        eyebrow: "Teste grátis disponível",
+        title: "Compare odds, entenda preço justo e encontre valor com mais clareza.",
+        body: "O prevIA organiza odds, probabilidade e contexto em uma leitura prática para quem quer apostar com mais critério desde o primeiro clique.",
         primaryCta: "Testar grátis agora",
-        secondaryCta: "Entrar no app",
-        sideKicker: "Primeira onda de convites",
-        sideTitle: "Beta gratuito previsto para os próximos 30 dias.",
-        sideBody: "Quem entrar agora fica no grupo inicial de acesso antecipado e pode receber condição exclusiva no lançamento, caso queira assinar no futuro.",
+        secondaryCta: "Como funciona",
+        sideKicker: "Comece em segundos",
+        sideTitle: "Teste real na própria landing",
+        sideBody: "Veja jogos, abra análises e entenda melhor preço, valor e contexto antes de decidir se quer avançar com conta e planos.",
         sidePoints: [
-          "Beta 100% gratuito",
-          "Primeiros convites em até 30 dias",
-          "Grupo inicial com condição exclusiva",
+          "Sem login para o primeiro uso",
+          "3 consultas grátis por dia",
+          "Crie conta grátis se quiser aprofundar",
         ],
       },
       trustBar: [
-        "Odds, probabilidade e value",
+        "Odds, probabilidade e preço justo",
+        "Sem login para começar",
         "Leitura clara em pt, en e es",
-        "Acesso simples para começar a explorar",
       ],
       audience: {
         eyebrow: "Para quem é",
-        title: "Feito para perfis diferentes, com a mesma base analítica.",
-        body: "A ideia não é vender palpite solto. É organizar leitura de mercado para perfis com níveis diferentes de profundidade.",
+        title: "Mais clareza para o público certo.",
+        body: "",
+        forTitle: "Faz sentido para quem",
+        notForTitle: "Pode não fazer sentido se você",
+        noteTitle: "O ponto central",
+        noteBody: "A proposta não é vender palpite mágico. É organizar odds, probabilidade e contexto em uma leitura mais clara, progressiva e útil.",
         items: [
           {
-            title: "Apostador recreativo",
-            body: "Quer entender melhor odds, valor e risco sem depender só de feeling ou de conteúdo superficial.",
+            title: "Quer apostar com mais critério",
+            body: "Busca entender melhor preço, valor e risco em vez de depender só de feeling ou ruído.",
+            badge: "Mais critério",
           },
           {
-            title: "Apostador frequente",
-            body: "Já compara linhas e quer uma leitura mais consistente de preço, contexto e oportunidade.",
+            title: "Já compara odds e contexto",
+            body: "Quer uma leitura mais consistente do mercado e uma base melhor para decidir com calma.",
+            badge: "Leitura prática",
           },
           {
-            title: "Tipster ou criador de conteúdo",
-            body: "Precisa de mais clareza, consistência e contexto para apoiar análise, comunicação e rotina de trabalho.",
+            title: "Precisa de profundidade progressiva",
+            body: "Quer começar simples, testar grátis e aprofundar só quando perceber valor real no produto.",
+            badge: "Jornada clara",
           },
+        ],
+        cautionItems: [
+          "procura promessa de lucro fácil",
+          "quer tip pronto sem contexto",
+          "não tem interesse em comparar preço, probabilidade e mercado",
         ],
       },
       freeAnonEmbed: {
@@ -137,56 +174,132 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         title: "Faça 3 consultas grátis por dia",
         body: "Veja jogos, compare odds e entenda a leitura do mercado. Use hoje e volte amanhã para mais 3 consultas grátis.",
       },
-      preview: {
-        eyebrow: "O que você vai encontrar",
-        title: "Uma plataforma desenhada para transformar análise em leitura prática.",
-        body: "As primeiras telas do prevIA vão destacar visão geral do dia, leitura de preço e probabilidade, além de uma camada mais profunda para comparação e contexto.",
+      plans: {
+        eyebrow: "Planos e benefícios",
+        title: "Escolha a profundidade certa para o seu momento.",
+        body: "Comece no grátis, compare os níveis e avance quando fizer sentido para o seu uso.",
+        selectedLabel: "Em destaque",
+        recommendedLabel: "Recomendado",
         items: [
           {
-            title: "Painel principal",
-            body: "Visão geral do produto com navegação clara, filtros e acesso rápido aos pontos mais importantes do dia.",
-            badge: "Visão geral do produto",
+            badge: "Sem login",
+            title: "Free",
+            body: "Entrada rápida para conhecer o produto direto na landing.",
+            bullets: [
+              "Teste imediato sem cadastro",
+              "Ideal para primeiro contato",
+              "Perfeito para sentir a proposta",
+            ],
+            cta: "Testar grátis",
           },
           {
-            title: "Leitura de mercado",
-            body: "Tela focada em odds, probabilidade, valor e contexto para ajudar a interpretar melhor cada entrada.",
-            badge: "Preço, valor e contexto",
+            planId: "FREE",
+            badge: "Entrada grátis",
+            title: "Free",
+            body: "Comece sem login e continue grátis com conta quando os créditos acabarem.",
+            bullets: [
+              "até 5 créditos",
+              "teste direto na landing",
+              "continue grátis com conta",
+            ],
+            cta: "Começar grátis",
           },
           {
-            title: "Profundidade analítica",
-            body: "Área pensada para comparações, leitura mais completa e apoio a decisões com mais critério.",
-            badge: "Comparação e contexto",
+            planId: "BASIC",
+            badge: "Uso leve",
+            title: "Basic",
+            body: "Camada paga de entrada para quem quer consistência sem complexidade.",
+            bullets: [
+              "Mais consultas no dia a dia",
+              "Menos interrupção entre análises",
+              "Bom começo para uso recorrente",
+            ],
+            cta: "Assinar agora",
+          },
+          {
+            planId: "LIGHT",
+            badge: "Mais completo",
+            title: "Light",
+            body: "Melhor equilíbrio entre volume, contexto e profundidade para uso real.",
+            bullets: [
+              "Mais folga para acompanhar jogos",
+              "Fair odds, edge e mais contexto",
+              "Camada mais equilibrada da jornada",
+            ],
+            cta: "Assinar agora",
+            recommended: true,
+          },
+          {
+            planId: "PRO",
+            badge: "Máxima profundidade",
+            title: "Pro",
+            body: "Para quem quer rotina intensa, leitura mais técnica e maior volume.",
+            bullets: [
+              "Pensado para uso avançado",
+              "Mais profundidade analítica",
+              "Camada mais completa do produto",
+            ],
+            cta: "Assinar agora",
+          },
+        ],
+      },
+      preview: {
+        eyebrow: "Veja o produto",
+        title: "Uma leitura mais visual, prática e progressiva.",
+        body: "Uma visão rápida do produto entre leitura geral, contexto de mercado e profundidade analítica.",
+        items: [
+          {
+            title: "Visão geral para começar rápido",
+            body: "Acompanhe os jogos, identifique o que importa e entre na leitura sem fricção.",
+            badge: "Visão geral",
+          },
+          {
+            title: "Mercado com mais contexto",
+            body: "Odds, sinais e leitura prática aparecem de forma mais organizada e útil.",
+            badge: "Mercado",
+          },
+          {
+            title: "Profundidade quando fizer sentido",
+            body: "A camada analítica cresce conforme o usuário quer mais contexto e critério.",
+            badge: "Profundidade",
           },
         ],
       },
       howItWorks: {
         eyebrow: "Como funciona",
-        title: "Uma jornada simples para entender a proposta e começar com clareza.",
-        body: "Sem excesso de explicação: conteúdo para conhecer o prevIA, entender a proposta e decidir se faz sentido para você.",
+        title: "O básico para entender rápido — o detalhe fica na página completa.",
+        body: "Entenda a proposta, teste sem fricção e aprofunde quando quiser.",
+        cta: "Ver página completa",
         steps: [
           {
             step: "01",
-            title: "Entenda os conceitos",
-            body: "Use o glossário para navegar por odds, mercados, valor e gestão de banca.",
+            title: "Entenda a proposta",
+            body: "Veja como odds, probabilidade e contexto entram na leitura do produto.",
           },
           {
             step: "02",
-            title: "Veja se o prevIA é para você",
-            body: "A landing filtra melhor o público e explica a proposta com mais rapidez.",
+            title: "Veja se o prevIA faz sentido para você",
+            body: "Entenda rapidamente a proposta, o tipo de leitura que o produto oferece e se vale a pena continuar.",
           },
           {
             step: "03",
-            title: "Entre na lista beta",
-            body: "O cadastro é gratuito e os primeiros convites estão previstos para os próximos 30 dias.",
+            title: "Aprofunde quando quiser",
+            body: "Se quiser mais detalhes, a página dedicada explica melhor a estrutura do prevIA.",
           },
         ],
       },
       finalCta: {
         eyebrow: "Comece agora",
-        title: "Entre no app ou comece pelo teste grátis.",
-        body: "A landing já pode levar o usuário para o fluxo real: testar grátis na própria página, criar conta e seguir para o app quando quiser aprofundar.",
+        title: "Teste grátis agora ou entre direto no app.",
+        body: "O prevIA já está pronto para levar o usuário do primeiro contato até o uso real, com entrada simples e progressão clara.",
         primaryCta: "Ir para o app",
         secondaryCta: "Ver teste grátis",
+        points: [
+          "teste grátis na própria landing",
+          "criação de conta grátis",
+          "profundidade crescente conforme o uso",
+        ],
+        note: "Sem cartão para começar.",
       },
     },
     glossary: {
@@ -213,42 +326,54 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     home: {
       hero: {
-        eyebrow: "Public beta in preparation",
-        title: "Less noise. More price, value, and risk reading.",
-        body: "prevIA is built to turn data, probability, and market context into practical reading for bettors who want more discipline.",
+        eyebrow: "Free trial available",
+        title: "Compare odds, understand fair price, and spot value more clearly.",
+        body: "prevIA turns odds, probability, and context into practical reading for people who want a more disciplined betting routine from the first click.",
         primaryCta: "Try it free now",
-        secondaryCta: "Open app",
-        sideKicker: "First invitation wave",
-        sideTitle: "Free beta planned for the next 30 days.",
-        sideBody: "Users who join now enter the early-access group and may receive an exclusive launch condition if they choose to subscribe later.",
+        secondaryCta: "How it works",
+        sideKicker: "Start in seconds",
+        sideTitle: "Real product test on the landing page",
+        sideBody: "Browse matches, open analyses, and understand price, value, and context before deciding whether you want to continue with an account and plans.",
         sidePoints: [
-          "100% free beta",
-          "First invites within 30 days",
-          "Early group with launch perk",
+          "No login required for the first use",
+          "3 free checks per day",
+          "Create a free account if you want more depth",
         ],
       },
       trustBar: [
-        "Odds, probability, and value",
+        "Odds, probability, and fair price",
+        "No login to get started",
         "Clear reading in pt, en, and es",
-        "Simple access to start exploring",
       ],
       audience: {
         eyebrow: "Who it is for",
-        title: "Built for different profiles on top of the same analytical base.",
-        body: "The goal is not random picks. It is structured market reading for users with different levels of depth.",
+        title: "More clarity for the right audience.",
+        body: "",
+        forTitle: "Makes sense for people who",
+        notForTitle: "May not be a fit if you",
+        noteTitle: "Core idea",
+        noteBody: "The goal is not magical picks. It is to organize odds, probability, and context into a clearer, more practical, and progressive reading.",
         items: [
           {
-            title: "Recreational bettor",
-            body: "Wants to understand odds, value, and risk with more clarity instead of relying only on instinct.",
+            title: "Want more discipline in betting",
+            body: "They want to understand price, value, and risk better instead of relying only on instinct or noise.",
+            badge: "More discipline",
           },
           {
-            title: "Frequent bettor",
-            body: "Already compares lines and wants a more consistent view of price, context, and opportunity.",
+            title: "Already compare odds and context",
+            body: "They want a more consistent market reading and a stronger base for making decisions.",
+            badge: "Practical reading",
           },
           {
-            title: "Tipster or content creator",
-            body: "Needs more clarity, consistency, and context to support analysis, communication, and workflow.",
+            title: "Need progressive depth",
+            body: "They want to start simple, test for free, and go deeper only when they see real value.",
+            badge: "Clear journey",
           },
+        ],
+        cautionItems: [
+          "are looking for easy-profit promises",
+          "only want ready-made picks without context",
+          "have no interest in comparing price, probability, and market signals",
         ],
       },
       freeAnonEmbed: {
@@ -256,56 +381,132 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         title: "Get 3 free checks per day",
         body: "Browse matches, compare odds, and understand the market reading. Use it today and come back tomorrow for 3 more free checks.",
       },
-      preview: {
-        eyebrow: "What you will find",
-        title: "A platform designed to turn analysis into practical reading.",
-        body: "The first prevIA screens will highlight the daily overview, price and probability reading, and a deeper layer for comparison and context.",
+      plans: {
+        eyebrow: "Plans and benefits",
+        title: "Pick the level of depth that matches your stage.",
+        body: "Start free, compare the tiers, and move up when it makes sense for your usage.",
+        selectedLabel: "Highlighted",
+        recommendedLabel: "Recommended",
         items: [
           {
-            title: "Main dashboard",
-            body: "A clear product overview with simple navigation, filters, and fast access to the day’s most relevant points.",
-            badge: "Product overview",
+            planId: "FREE",
+            badge: "Free entry",
+            title: "Free",
+            body: "Start without login and continue for free with an account when credits run out.",
+            bullets: [
+              "up to 5 credits",
+              "test directly on the landing page",
+              "continue for free with an account",
+            ],
+            cta: "Start free",
           },
           {
-            title: "Market reading",
-            body: "A screen focused on odds, probability, value, and context to help interpret each spot more clearly.",
-            badge: "Price, value, and context",
+            planId: "FREE",
+            badge: "With login",
+            title: "Free+",
+            body: "Free account for users who want continuity after the first trial.",
+            bullets: [
+              "More continuity than anonymous trial",
+              "Account-based experience",
+              "Natural next step after testing",
+            ],
+            cta: "Create free account",
           },
           {
-            title: "Analytical depth",
-            body: "An area designed for comparisons, deeper reading, and more disciplined decision support.",
-            badge: "Comparison and context",
+            planId: "BASIC",
+            badge: "Light use",
+            title: "Basic",
+            body: "Entry paid tier for users who want consistency without going too deep yet.",
+            bullets: [
+              "More daily room for analysis",
+              "Fewer interruptions",
+              "Good starting point for recurring use",
+            ],
+            cta: "Subscribe now",
+          },
+          {
+            planId: "LIGHT",
+            badge: "More complete",
+            title: "Light",
+            body: "Best balance between volume, context, and depth for real usage.",
+            bullets: [
+              "More room to follow games",
+              "Fair odds, edge, and more context",
+              "Most balanced step in the journey",
+            ],
+            cta: "Subscribe now",
+            recommended: true,
+          },
+          {
+            planId: "PRO",
+            badge: "Maximum depth",
+            title: "Pro",
+            body: "For heavier routines, more technical reading, and higher-volume usage.",
+            bullets: [
+              "Built for advanced usage",
+              "Deeper analytical layer",
+              "Most complete plan in the product",
+            ],
+            cta: "Subscribe now",
+          },
+        ],
+      },
+      preview: {
+        eyebrow: "See the product",
+        title: "A more visual, practical, and progressive reading experience.",
+        body: "A quick look at the product across overview, market context, and analytical depth.",
+        items: [
+          {
+            title: "Overview to start fast",
+            body: "Follow matches, spot what matters, and enter the experience without friction.",
+            badge: "Overview",
+          },
+          {
+            title: "Market with more context",
+            body: "Odds, signals, and practical reading appear in a more organized and useful way.",
+            badge: "Market",
+          },
+          {
+            title: "Depth when it makes sense",
+            body: "The analytical layer grows as the user wants more context and more discipline.",
+            badge: "Depth",
           },
         ],
       },
       howItWorks: {
         eyebrow: "How it works",
-        title: "The public journey starts simple, useful, and ready to convert.",
-        body: "No long wall of text: just enough structure to explain the product, qualify interest, and prepare app entry.",
+        title: "The basics to understand it fast — the full detail lives on the dedicated page.",
+        body: "Understand the proposal, try it without friction, and go deeper when you want.",        cta: "View full page",
         steps: [
           {
             step: "01",
-            title: "Learn the concepts",
-            body: "Use the glossary to navigate odds, markets, value, and bankroll management.",
+            title: "Understand the proposal",
+            body: "See how odds, probability, and context shape the product reading.",
           },
           {
             step: "02",
-            title: "See whether prevIA fits you",
-            body: "The landing clarifies the offer and filters the audience more effectively.",
+            title: "Try it without friction",
+            body: "Start free and quickly feel whether the experience fits you.",
           },
           {
             step: "03",
-            title: "Join the beta list",
-            body: "Joining is free and the first invitation wave is planned for the next 30 days.",
+            title: "Go deeper when you want",
+            body: "If you want more detail, the dedicated page explains the prevIA structure better.",
           },
         ],
       },
       finalCta: {
-        eyebrow: "Next step",
-        title: "Join the prevIA beta list now.",
-        body: "You pay nothing to take part in the beta. By joining early, you enter the first invitation wave and may receive an exclusive launch condition if you decide to subscribe later.",
-        primaryCta: "Join beta list",
-        secondaryCta: "Go to glossary",
+        eyebrow: "Start now",
+        title: "Try it free now or go straight to the app.",
+        body: "prevIA is already ready to take the user from first contact to real usage, with simple entry and clear progression.",
+        primaryCta: "Go to app",
+        secondaryCta: "See free trial",
+        points: [
+          "free trial on the landing page",
+          "free account creation",
+          "deeper usage as you progress",
+        ],
+        note: "No card required to get started.",
       },
     },
     glossary: {
@@ -332,42 +533,54 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     },
     home: {
       hero: {
-        eyebrow: "Beta pública en preparación",
-        title: "Menos ruido. Más lectura de precio, valor y riesgo.",
-        body: "prevIA está diseñado para convertir datos, probabilidad y contexto de mercado en lectura práctica para quien apuesta con más criterio.",
+        eyebrow: "Prueba gratis disponible",
+        title: "Compara cuotas, entiende el precio justo y detecta valor con más claridad.",
+        body: "prevIA organiza cuotas, probabilidad y contexto en una lectura práctica para quien quiere apostar con más criterio desde el primer clic.",
         primaryCta: "Probar gratis ahora",
-        secondaryCta: "Entrar en la app",
-        sideKicker: "Primera ola de invitaciones",
-        sideTitle: "Beta gratuita prevista para los próximos 30 días.",
-        sideBody: "Quien se una ahora entra en el grupo inicial de acceso anticipado y puede recibir una condición exclusiva de lanzamiento si decide suscribirse después.",
+        secondaryCta: "Cómo funciona",
+        sideKicker: "Empieza en segundos",
+        sideTitle: "Prueba real del producto en la landing",
+        sideBody: "Mira partidos, abre análisis y entiende mejor precio, valor y contexto antes de decidir si quieres avanzar con cuenta y planes.",
         sidePoints: [
-          "Beta 100% gratuita",
-          "Primeras invitaciones en 30 días",
-          "Grupo inicial con ventaja exclusiva",
+          "Sin login en el primer uso",
+          "3 consultas gratis por día",
+          "Crea una cuenta gratis si quieres más profundidad",
         ],
       },
       trustBar: [
-        "Cuotas, probabilidad y value",
+        "Cuotas, probabilidad y precio justo",
+        "Sin login para empezar",
         "Lectura clara en pt, en y es",
-        "Acceso simple para empezar a explorar",
       ],
       audience: {
         eyebrow: "Para quién es",
-        title: "Hecho para perfiles distintos sobre la misma base analítica.",
-        body: "La idea no es vender picks sueltos. Es organizar lectura de mercado para usuarios con distintos niveles de profundidad.",
+        title: "Más claridad para el público correcto.",
+        body: "",
+        forTitle: "Tiene sentido para quien",
+        notForTitle: "Puede no tener sentido si",
+        noteTitle: "La idea central",
+        noteBody: "La propuesta no es vender picks mágicos. Es organizar cuotas, probabilidad y contexto en una lectura más clara, progresiva y útil.",
         items: [
           {
-            title: "Apostador recreativo",
-            body: "Quiere entender mejor cuotas, value y riesgo sin depender solo de intuición o contenido superficial.",
+            title: "Quiere apostar con más criterio",
+            body: "Busca entender mejor precio, valor y riesgo en lugar de depender solo del instinto o del ruido.",
+            badge: "Más criterio",
           },
           {
-            title: "Apostador frecuente",
-            body: "Ya compara líneas y quiere una lectura más consistente de precio, contexto y oportunidad.",
+            title: "Ya compara cuotas y contexto",
+            body: "Quiere una lectura más consistente del mercado y una mejor base para decidir.",
+            badge: "Lectura práctica",
           },
           {
-            title: "Tipster o creador de contenido",
-            body: "Necesita más claridad, consistencia y contexto para apoyar su análisis, su comunicación y su rutina de trabajo.",
+            title: "Necesita profundidad progresiva",
+            body: "Quiere empezar simple, probar gratis y profundizar solo cuando vea valor real.",
+            badge: "Recorrido claro",
           },
+        ],
+        cautionItems: [
+          "buscas promesas de ganancia fácil",
+          "quieres picks listos sin contexto",
+          "no tienes interés en comparar precio, probabilidad y mercado",
         ],
       },
       freeAnonEmbed: {
@@ -375,56 +588,133 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         title: "Haz 3 consultas gratis por día",
         body: "Mira partidos, compara cuotas y entiende la lectura del mercado. Úsalo hoy y vuelve mañana para 3 consultas gratis más.",
       },
-      preview: {
-        eyebrow: "Qué vas a encontrar",
-        title: "Una plataforma pensada para convertir análisis en lectura práctica.",
-        body: "Las primeras pantallas de prevIA mostrarán una visión general del día, lectura de precio y probabilidad, y una capa más profunda para comparación y contexto.",
+      plans: {
+        eyebrow: "Planes y beneficios",
+        title: "Elige la profundidad adecuada para tu momento.",
+        body: "Empieza gratis, compara los niveles y avanza cuando tenga sentido para tu uso.",
+        selectedLabel: "Destacado",
+        recommendedLabel: "Recomendado",
         items: [
           {
-            title: "Panel principal",
-            body: "Vista general del producto con navegación clara, filtros y acceso rápido a los puntos más relevantes del día.",
-            badge: "Visión general del producto",
+            planId: "FREE",
+            badge: "Entrada gratis",
+            title: "Free",
+            body: "Empieza sin login y continúa gratis con cuenta cuando se terminen los créditos.",
+            bullets: [
+              "hasta 5 créditos",
+              "prueba directa en la landing",
+              "continúa gratis con cuenta",
+            ],
+            cta: "Empezar gratis",
           },
           {
-            title: "Lectura de mercado",
-            body: "Pantalla centrada en cuotas, probabilidad, value y contexto para interpretar mejor cada entrada.",
-            badge: "Precio, value y contexto",
+            planId: "FREE",
+            badge: "Con login",
+            title: "Free+",
+            body: "Cuenta gratis para seguir explorando con más continuidad.",
+            bullets: [
+              "Más continuidad que la prueba anónima",
+              "Cuenta y continuidad de uso",
+              "Paso natural después de probar",
+            ],
+            cta: "Crear cuenta gratis",
           },
           {
-            title: "Profundidad analítica",
-            body: "Un espacio pensado para comparaciones, una lectura más completa y apoyo a decisiones con más criterio.",
-            badge: "Comparación y contexto",
+            planId: "BASIC",
+            badge: "Uso ligero",
+            title: "Basic",
+            body: "Nivel de pago de entrada para quien quiere constancia sin demasiada complejidad.",
+            bullets: [
+              "Más margen diario para análisis",
+              "Menos interrupciones",
+              "Buen inicio para uso recurrente",
+            ],
+            cta: "Suscribirse ahora",
+          },
+          {
+            planId: "LIGHT",
+            badge: "Más completo",
+            title: "Light",
+            body: "Mejor equilibrio entre volumen, contexto y profundidad para uso real.",
+            bullets: [
+              "Más margen para seguir partidos",
+              "Fair odds, edge y más contexto",
+              "La capa más equilibrada del recorrido",
+            ],
+            cta: "Suscribirse ahora",
+            recommended: true,
+          },
+          {
+            planId: "PRO",
+            badge: "Máxima profundidad",
+            title: "Pro",
+            body: "Para rutinas intensas, lectura más técnica y uso de mayor volumen.",
+            bullets: [
+              "Pensado para uso avanzado",
+              "Más profundidad analítica",
+              "La capa más completa del producto",
+            ],
+            cta: "Suscribirse ahora",
+          },
+        ],
+      },
+      preview: {
+        eyebrow: "Mira el producto",
+        title: "Una lectura más visual, práctica y progresiva.",
+        body: "Una vista rápida del producto entre visión general, contexto de mercado y profundidad analítica.",
+        items: [
+          {
+            title: "Visión general para empezar rápido",
+            body: "Sigue los partidos, identifica lo importante y entra en la lectura sin fricción.",
+            badge: "Visión general",
+          },
+          {
+            title: "Mercado con más contexto",
+            body: "Cuotas, señales y lectura práctica aparecen de forma más organizada y útil.",
+            badge: "Mercado",
+          },
+          {
+            title: "Profundidad cuando tenga sentido",
+            body: "La capa analítica crece a medida que el usuario quiere más contexto y más criterio.",
+            badge: "Profundidad",
           },
         ],
       },
       howItWorks: {
         eyebrow: "Cómo funciona",
-        title: "Un recorrido simple para entender la propuesta y empezar con claridad.",
-        body: "Sin exceso de explicación: contenido suficiente para conocer prevIA, entender su valor y decidir si encaja contigo.",
+        title: "Lo básico para entenderlo rápido — el detalle queda en la página completa.",
+        body: "Entiende la propuesta, pruébalo sin fricción y profundiza cuando quieras.",
+        cta: "Ver página completa",
         steps: [
           {
             step: "01",
-            title: "Entiende los conceptos",
-            body: "Usa el glosario para navegar por cuotas, mercados, value y gestión de banca.",
+            title: "Entiende la propuesta",
+            body: "Mira cómo cuotas, probabilidad y contexto forman la lectura del producto.",
           },
           {
             step: "02",
-            title: "Mira si prevIA encaja contigo",
-            body: "La landing aclara mejor la propuesta y filtra mejor la audiencia.",
+            title: "Pruébalo sin fricción",
+            body: "Empieza gratis y siente rápido si la experiencia encaja contigo.",
           },
           {
             step: "03",
-            title: "Entra en la lista beta",
-            body: "La entrada es gratuita y la primera ola de invitaciones está prevista para los próximos 30 días.",
+            title: "Profundiza cuando quieras",
+            body: "Si quieres más detalle, la página dedicada explica mejor la estructura de prevIA.",
           },
         ],
       },
       finalCta: {
-        eyebrow: "Siguiente paso",
-        title: "Entra en la app o empieza por la prueba gratis.",
-        body: "La landing ya puede llevar al flujo real: prueba gratis en la propia página, creación de cuenta gratis y entrada en la app cuando el usuario quiera profundizar.",
+        eyebrow: "Empieza ahora",
+        title: "Prueba gratis ahora o entra directamente en la app.",
+        body: "prevIA ya está listo para llevar al usuario desde el primer contacto hasta el uso real, con entrada simple y progresión clara.",
         primaryCta: "Ir a la app",
         secondaryCta: "Ver prueba gratis",
+        points: [
+          "prueba gratis en la propia landing",
+          "creación de cuenta gratis",
+          "más profundidad a medida que avanzas",
+        ],
+        note: "Sin tarjeta para empezar.",
       },
     },
     glossary: {
