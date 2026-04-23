@@ -322,13 +322,26 @@ def _book_key(raw: Optional[str]) -> str:
         v = v.replace("__", "_")
     return v.strip("_") or "unknown"
 
+_AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
+
+def _book_key(raw: Optional[str]) -> str:
+    v = (raw or "").strip().lower()
+    v = v.replace("&", "and")
+    for ch in [" ", "-", ".", ",", "/", "\\", "(", ")", "[", "]", "{", "}", "’", "'", "\""]:
+        v = v.replace(ch, "_")
+    while "__" in v:
+        v = v.replace("__", "_")
+    return v.strip("_") or "unknown"
+
 def _load_affiliates() -> Dict[str, Dict[str, str]]:
     global _AFF_CACHE
+
     if _AFF_CACHE is not None:
         return _AFF_CACHE
 
-    base_dir = Path(__file__).resolve().parents[2]  # .../backend
+    base_dir = Path(__file__).resolve().parents[2]
     path = base_dir / "config" / "odds.affiliates.json"
+
     if not path.exists():
         _AFF_CACHE = {}
         return _AFF_CACHE
@@ -1045,6 +1058,23 @@ def list_odds_events(
             snapshot_payload_obj = _coerce_payload(snapshot_payload)
             snapshot_summary = _build_snapshot_summary(snapshot_payload_obj)
 
+            snapshot_probs = ((snapshot_payload_obj.get("markets") or {}).get("1x2") or {}).get("p_model") or {}
+
+            probs_1x2 = None
+            has_model = False
+
+            if (
+                snapshot_probs.get("home") is not None
+                and snapshot_probs.get("draw") is not None
+                and snapshot_probs.get("away") is not None
+            ):
+                probs_1x2 = {
+                    "H": float(snapshot_probs["home"]),
+                    "D": float(snapshot_probs["draw"]),
+                    "A": float(snapshot_probs["away"]),
+                }
+                has_model = True
+
             # Edge summary só se o caller informar liga/temporada/artifact e o evento já tiver ids resolvidos
             if (
                 assume_league_id is not None
@@ -1088,6 +1118,8 @@ def list_odds_events(
 
             events.append(
                 OddsEventRow(
+                    probs_1x2=probs_1x2,
+                    has_model=has_model,
                     odds_books=books_map.get(str(event_id), []),
                     event_id=str(event_id),
                     sport_key=str(sport_key_db),

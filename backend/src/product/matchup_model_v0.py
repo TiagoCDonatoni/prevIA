@@ -31,6 +31,30 @@ def _blend(primary: float, secondary: float, primary_weight: float) -> float:
     w = max(0.0, min(1.0, float(primary_weight)))
     return (w * float(primary)) + ((1.0 - w) * float(secondary))
 
+def _compute_competition_weight_from_matches(n_matches: int) -> float:
+    """
+    Define quanto confiar na competição atual vs temporada global.
+
+    Regra:
+    - poucos jogos -> confiar mais no global
+    - muitos jogos -> confiar mais na competição
+    """
+
+    if n_matches is None:
+        return 0.35
+
+    n = int(n_matches)
+
+    if n <= 3:
+        return 0.25
+    elif n <= 6:
+        return 0.35
+    elif n <= 10:
+        return 0.50
+    elif n <= 15:
+        return 0.65
+    else:
+        return 0.75
 
 def _clamp01(v: float) -> float:
     return min(max(float(v), 0.0), 1.0)
@@ -43,16 +67,6 @@ def _confidence_level(score: float) -> str:
     if s >= 0.50:
         return "medium"
     return "low"
-
-
-def _competition_weight(played: float) -> float:
-    """
-    Quanto confiar na competição atual vs temporada global.
-    Mantemos a competição relevante, mas nunca 100% dominante nesta etapa.
-    """
-    p = max(0.0, float(played))
-    # 0 jogos -> 0.35 | 12+ jogos -> 0.80
-    return 0.35 + 0.45 * min(p / 12.0, 1.0)
 
 
 def _clamp_lambda_pair(
@@ -230,6 +244,86 @@ def _preferred_global_rate(global_stats: Dict[str, float], side_key: str, fallba
         return float(global_stats.get(side_key, 0.0))
     return float(global_stats.get(fallback_key, 0.0))
 
+def _team_had_previous_season_in_same_league(
+    conn,
+    *,
+    league_id: int,
+    season: int,
+    team_id: int,
+) -> bool:
+    prev_season = int(season) - 1
+
+    sql = """
+      SELECT 1
+      FROM core.team_season_stats
+      WHERE league_id=%(league_id)s
+        AND season=%(season)s
+        AND team_id=%(team_id)s
+      LIMIT 1
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "league_id": int(league_id),
+                "season": int(prev_season),
+                "team_id": int(team_id),
+            },
+        )
+        row = cur.fetchone()
+
+    return bool(row)
+
+
+def _infer_promoted_like_flag(
+    conn,
+    *,
+    league_id: int,
+    season: int,
+    team_id: int,
+) -> bool:
+    """
+    Heurística simples desta etapa:
+    se o time não tem registro na mesma liga na season anterior,
+    tratamos como newcomer/promoted-like.
+    """
+    return not _team_had_previous_season_in_same_league(
+        conn,
+        league_id=league_id,
+        season=season,
+        team_id=team_id,
+    )
+
+
+def _apply_promoted_like_adjustment(
+    *,
+    atk_value: float,
+    def_value: float,
+    is_promoted_like: bool,
+) -> Dict[str, float]:
+    """
+    Ajuste conservador:
+    - ataque cai um pouco
+    - defesa fica um pouco pior
+    """
+    if not is_promoted_like:
+        return {
+            "atk": float(atk_value),
+            "def": float(def_value),
+            "attack_factor": 1.0,
+            "defense_factor": 1.0,
+        }
+
+    attack_factor = 0.93
+    defense_factor = 1.07
+
+    return {
+        "atk": float(atk_value) * attack_factor,
+        "def": float(def_value) * defense_factor,
+        "attack_factor": attack_factor,
+        "defense_factor": defense_factor,
+    }
 
 def _build_blended_confidence(
     *,
@@ -367,8 +461,14 @@ def estimate_lambdas_from_competition_and_global_season(
     mu_home = float(league_ctx["mu_home"])
     mu_away = float(league_ctx["mu_away"])
 
-    comp_weight_home = _competition_weight(float((home_comp or {}).get("home_played", 0.0)))
-    comp_weight_away = _competition_weight(float((away_comp or {}).get("away_played", 0.0)))
+    home_matches = home_comp.get("played") if home_comp else None
+    away_matches = away_comp.get("played") if away_comp else None
+
+    comp_weight_home = _compute_competition_weight_from_matches(home_matches)
+    comp_weight_away = _compute_competition_weight_from_matches(away_matches)
+
+    global_weight_home = 1.0 - comp_weight_home
+    global_weight_away = 1.0 - comp_weight_away
 
     home_comp_gf = float((home_comp or {}).get("home_gf_pg", 0.0))
     home_comp_ga = float((home_comp or {}).get("home_ga_pg", 0.0))
@@ -393,6 +493,37 @@ def estimate_lambdas_from_competition_and_global_season(
         _blend(away_comp_ga, away_global_ga, comp_weight_away) if away_comp else away_global_ga
     )
 
+    home_promoted_like = _infer_promoted_like_flag(
+        conn,
+        league_id=league_id,
+        season=season,
+        team_id=home_team_id,
+    )
+
+    away_promoted_like = _infer_promoted_like_flag(
+        conn,
+        league_id=league_id,
+        season=season,
+        team_id=away_team_id,
+    )
+
+    home_adj = _apply_promoted_like_adjustment(
+        atk_value=blended_home_gf_pg,
+        def_value=blended_home_ga_pg,
+        is_promoted_like=home_promoted_like,
+    )
+
+    away_adj = _apply_promoted_like_adjustment(
+        atk_value=blended_away_gf_pg,
+        def_value=blended_away_ga_pg,
+        is_promoted_like=away_promoted_like,
+    )
+
+    blended_home_gf_pg = float(home_adj["atk"])
+    blended_home_ga_pg = float(home_adj["def"])
+    blended_away_gf_pg = float(away_adj["atk"])
+    blended_away_ga_pg = float(away_adj["def"])
+
     atk_home = _safe_div(blended_home_gf_pg, mu_home, 1.0)
     def_home = _safe_div(blended_home_ga_pg, mu_away, 1.0)
     atk_away = _safe_div(blended_away_gf_pg, mu_away, 1.0)
@@ -409,6 +540,37 @@ def estimate_lambdas_from_competition_and_global_season(
         comp_weight_home=comp_weight_home,
         comp_weight_away=comp_weight_away,
     )
+
+    # penalizar confiança quando dependemos muito da temporada global
+    if global_weight_home > 0.6 or global_weight_away > 0.6:
+        penalty = 0.05
+
+        confidence["overall"] = round(
+            max(0.0, float(confidence["overall"]) - penalty),
+            4
+        )
+
+        confidence["level"] = _confidence_level(confidence["overall"])
+
+        confidence["factors"]["high_global_dependency"] = True
+    else:
+        confidence["factors"]["high_global_dependency"] = False
+
+    if home_promoted_like or away_promoted_like:
+        promoted_penalty = 0.08 if (home_promoted_like and away_promoted_like) else 0.05
+
+        confidence["overall"] = round(
+            max(0.0, float(confidence["overall"]) - promoted_penalty),
+            4,
+        )
+        confidence["level"] = _confidence_level(float(confidence["overall"]))
+        confidence["factors"]["home_promoted_like"] = bool(home_promoted_like)
+        confidence["factors"]["away_promoted_like"] = bool(away_promoted_like)
+        confidence["factors"]["promotion_adjustment_applied"] = True
+    else:
+        confidence["factors"]["home_promoted_like"] = False
+        confidence["factors"]["away_promoted_like"] = False
+        confidence["factors"]["promotion_adjustment_applied"] = False
 
     return LambdaEstimate(
         lambdas=_clamp_lambda_pair(
@@ -427,7 +589,17 @@ def estimate_lambdas_from_competition_and_global_season(
             "blended_home_ga_pg": round(float(blended_home_ga_pg), 4),
             "blended_away_gf_pg": round(float(blended_away_gf_pg), 4),
             "blended_away_ga_pg": round(float(blended_away_ga_pg), 4),
+            "home_promoted_like": bool(home_promoted_like),
+            "away_promoted_like": bool(away_promoted_like),
+            "home_attack_factor": round(float(home_adj["attack_factor"]), 4),
+            "home_defense_factor": round(float(home_adj["defense_factor"]), 4),
+            "away_attack_factor": round(float(away_adj["attack_factor"]), 4),
+            "away_defense_factor": round(float(away_adj["defense_factor"]), 4),
             "confidence": confidence,
+            "home_matches_in_competition": home_matches,
+            "away_matches_in_competition": away_matches,
+            "global_weight_home": round(float(global_weight_home), 4),
+            "global_weight_away": round(float(global_weight_away), 4),
         },
     )
 

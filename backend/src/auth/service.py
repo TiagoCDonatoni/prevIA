@@ -1039,10 +1039,10 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
     row = cur.fetchone()
 
     if row is None:
-        logger.debug(
-            "[AUTH_SESSION_LOOKUP] status=miss session_cookie=%s token_hash_prefix=%s",
+        logger.warning(
+            "[AUTH_SESSION_LOOKUP_DEBUG] status=miss session_cookie=%s token_hash_prefix=%s",
             _mask_session_token(raw_session_token),
-            token_hash[:12],
+            session_token_hash[:12],
         )
         return None
 
@@ -1058,12 +1058,12 @@ def _resolve_session_user_id(cur, *, raw_session_token: str) -> int | None:
         {"session_id": session_id},
     )
 
-    logger.debug(
-        "[AUTH_SESSION_LOOKUP] status=hit session_id=%s user_id=%s session_cookie=%s token_hash_prefix=%s",
-        session_row.get("session_id"),
-        session_row.get("user_id"),
+    logger.warning(
+        "[AUTH_SESSION_LOOKUP_DEBUG] status=hit session_id=%s user_id=%s session_cookie=%s token_hash_prefix=%s",
+        session_id,
+        user_id,
         _mask_session_token(raw_session_token),
-        token_hash[:12],
+        session_token_hash[:12],
     )
 
     return user_id
