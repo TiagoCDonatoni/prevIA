@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Optional
 
 from src.product.matchup_model_v0 import estimate_lambdas_with_fallback
 
+from src.core.season_policy import (
+    choose_current_operational_season,
+    current_year_utc,
+    fixed_season_should_reduce_confidence,
+    resolve_candidate_seasons,
+)
+
 from src.product.model_registry import get_calc_version
 from src.product.score_engine_v1 import (
     generate_score_matrix_v1,
@@ -369,9 +376,11 @@ def upsert_matchup_snapshot_v1(
 def _resolve_league_and_season_from_sport_key(conn, *, sport_key: str) -> Optional[Dict[str, Any]]:
     """
     Resolve (league_id, season) a partir de odds.odds_league_map (approved+enabled).
-    season_policy:
+
+    Política:
       - fixed   -> fixed_season
-      - current -> usa última season disponível (fixtures, fallback stats)
+      - current -> usa somente a janela operacional [ano atual, ano atual - 1]
+                   escolhendo a melhor disponível no core
     """
     sql_map = """
       SELECT league_id, season_policy, fixed_season
@@ -389,49 +398,194 @@ def _resolve_league_and_season_from_sport_key(conn, *, sport_key: str) -> Option
         return None
 
     league_id = int(r[0])
-    season_policy = str(r[1]) if r[1] is not None else None
+    season_policy = str(r[1]) if r[1] is not None else "current"
     fixed_season = int(r[2]) if r[2] is not None else None
 
-    if season_policy == "fixed" and fixed_season:
-        return {"league_id": league_id, "season": fixed_season}
+    if season_policy == "fixed" and fixed_season is not None:
+        return {
+            "league_id": league_id,
+            "season": int(fixed_season),
+            "season_resolution": "fixed",
+        }
 
-    season = _get_latest_season_for_league(conn, league_id=league_id)
-    if season is None:
+    available_seasons = _list_available_seasons_for_league(conn, league_id=league_id)
+    picked = choose_current_operational_season(available_seasons)
+
+    if picked is None:
         return None
 
-    return {"league_id": league_id, "season": int(season)}
+    return {
+        "league_id": league_id,
+        "season": int(picked),
+        "season_resolution": "current_window",
+        "available_seasons": available_seasons,
+    }
 
 
-def _get_latest_season_for_league(conn, *, league_id: int) -> Optional[int]:
+def _list_available_seasons_for_league(conn, *, league_id: int) -> List[int]:
     """
-    Última season conhecida para a liga. Ordem:
-      1) core.fixtures (mais confiável quando existe)
-      2) core.team_season_stats (fallback)
+    Seasons conhecidas para a liga, agregando:
+      1) core.fixtures
+      2) core.team_season_stats
+    Retorna lista desc sem duplicidade.
     """
+    seasons = set()
+
     sql_fx = """
-      SELECT MAX(season)
+      SELECT DISTINCT season
       FROM core.fixtures
       WHERE league_id = %(league_id)s
+        AND season IS NOT NULL
     """
     with conn.cursor() as cur:
         cur.execute(sql_fx, {"league_id": int(league_id)})
-        r = cur.fetchone()
-    if r and r[0] is not None:
-        return int(r[0])
+        for r in cur.fetchall() or []:
+            if r and r[0] is not None:
+                seasons.add(int(r[0]))
 
     sql_stats = """
-      SELECT MAX(season)
+      SELECT DISTINCT season
       FROM core.team_season_stats
       WHERE league_id = %(league_id)s
+        AND season IS NOT NULL
     """
     with conn.cursor() as cur:
         cur.execute(sql_stats, {"league_id": int(league_id)})
-        r2 = cur.fetchone()
-    if r2 and r2[0] is not None:
-        return int(r2[0])
+        for r in cur.fetchall() or []:
+            if r and r[0] is not None:
+                seasons.add(int(r[0]))
 
-    return None
+    return sorted(seasons, reverse=True)
 
+def _load_snapshot_season_policy_context(
+    conn,
+    *,
+    sport_key: Optional[str],
+    league_id: Optional[int],
+) -> Dict[str, Any]:
+    if not sport_key and league_id is None:
+        return {
+            "season_policy": "unknown",
+            "fixed_season": None,
+            "candidate_seasons": [],
+        }
+
+    sql = """
+      SELECT season_policy, fixed_season
+      FROM odds.odds_league_map
+      WHERE enabled = true
+        AND mapping_status = 'approved'
+        AND (
+          (%(sport_key)s::text IS NOT NULL AND sport_key = %(sport_key)s::text)
+          OR (%(league_id)s::int IS NOT NULL AND league_id = %(league_id)s::int)
+        )
+      ORDER BY
+        CASE WHEN %(sport_key)s::text IS NOT NULL AND sport_key = %(sport_key)s::text THEN 0 ELSE 1 END
+      LIMIT 1
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "sport_key": str(sport_key) if sport_key else None,
+                "league_id": int(league_id) if league_id is not None else None,
+            },
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return {
+            "season_policy": "unknown",
+            "fixed_season": None,
+            "candidate_seasons": [],
+        }
+
+    season_policy = str(row[0] or "current")
+    fixed_season = int(row[1]) if row[1] is not None else None
+
+    try:
+        candidate_seasons = resolve_candidate_seasons(
+            season_policy=season_policy,
+            fixed_season=fixed_season,
+        )
+    except Exception:
+        candidate_seasons = []
+
+    return {
+        "season_policy": season_policy,
+        "fixed_season": fixed_season,
+        "candidate_seasons": candidate_seasons,
+    }
+
+def _apply_season_confidence_overlay(
+    confidence: Dict[str, Any],
+    *,
+    effective_season: Optional[int],
+    season_policy: Optional[str],
+    fixed_season: Optional[int],
+    candidate_seasons: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    out = dict(confidence or {})
+    factors = dict(out.get("factors") or {})
+    reasons = list(out.get("reasons") or [])
+
+    policy = str(season_policy or "unknown")
+    year = current_year_utc()
+
+    gap = None
+    status = "unknown"
+
+    if effective_season is not None:
+        gap = int(year - int(effective_season))
+
+        if gap == 0:
+            status = "current_year"
+            reasons.append("effective_season_current_year")
+        elif gap == 1:
+            status = "previous_year"
+            reasons.append("effective_season_previous_year")
+        elif gap >= 2:
+            status = "stale_year"
+            reasons.append("effective_season_stale_year")
+        else:
+            status = "future_year"
+            reasons.append("effective_season_future_year")
+
+    if policy == "fixed":
+        factors["fixed_season"] = int(fixed_season) if fixed_season is not None else None
+
+        if fixed_season_should_reduce_confidence(fixed_season=fixed_season):
+            reasons.append("fixed_season_outdated")
+            status = "fixed_stale"
+
+            base = float(out.get("overall") or 0.0)
+            out["overall"] = round(max(0.0, min(base - 0.20, 0.99)), 4)
+            out["level"] = _confidence_level(float(out["overall"]))
+        else:
+            reasons.append("fixed_season_accepted")
+
+    elif policy == "current":
+        candidates = [int(s) for s in (candidate_seasons or []) if s is not None]
+        factors["candidate_seasons"] = candidates
+
+        if effective_season is not None and candidates and int(effective_season) not in candidates:
+            reasons.append("effective_season_outside_current_window")
+            status = "current_policy_outside_window"
+
+            base = float(out.get("overall") or 0.0)
+            out["overall"] = round(max(0.0, min(base - 0.25, 0.99)), 4)
+            out["level"] = _confidence_level(float(out["overall"]))
+
+    factors["effective_season"] = int(effective_season) if effective_season is not None else None
+    factors["season_policy"] = policy
+    factors["season_recency_gap"] = gap
+    factors["season_window_status"] = status
+
+    out["factors"] = factors
+    out["reasons"] = sorted(set(str(r) for r in reasons if r))
+
+    return out
 
 def _build_inputs_dict(
     *,
@@ -477,6 +631,10 @@ def _build_snapshot_confidence(
     fixture_resolved: bool,
     team_ids_resolved: bool,
     totals_available: bool,
+    effective_season: Optional[int] = None,
+    season_policy: Optional[str] = None,
+    fixed_season: Optional[int] = None,
+    candidate_seasons: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     diagnostics = getattr(estimate, "diagnostics", {}) or {}
     source = getattr(estimate, "source", None)
@@ -517,13 +675,22 @@ def _build_snapshot_confidence(
     factors["totals_available"] = bool(totals_available)
     factors["lambda_source"] = source
 
-    return {
+    base_confidence = {
         "overall": round(score, 4),
         "level": _confidence_level(score),
         "source": source,
         "factors": factors,
         "coverage": coverage,
+        "reasons": [],
     }
+
+    return _apply_season_confidence_overlay(
+        base_confidence,
+        effective_season=effective_season,
+        season_policy=season_policy,
+        fixed_season=fixed_season,
+        candidate_seasons=candidate_seasons,
+    )
 
 def _build_empty_snapshot_payload(
     *,
@@ -711,6 +878,18 @@ def rebuild_matchup_snapshots_v1(
             league_id = int(ctx["league_id"])
             season = int(ctx["season"])
 
+            season_policy_ctx = _load_snapshot_season_policy_context(
+                conn,
+                sport_key=str(ev["sport_key"]),
+                league_id=league_id,
+            )
+
+            season_policy_ctx = _load_snapshot_season_policy_context(
+                conn,
+                sport_key=str(ev["sport_key"]),
+                league_id=int(fx["league_id"]),
+            )
+
             estimate = estimate_lambdas_with_fallback(
                 conn,
                 league_id=league_id,
@@ -749,6 +928,10 @@ def rebuild_matchup_snapshots_v1(
                     fixture_resolved=False,
                     team_ids_resolved=True,
                     totals_available=bool(totals["main_line"] is not None),
+                    effective_season=season,
+                    season_policy=season_policy_ctx.get("season_policy"),
+                    fixed_season=season_policy_ctx.get("fixed_season"),
+                    candidate_seasons=season_policy_ctx.get("candidate_seasons"),
                 ),
                 "matrix": mx.matrix,
                 "markets": {
@@ -831,6 +1014,10 @@ def rebuild_matchup_snapshots_v1(
                 fixture_resolved=True,
                 team_ids_resolved=True,
                 totals_available=bool(totals["main_line"] is not None),
+                effective_season=int(fx["season"]) if fx.get("season") is not None else None,
+                season_policy=season_policy_ctx.get("season_policy"),
+                fixed_season=season_policy_ctx.get("fixed_season"),
+                candidate_seasons=season_policy_ctx.get("candidate_seasons"),
             ),
             # 7x7 (0..6) => 49 entradas, ok salvar como dict
             "matrix": mx.matrix,

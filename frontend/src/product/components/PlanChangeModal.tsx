@@ -183,7 +183,7 @@ export function PlanChangeModal(props: {
 
   const currentPlan = store.state.plan as PlanId;
   const canApplyLocalPlanChange = !PRODUCT_AUTH_ENABLED;
-  const checkoutCurrencyLocked = PRODUCT_AUTH_ENABLED;
+  const checkoutCurrencyLocked = false;
 
   const tr = useMemo(
     () => (k: string, vars?: Record<string, any>) => t(lang, k, vars),
@@ -191,7 +191,7 @@ export function PlanChangeModal(props: {
   );
 
   const defaultDisplayCurrency = resolveDisplayCurrencyFromLang(lang);
-  const effectiveDefaultCurrency: DisplayCurrency = checkoutCurrencyLocked ? "BRL" : defaultDisplayCurrency;
+  const effectiveDefaultCurrency: DisplayCurrency = defaultDisplayCurrency;
 
   const higherPlans = getHigherPlans(currentPlan);
   const currentLimit = dailyLimitForPlan(currentPlan);

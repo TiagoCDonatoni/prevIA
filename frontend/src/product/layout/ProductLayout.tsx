@@ -577,9 +577,29 @@ React.useEffect(() => {
     );
   }
 
-  if (shouldShowBlockingAuthSplash) {
-    return null;
-  }
+if (shouldShowBlockingAuthSplash) {
+  return (
+    <div className="pi-analysis-loading-overlay" aria-live="polite" aria-busy="true">
+      <div className="pi-analysis-loading-card">
+        <div className="pi-analysis-loading-spinner" aria-hidden="true" />
+        <div className="pi-analysis-loading-title">
+          {lang === "en"
+            ? "Preparing your experience"
+            : lang === "es"
+            ? "Preparando tu experiencia"
+            : "Preparando sua experiência"}
+        </div>
+        <div className="pi-analysis-loading-sub">
+          {lang === "en"
+            ? "We are loading matches and updating the latest information."
+            : lang === "es"
+            ? "Estamos cargando los partidos y actualizando la información más reciente."
+            : "Estamos carregando os jogos e atualizando as informações mais recentes."}
+        </div>
+      </div>
+    </div>
+  );
+}
 
   if (shouldRequireLoginGate) {
     return <Navigate to={landingLoginRedirect} replace />;

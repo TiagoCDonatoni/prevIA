@@ -11,6 +11,7 @@ import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
 import { t, type Lang } from "../i18n";
 import { getLeagueDisplayName } from "../i18n/leagueCatalogHelpers";
+import { getCountryNameByCode } from "../i18n/countryCatalog";
 import {
   useProductStore,
   type InternalNarrativeView,
@@ -39,8 +40,8 @@ import {
 } from "../filters/productIndexFilterSession";
 
 const UI_DEFAULTS = {
-  hoursAheadFallback: 720,
-  limit: 200,
+  hoursAheadFallback: 24,
+  limit: 100,
   tolHoursFallback: 6,
 };
 
@@ -73,6 +74,22 @@ const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
 
 const EVENT_FETCH_CONCURRENCY = 4;
 const PUBLIC_EMBED_MAX_LEAGUES = 8;
+
+const EVENTS_CACHE_TTL_MS = 2 * 60 * 1000;
+const PUBLIC_EMBED_EVENTS_CACHE_TTL_MS = 5 * 60 * 1000;
+const EVENTS_CACHE_STORAGE_PREFIX = "previa.product.eventsCache.v1:";
+const LEAGUES_CACHE_TTL_MS = 10 * 60 * 1000;
+const LEAGUES_CACHE_STORAGE_KEY = "previa.product.leaguesCache.v1";
+
+type ProductLeaguesCacheEntry = {
+  createdAt: number;
+  leagues: ProductLeagueOption[];
+};
+
+type ProductEventsCacheEntry = {
+  createdAt: number;
+  events: ProductOddsEvent[];
+};
 
 function sanitizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -151,14 +168,71 @@ function getUpcomingHorizonMs(nowMs: number) {
 
 function getFetchHoursAheadForWindowMode(mode: WindowMode) {
   if (mode === "UPCOMING") return UI_DEFAULTS.hoursAheadFallback;
-
-  if (mode === "TODAY") {
-    const { end } = getCalendarDayBounds(new Date());
-    const diffMs = Math.max(0, end.getTime() - Date.now());
-    return Math.max(1, Math.ceil(diffMs / (60 * 60 * 1000)));
-  }
+  if (mode === "TODAY") return UI_DEFAULTS.hoursAheadFallback;
 
   return Number(mode) * 24;
+}
+
+function buildEventsCacheKey(input: {
+  productMode: ProductIndexMode;
+  hoursAhead: number;
+  leagueKeys: string[];
+}) {
+  return [
+    input.productMode,
+    String(input.hoursAhead),
+    input.leagueKeys.slice().sort().join(","),
+  ].join("|");
+}
+
+function readStoredEventsCache(cacheKey: string): ProductEventsCacheEntry | null {
+  try {
+    const raw = sessionStorage.getItem(`${EVENTS_CACHE_STORAGE_PREFIX}${cacheKey}`);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as ProductEventsCacheEntry;
+
+    if (!parsed || !Number.isFinite(parsed.createdAt) || !Array.isArray(parsed.events)) {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredEventsCache(cacheKey: string, entry: ProductEventsCacheEntry) {
+  try {
+    sessionStorage.setItem(`${EVENTS_CACHE_STORAGE_PREFIX}${cacheKey}`, JSON.stringify(entry));
+  } catch {
+    // Cache é otimização de performance; falha não deve quebrar a tela.
+  }
+}
+
+function readStoredLeaguesCache(): ProductLeaguesCacheEntry | null {
+  try {
+    const raw = sessionStorage.getItem(LEAGUES_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as ProductLeaguesCacheEntry;
+
+    if (!parsed || !Number.isFinite(parsed.createdAt) || !Array.isArray(parsed.leagues)) {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredLeaguesCache(entry: ProductLeaguesCacheEntry) {
+  try {
+    sessionStorage.setItem(LEAGUES_CACHE_STORAGE_KEY, JSON.stringify(entry));
+  } catch {
+    // Cache é otimização de performance; falha não deve quebrar a tela.
+  }
 }
 
 function narrativeStyleFromInternalView(
@@ -585,6 +659,31 @@ function leagueDisplayName(league: ProductLeagueItem | null | undefined, lang: L
   );
 }
 
+function leagueCountryDisplayName(
+  league: ProductLeagueItem | null | undefined,
+  lang: Lang
+) {
+  if (!league) return "";
+
+  const localized = getCountryNameByCode(league.official_country_code, lang);
+  if (localized) return localized;
+
+  return String(league.country_name ?? "").trim();
+}
+
+function leagueWithCountryLabel(
+  league: ProductLeagueItem | null | undefined,
+  lang: Lang
+) {
+  const leagueName = leagueDisplayName(league, lang);
+  const countryName = leagueCountryDisplayName(league, lang);
+
+  if (!leagueName) return countryName;
+  if (!countryName) return leagueName;
+
+  return `${leagueName} - ${countryName}`;
+}
+
 function countryCodeToFlagEmoji(countryCode: string | null | undefined) {
   const code = String(countryCode ?? "").trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(code)) return "🌍";
@@ -679,6 +778,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     () => (isPublicEmbed ? false : persistedFilters?.onlyOpportunities === true)
   );
 
+  const [onlyRevealed, setOnlyRevealed] = useState<boolean>(
+    () => (isPublicEmbed ? false : persistedFilters?.onlyRevealed === true)
+  );
+
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedCountryCodes, setSelectedCountryCodes] = useState<string[]>(
     () => sanitizeStringArray(persistedFilters?.selectedCountryCodes)
@@ -697,6 +800,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const [hasLoadedEventsOnce, setHasLoadedEventsOnce] = useState(false);
 
   const eventsRequestSeqRef = useRef(0);
+  const isLoadingEventsRef = useRef(false);
+  const eventsCacheRef = useRef<Record<string, ProductEventsCacheEntry>>({});
 
   const countryOptions = useMemo(() => buildCountryOptions(leagues, lang), [leagues, lang]);
 
@@ -709,12 +814,6 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const teamOptions = useMemo(() => buildTeamOptions(events), [events]);
 
   const activeLeagueSportKeys = useMemo(() => {
-    if (selectedLeagueSportKeys.length) return selectedLeagueSportKeys;
-
-    if (selectedCountryCodes.length) {
-      return leagueOptions.map((item) => item.value);
-    }
-
     if (!leagues.length) return [];
 
     const now = new Date();
@@ -761,7 +860,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     }
 
     return [];
-  }, [selectedLeagueSportKeys, selectedCountryCodes, leagueOptions, leagues, windowMode]);
+  }, [leagues, windowMode]);
 
   const fetchLeagues = useMemo(() => {
     const items = activeLeagueSportKeys
@@ -782,7 +881,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     selectedLeagueSportKeys.length > 0 ||
     selectedBookKeys.length > 0 ||
     selectedTeams.length > 0 ||
-    onlyOpportunities;
+    onlyOpportunities ||
+    onlyRevealed;
 
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
@@ -795,9 +895,11 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [analysisOpening, setAnalysisOpening] = useState(false);
   const [quote, setQuote] = useState<ProductOddsQuoteResponse | null>(null);
+  const [quoteCacheByEventId, setQuoteCacheByEventId] = useState<Record<string, ProductOddsQuoteResponse>>({});
   const [quoteError, setQuoteError] = useState<string>("");
 
   const isAnalysisLoading = analysisOpening || quoteLoading;
+  const isOperationalLoading = !isAnalysisLoading && (loadingEvents || leaguesLoading);
 
   const [isMobileAnalysisView, setIsMobileAnalysisView] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -836,9 +938,26 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const loadLeagues = useCallback(async () => {
     setLeaguesLoading(true);
     setLeaguesError("");
+
     try {
-      const res = await productListLeagues();
-      const items = (res?.items ?? []).map((l) => applyLeagueOverride(l));
+      const cached = readStoredLeaguesCache();
+
+      if (cached && Date.now() - cached.createdAt <= LEAGUES_CACHE_TTL_MS) {
+        setLeagues(cached.leagues);
+        setHasLoadedLeaguesOnce(true);
+        setLeaguesLoading(false);
+        return;
+      }
+
+      const data = await productListLeagues();
+      const items = (data?.items ?? []).map((l) => applyLeagueOverride(l));
+      const loadedAt = Date.now();
+
+      writeStoredLeaguesCache({
+        createdAt: loadedAt,
+        leagues: items,
+      });
+
       setLeagues(items);
       setSportKey((prev) => {
         if (prev && items.some((item) => item.sport_key === prev)) return prev;
@@ -863,28 +982,35 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   }
 
   function handleCountryCodesChange(next: string[]) {
-    beginEventsReloadTransition();
     setSelectedCountryCodes(next);
     setSelectedLeagueSportKeys([]);
     setSelectedBookKeys([]);
     setSelectedTeams([]);
+    setSelectedId("");
+    setBooksModalEventId("");
+    clearQuoteUI();
   }
 
   function handleLeagueSportKeysChange(next: string[]) {
-    beginEventsReloadTransition();
     setSelectedLeagueSportKeys(next);
     setSelectedBookKeys([]);
     setSelectedTeams([]);
+    setSelectedId("");
+    setBooksModalEventId("");
+    clearQuoteUI();
   }
 
   function clearAdvancedFilters() {
-    beginEventsReloadTransition();
     setSelectedCountryCodes([]);
     setSelectedLeagueSportKeys([]);
     setSelectedBookKeys([]);
     setSelectedTeams([]);
     setOnlyOpportunities(false);
+    setOnlyRevealed(false);
     setSortBy("DATE");
+    setSelectedId("");
+    setBooksModalEventId("");
+    clearQuoteUI();
     setWindowMode("UPCOMING");
   }
 
@@ -898,6 +1024,24 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         aria-checked={onlyOpportunities}
       >
         <span className="pi-toggle-inline-copy">{t(lang, "odds.onlyOpportunities")}</span>
+
+        <span className="pi-toggle-switch-track" aria-hidden="true">
+          <span className="pi-toggle-switch-thumb" />
+        </span>
+      </button>
+    );
+  }
+
+  function renderOnlyRevealedToggle(extraClassName = "") {
+    return (
+      <button
+        type="button"
+        className={`pi-toggle-inline ${onlyRevealed ? "is-active" : ""} ${extraClassName}`.trim()}
+        onClick={() => setOnlyRevealed((prev) => !prev)}
+        role="switch"
+        aria-checked={onlyRevealed}
+      >
+        <span className="pi-toggle-inline-copy">{t(lang, "odds.onlyRevealed")}</span>
 
         <span className="pi-toggle-switch-track" aria-hidden="true">
           <span className="pi-toggle-switch-thumb" />
@@ -930,13 +1074,15 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
             : "Nenhuma opção encontrada"
         }
         selectedValue={windowMode}
-        options={[
-          { value: "UPCOMING", label: t(lang, "odds.windowUpcoming") },
-          { value: "TODAY", label: t(lang, "odds.windowToday") },
-          { value: "3", label: t(lang, "odds.window3d") },
-          { value: "7", label: t(lang, "odds.window7d") },
-          { value: "30", label: t(lang, "odds.window30d") },
-        ]}
+          options={[
+            { value: "UPCOMING", label: t(lang, "odds.windowUpcoming") },
+            { value: "TODAY", label: t(lang, "odds.windowToday") },
+            // Mantido no WindowMode/sanitizeWindowMode para reativação futura.
+            // Oculto temporariamente para reduzir combinações de cache e consultas.
+            // { value: "3", label: t(lang, "odds.window3d") },
+            { value: "7", label: t(lang, "odds.window7d") },
+            { value: "30", label: t(lang, "odds.window30d") },
+          ]}
         onChange={(next) => setWindowMode(next as WindowMode)}
       />
     );
@@ -1087,6 +1233,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       windowMode,
       sortBy,
       onlyOpportunities,
+      onlyRevealed,
       selectedCountryCodes,
       selectedLeagueSportKeys,
       selectedBookKeys,
@@ -1097,6 +1244,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     windowMode,
     sortBy,
     onlyOpportunities,
+    onlyRevealed,
     selectedCountryCodes,
     selectedLeagueSportKeys,
     selectedBookKeys,
@@ -1106,26 +1254,47 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const loadEvents = useCallback(async () => {
     if (!hasLoadedLeaguesOnce) return;
 
+    if (isLoadingEventsRef.current) return;
+    isLoadingEventsRef.current = true;
+
     const requestSeq = ++eventsRequestSeqRef.current;
 
-    if (!fetchLeagues.length) {
-      if (requestSeq !== eventsRequestSeqRef.current) return;
-
-      setEvents([]);
-      setSelectedId("");
-      setQuote(null);
-      setQuoteError("");
-      setLastLoadedAt(Date.now());
-      setLoadingEvents(false);
-      setHasLoadedEventsOnce(true);
-      return;
-    }
-
-    setLoadingEvents(true);
-    setEventsError("");
-
     try {
+      if (!fetchLeagues.length) {
+        if (requestSeq !== eventsRequestSeqRef.current) return;
+
+        setEvents([]);
+        setSelectedId("");
+        setQuote(null);
+        setQuoteError("");
+        setLastLoadedAt(Date.now());
+        setLoadingEvents(false);
+        setHasLoadedEventsOnce(true);
+        return;
+      }
+
+      setLoadingEvents(true);
+      setEventsError("");
+
       const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
+      const fetchLeagueKeys = fetchLeagues.map((item) => item.sport_key);
+      const cacheKey = buildEventsCacheKey({
+        productMode: mode,
+        hoursAhead,
+        leagueKeys: fetchLeagueKeys,
+      });
+      const cacheTtlMs = isPublicEmbed ? PUBLIC_EMBED_EVENTS_CACHE_TTL_MS : EVENTS_CACHE_TTL_MS;
+      const cached = eventsCacheRef.current[cacheKey] ?? readStoredEventsCache(cacheKey);
+
+      if (cached && Date.now() - cached.createdAt <= cacheTtlMs) {
+        if (requestSeq !== eventsRequestSeqRef.current) return;
+
+        setEvents(cached.events);
+        setLastLoadedAt(cached.createdAt);
+        setLoadingEvents(false);
+        setHasLoadedEventsOnce(true);
+        return;
+      }
 
       const settled = await mapWithConcurrency(
         fetchLeagues,
@@ -1167,17 +1336,30 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         throw firstError;
       }
 
-      setEvents(Array.from(merged.values()));
-      setLastLoadedAt(Date.now());
+      const nextEvents = Array.from(merged.values());
+      const loadedAt = Date.now();
+
+      const cacheEntry: ProductEventsCacheEntry = {
+        createdAt: loadedAt,
+        events: nextEvents,
+      };
+
+      eventsCacheRef.current[cacheKey] = cacheEntry;
+      writeStoredEventsCache(cacheKey, cacheEntry);
+
+      setEvents(nextEvents);
+      setLastLoadedAt(loadedAt);
     } catch (e: any) {
       if (requestSeq !== eventsRequestSeqRef.current) return;
       setEventsError(e?.message ?? "Failed to load events");
     } finally {
+      isLoadingEventsRef.current = false;
+
       if (requestSeq !== eventsRequestSeqRef.current) return;
       setLoadingEvents(false);
       setHasLoadedEventsOnce(true);
     }
-  }, [fetchLeagues, windowMode, hasLoadedLeaguesOnce]);
+  }, [fetchLeagues, windowMode, hasLoadedLeaguesOnce, isPublicEmbed, mode]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -1294,6 +1476,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         tol_hours: Number(UI_DEFAULTS.tolHoursFallback),
       });
       setQuote(res);
+      setQuoteCacheByEventId((prev) => ({
+        ...prev,
+        [eventIdStr]: res,
+      }));
     } catch (e: any) {
       setQuoteError(e?.message ?? String(e));
     } finally {
@@ -1307,8 +1493,18 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   }
 
   function handleSelectEvent(eventId: string) {
-    setSelectedId(String(eventId));
-    clearQuoteUI();
+    const nextId = String(eventId);
+
+    if (nextId === String(selectedId)) {
+      if (isMobileAnalysisView) {
+        setMobileAnalysisOpen(true);
+      }
+      return;
+    }
+
+    setSelectedId(nextId);
+    setQuote(quoteCacheByEventId[nextId] ?? null);
+    setQuoteError("");
 
     if (isMobileAnalysisView) {
       setMobileAnalysisOpen(true);
@@ -1376,6 +1572,13 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     const selectedBookSet = selectedBookKeys.length ? new Set(selectedBookKeys) : null;
     const selectedTeamSet = selectedTeams.length ? new Set(selectedTeams) : null;
 
+    const selectedCountrySet = selectedCountryCodes.length ? new Set(selectedCountryCodes) : null;
+    const selectedLeagueSet = selectedLeagueSportKeys.length ? new Set(selectedLeagueSportKeys) : null;
+
+    const leagueCountryBySportKey = new Map(
+      leagues.map((item) => [item.sport_key, String(item.official_country_code ?? "").trim()])
+    );
+
     const futureFiltered = events.filter((e) => {
       const kickoffRaw = e.commence_time_utc;
       if (!kickoffRaw) return false;
@@ -1385,6 +1588,15 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       if (kickoff.getTime() < nowMs) return false;
 
       if (!hasUsableAnalysisStatus(e.match_status)) return false;
+
+      if (selectedLeagueSet && !selectedLeagueSet.has(e.sport_key)) {
+        return false;
+      }
+
+      if (selectedCountrySet) {
+        const countryCode = leagueCountryBySportKey.get(e.sport_key) ?? "";
+        if (!selectedCountrySet.has(countryCode)) return false;
+      }
 
       if (selectedTeamSet) {
         const home = String(e.home_name ?? "");
@@ -1399,6 +1611,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       }
 
       if (onlyOpportunities && !eventHasOpportunity(e)) {
+        return false;
+      }
+
+      if (onlyRevealed && !store.isRevealed(String(e.event_id))) {
         return false;
       }
 
@@ -1478,7 +1694,19 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       items: list,
       useUpcomingFallback,
     };
-  }, [events, windowMode, sortBy, selectedBookKeys, selectedTeams, onlyOpportunities]);
+  }, [
+      events,
+      windowMode,
+      sortBy,
+      selectedCountryCodes,
+      selectedLeagueSportKeys,
+      selectedBookKeys,
+      selectedTeams,
+      onlyOpportunities,
+      onlyRevealed,
+      leagues,
+      store,
+    ]);
 
   const visibleEvents = visibleEventsState.items;
   const isUpcomingFallbackActive = visibleEventsState.useUpcomingFallback;
@@ -1656,6 +1884,15 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                 </div>
 
                 <div className="pi-detail-sub">
+                  <span
+                    className="pi-league"
+                    title={leagueWithCountryLabel(leaguesBySportKey.get(selected.sport_key) ?? league, lang)}
+                  >
+                    {leagueWithCountryLabel(leaguesBySportKey.get(selected.sport_key) ?? league, lang)}
+                  </span>
+
+                  <span className="pi-subsep">•</span>
+
                   <span className="pi-kick">{fmtKickoff(selected.commence_time_utc, lang)}</span>
 
                   {selected.odds_best ? (
@@ -2480,14 +2717,128 @@ return (
           onChange={setSelectedTeams}
         />
 
-      {renderWindowDaysSelect("pi-filter-window")}
-      {renderSortSelect("pi-filter-sort")}
-      {renderOnlyOpportunitiesToggle("pi-filter-toggle")}
+        {renderWindowDaysSelect("pi-filter-window")}
+        {renderSortSelect("pi-filter-sort")}
       </div>
     </div>
 
+        {hasActiveFilters ? (
+          <div className="pi-active-filters">
+            {selectedCountryCodes.map((value) => {
+              const item = countryOptions.find((option) => option.value === value);
+              if (!item) return null;
+
+              return (
+                <span key={`country-${value}`} className="pi-filter-chip">
+                  {countryCodeToFlagEmoji(item.flagCode)} {item.label}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCountryCodesChange(selectedCountryCodes.filter((x) => x !== value))
+                    }
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+
+            {selectedLeagueSportKeys.map((value) => {
+              const item = leagueOptions.find((option) => option.value === value);
+              if (!item) return null;
+
+              return (
+                <span key={`league-${value}`} className="pi-filter-chip">
+                  {item.label}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleLeagueSportKeysChange(selectedLeagueSportKeys.filter((x) => x !== value))
+                    }
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+
+            {selectedBookKeys.map((value) => {
+              const item = bookOptions.find((option) => option.value === value);
+              if (!item) return null;
+
+              return (
+                <span key={`book-${value}`} className="pi-filter-chip">
+                  {item.label}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedBookKeys((prev) => prev.filter((x) => x !== value))
+                    }
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+
+            {selectedTeams.map((value) => (
+              <span key={`team-${value}`} className="pi-filter-chip">
+                {value}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedTeams((prev) => prev.filter((x) => x !== value))
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+
+          {/*
+            {onlyOpportunities ? (
+              <button
+                type="button"
+                className="pi-filter-chip pi-filter-chip-action"
+                onClick={() => setOnlyOpportunities(false)}
+              >
+                <span>{t(lang, "odds.onlyOpportunities")}</span>
+                <span aria-hidden="true">×</span>
+              </button>
+            ) : null}
+
+            {onlyRevealed ? (
+              <button
+                type="button"
+                className="pi-filter-chip pi-filter-chip-action"
+                onClick={() => setOnlyRevealed(false)}
+              >
+                <span>{t(lang, "odds.onlyRevealed")}</span>
+                <span aria-hidden="true">×</span>
+              </button>
+            ) : null}
+              */}
+
+            <button
+              type="button"
+              className="pi-filter-chip pi-filter-chip-action pi-filter-chip-clear"
+              onClick={clearAdvancedFilters}
+            >
+              <span>{t(lang, "product.filtersClear")}</span>
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        ) : null}
+
     <div className="pi-topline">
-      <div className="pi-title">{t(lang, "odds.pageTitle")}</div>
+      <div className="pi-title-actions">
+        <div className="pi-title">{t(lang, "odds.pageTitle")}</div>
+
+        <div className="pi-quick-toggles">
+          {renderOnlyOpportunitiesToggle("pi-quick-toggle")}
+          {renderOnlyRevealedToggle("pi-quick-toggle")}
+        </div>
+      </div>
 
       <div className="pi-meta">
         {leaguesError ? (
@@ -2540,101 +2891,6 @@ return (
     ) : showTodayEmptyNotice ? (
       <div className="pi-card" style={{ marginBottom: 12, padding: 12 }}>
         {t(lang, "odds.todayEmptyNotice")}
-      </div>
-    ) : null}
-
-    {hasActiveFilters ? (
-      <div className="pi-active-filters">
-        {selectedCountryCodes.map((value) => {
-          const item = countryOptions.find((option) => option.value === value);
-          if (!item) return null;
-
-          return (
-            <span key={`country-${value}`} className="pi-filter-chip">
-              {countryCodeToFlagEmoji(item.flagCode)} {item.label}
-              <button
-                type="button"
-                onClick={() =>
-                  handleCountryCodesChange(selectedCountryCodes.filter((x) => x !== value))
-                }
-              >
-                ×
-              </button>
-            </span>
-          );
-        })}
-
-        {selectedLeagueSportKeys.map((value) => {
-          const item = leagueOptions.find((option) => option.value === value);
-          if (!item) return null;
-
-          return (
-            <span key={`league-${value}`} className="pi-filter-chip">
-              {item.label}
-              <button
-                type="button"
-                onClick={() =>
-                  handleLeagueSportKeysChange(selectedLeagueSportKeys.filter((x) => x !== value))
-                }
-              >
-                ×
-              </button>
-            </span>
-          );
-        })}
-
-        {selectedBookKeys.map((value) => {
-          const item = bookOptions.find((option) => option.value === value);
-          if (!item) return null;
-
-          return (
-            <span key={`book-${value}`} className="pi-filter-chip">
-              {item.label}
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedBookKeys((prev) => prev.filter((x) => x !== value))
-                }
-              >
-                ×
-              </button>
-            </span>
-          );
-        })}
-
-        {selectedTeams.map((value) => (
-          <span key={`team-${value}`} className="pi-filter-chip">
-            {value}
-            <button
-              type="button"
-              onClick={() =>
-                setSelectedTeams((prev) => prev.filter((x) => x !== value))
-              }
-            >
-              ×
-            </button>
-          </span>
-        ))}
-
-        {onlyOpportunities ? (
-          <button
-            type="button"
-            className="pi-filter-chip pi-filter-chip-action"
-            onClick={() => setOnlyOpportunities(false)}
-          >
-            <span>{t(lang, "odds.onlyOpportunities")}</span>
-            <span aria-hidden="true">×</span>
-          </button>
-        ) : null}
-
-        <button
-          type="button"
-          className="pi-filter-chip pi-filter-chip-action pi-filter-chip-clear"
-          onClick={clearAdvancedFilters}
-        >
-          <span>{t(lang, "product.filtersClear")}</span>
-          <span aria-hidden="true">×</span>
-        </button>
       </div>
     ) : null}
 
@@ -2728,6 +2984,7 @@ return (
         </div>
 
         {renderOnlyOpportunitiesToggle()}
+        {renderOnlyRevealedToggle()}
       </div>
     </ProductFiltersSheet>
 
@@ -2742,6 +2999,7 @@ return (
             const active = eventKey === String(selectedId);
             const hasOpportunityFlag = eventHasOpportunity(e);
             const isProbableOnly = e.match_status === "PROBABLE";
+            const isRevealed = store.isRevealed(eventKey);
 
             return (
               <div
@@ -2760,16 +3018,47 @@ return (
                 }}
               >
                 <div className="pi-row-main">
-                  <div className="pi-row-title">
-                    <span className="pi-team">{e.home_name}</span>
-                    <span className="pi-vs">vs</span>
-                    <span className="pi-team">{e.away_name}</span>
+                  <div className="pi-row-head">
+                    <div className="pi-row-title">
+                      <span className="pi-team">{e.home_name}</span>
+                      <span className="pi-vs">vs</span>
+                      <span className="pi-team">{e.away_name}</span>
+                    </div>
+
+                    {hasOpportunityFlag || isProbableOnly || isRevealed ? (
+                      <div className="pi-row-actions-inline">
+                        {isProbableOnly ? (
+                          <span className="pi-chip pi-chip-muted">
+                            {lang === "en"
+                              ? "Moderate confidence"
+                              : lang === "es"
+                              ? "Confianza moderada"
+                              : "Confiança moderada"}
+                          </span>
+                        ) : null}
+
+                        {hasOpportunityFlag ? (
+                          <span className="pi-opportunity">
+                            {t(lang, "odds.opportunityDetected")}
+                          </span>
+                        ) : null}
+
+                        {isRevealed ? (
+                          <span className="pi-seen-badge">
+                            {t(lang, "odds.alreadySeen")}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="pi-row-sub">
                     <div className="pi-row-meta-inline">
-                      <span className="pi-league" title={leagueDisplayName(leaguesBySportKey.get(e.sport_key) ?? league, lang)}>
-                        {leagueDisplayName(leaguesBySportKey.get(e.sport_key) ?? league, lang)}
+                      <span
+                        className="pi-league"
+                        title={leagueWithCountryLabel(leaguesBySportKey.get(e.sport_key) ?? league, lang)}
+                      >
+                        {leagueWithCountryLabel(leaguesBySportKey.get(e.sport_key) ?? league, lang)}
                       </span>
 
                       <span className="pi-subsep">•</span>
@@ -2787,26 +3076,6 @@ return (
                         </>
                       ) : null}
                     </div>
-
-                    {hasOpportunityFlag || isProbableOnly ? (
-                      <div className="pi-row-actions-inline">
-                        {isProbableOnly ? (
-                          <span className="pi-chip pi-chip-muted">
-                            {lang === "en"
-                              ? "Moderate confidence"
-                              : lang === "es"
-                              ? "Confianza moderada"
-                              : "Confiança moderada"}
-                          </span>
-                        ) : null}
-
-                        {hasOpportunityFlag ? (
-                          <span className="pi-opportunity">
-                            {t(lang, "odds.opportunityDetected")}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 </div>
               </div>
@@ -2988,8 +3257,42 @@ return (
       </div>
     ) : null}
 
+    {isOperationalLoading ? (
+      <div
+        className={`pi-analysis-loading-overlay ${
+          isPublicEmbed ? "pi-analysis-loading-overlay--embed" : ""
+        }`}
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <div className="pi-analysis-loading-card">
+          <div className="pi-analysis-loading-spinner" aria-hidden="true" />
+          <div className="pi-analysis-loading-title">
+            {lang === "en"
+              ? "Preparing your experience"
+              : lang === "es"
+              ? "Preparando tu experiencia"
+              : "Preparando sua experiência"}
+          </div>
+          <div className="pi-analysis-loading-sub">
+            {lang === "en"
+              ? "We are loading matches and updating the latest information."
+              : lang === "es"
+              ? "Estamos cargando los partidos y actualizando la información más reciente."
+              : "Estamos carregando os jogos e atualizando as informações mais recentes."}
+          </div>
+        </div>
+      </div>
+    ) : null}
+
     {isAnalysisLoading ? (
-      <div className="pi-analysis-loading-overlay" aria-live="polite" aria-busy="true">
+      <div
+        className={`pi-analysis-loading-overlay ${
+          isPublicEmbed ? "pi-analysis-loading-overlay--embed" : ""
+        }`}
+        aria-live="polite"
+        aria-busy="true"
+      >
         <div className="pi-analysis-loading-card">
           <div className="pi-analysis-loading-spinner" aria-hidden="true" />
           <div className="pi-analysis-loading-title">

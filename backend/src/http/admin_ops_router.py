@@ -20,6 +20,13 @@ from src.ops.jobs.odds_league_autoclassify import odds_league_autoclassify
 from src.ops.jobs.update_pipeline import update_pipeline_run
 from src.internal_access.guards import require_admin_access
 
+from src.core.season_policy import (
+    current_operational_window,
+    current_year_utc,
+    fixed_season_should_reduce_confidence,
+    resolve_candidate_seasons,
+)
+
 router = APIRouter(
     prefix="/admin/ops",
     tags=["admin-ops"],
@@ -256,6 +263,21 @@ def _serialize_league_candidate(match: tuple[Any, Any, Any, Any], match_reason: 
         "match_reason": match_reason,
         "rank": int(rank),
     }
+
+def _extract_artifact_years(artifact_filename: str | None) -> list[int]:
+    import re
+
+    if not artifact_filename:
+        return []
+
+    years = []
+    for token in re.findall(r"(?:19|20)\d{2}", str(artifact_filename)):
+        try:
+            years.append(int(token))
+        except Exception:
+            continue
+
+    return sorted(set(years), reverse=True)
 
 
 def _build_league_resolution_preview(cur, sport_key: str, limit: int = 5) -> dict:
@@ -1196,4 +1218,545 @@ def admin_ops_toggle_league(
         "sport_key": row[0],
         "enabled": row[1],
         "league_id": row[2],
+    }
+
+@router.get("/pipeline/season-health")
+def admin_ops_pipeline_season_health(
+    only_sport_key: str | None = Query(default=None),
+):
+    current_year = current_year_utc()
+    operational_window = current_operational_window()
+
+    sql = """
+      WITH latest_fixture_season AS (
+        SELECT
+          f.league_id,
+          MAX(f.season) AS latest_core_season,
+          COUNT(DISTINCT f.season) AS seasons_found,
+          MAX(f.kickoff_utc) AS latest_kickoff_utc
+        FROM core.fixtures f
+        GROUP BY f.league_id
+      ),
+      snapshot_rollup AS (
+        SELECT
+          s.sport_key,
+          COUNT(*) AS snapshots_count,
+          MAX(s.updated_at_utc) AS latest_snapshot_updated_at_utc,
+          MIN(NULLIF(s.payload #>> '{confidence,overall}', '')::numeric) AS min_confidence_overall,
+          AVG(NULLIF(s.payload #>> '{confidence,overall}', '')::numeric) AS avg_confidence_overall,
+          MAX(NULLIF(s.payload #>> '{inputs,season}', '')::int) AS max_snapshot_effective_season,
+          MIN(NULLIF(s.payload #>> '{inputs,season}', '')::int) AS min_snapshot_effective_season
+        FROM product.matchup_snapshot_v1 s
+        GROUP BY s.sport_key
+      )
+      SELECT
+        m.sport_key,
+        m.league_id,
+        COALESCE(l.name, m.sport_key) AS league_name,
+        m.season_policy,
+        m.fixed_season,
+        m.artifact_filename,
+        m.model_version,
+        lfs.latest_core_season,
+        lfs.seasons_found,
+        lfs.latest_kickoff_utc,
+        sr.snapshots_count,
+        sr.latest_snapshot_updated_at_utc,
+        sr.min_confidence_overall,
+        sr.avg_confidence_overall,
+        sr.min_snapshot_effective_season,
+        sr.max_snapshot_effective_season
+      FROM odds.odds_league_map m
+      LEFT JOIN core.leagues l
+        ON l.league_id = m.league_id
+      LEFT JOIN latest_fixture_season lfs
+        ON lfs.league_id = m.league_id
+      LEFT JOIN snapshot_rollup sr
+        ON sr.sport_key = m.sport_key
+      WHERE m.enabled = true
+        AND m.mapping_status = 'approved'
+        AND (%(only_sport_key)s::text IS NULL OR m.sport_key = %(only_sport_key)s::text)
+      ORDER BY m.sport_key
+    """
+
+    items = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"only_sport_key": only_sport_key})
+            rows = cur.fetchall() or []
+
+    for row in rows:
+        (
+            sport_key,
+            league_id,
+            league_name,
+            season_policy,
+            fixed_season,
+            artifact_filename,
+            model_version,
+            latest_core_season,
+            seasons_found,
+            latest_kickoff_utc,
+            snapshots_count,
+            latest_snapshot_updated_at_utc,
+            min_confidence_overall,
+            avg_confidence_overall,
+            min_snapshot_effective_season,
+            max_snapshot_effective_season,
+        ) = row
+
+        policy = str(season_policy or "current")
+        fixed = int(fixed_season) if fixed_season is not None else None
+        latest_core = int(latest_core_season) if latest_core_season is not None else None
+        min_snapshot_season = int(min_snapshot_effective_season) if min_snapshot_effective_season is not None else None
+        max_snapshot_season = int(max_snapshot_effective_season) if max_snapshot_effective_season is not None else None
+        artifact_years = _extract_artifact_years(artifact_filename)
+
+        try:
+            candidate_seasons = resolve_candidate_seasons(
+                season_policy=policy,
+                fixed_season=fixed,
+            )
+        except Exception:
+            candidate_seasons = []
+
+        issues = []
+        status = "OK"
+
+        if policy == "current":
+            if latest_core is None:
+                issues.append("NO_CORE_FIXTURES")
+            elif latest_core not in operational_window:
+                issues.append("CORE_OUTSIDE_OPERATIONAL_WINDOW")
+
+            if max_snapshot_season is None:
+                issues.append("NO_SNAPSHOTS")
+            else:
+                if max_snapshot_season not in operational_window:
+                    issues.append("SNAPSHOT_MAX_OUTSIDE_OPERATIONAL_WINDOW")
+                if min_snapshot_season is not None and min_snapshot_season not in operational_window:
+                    issues.append("SNAPSHOT_MIN_OUTSIDE_OPERATIONAL_WINDOW")
+
+            if artifact_years:
+                invalid_artifact_years = [y for y in artifact_years if y not in operational_window]
+                if invalid_artifact_years:
+                    issues.append("ARTIFACT_OUTSIDE_OPERATIONAL_WINDOW")
+
+        elif policy == "fixed":
+            if fixed is None:
+                issues.append("FIXED_WITHOUT_FIXED_SEASON")
+            elif fixed_season_should_reduce_confidence(fixed_season=fixed):
+                issues.append("FIXED_SEASON_STALE")
+
+            if artifact_years and fixed is not None and fixed not in artifact_years:
+                issues.append("ARTIFACT_DOES_NOT_MATCH_FIXED_SEASON")
+
+            if fixed is not None:
+                if max_snapshot_season is not None and max_snapshot_season != fixed:
+                    issues.append("SNAPSHOT_MAX_DOES_NOT_MATCH_FIXED_SEASON")
+                if min_snapshot_season is not None and min_snapshot_season != fixed:
+                    issues.append("SNAPSHOT_MIN_DOES_NOT_MATCH_FIXED_SEASON")
+
+        else:
+            issues.append("UNKNOWN_SEASON_POLICY")
+
+        if min_confidence_overall is not None:
+            try:
+                if float(min_confidence_overall) < 0.55:
+                    issues.append("LOW_MIN_CONFIDENCE")
+            except Exception:
+                pass
+
+        if issues:
+            status = "WARN"
+
+        items.append(
+            {
+                "sport_key": str(sport_key),
+                "league_id": int(league_id) if league_id is not None else None,
+                "league_name": str(league_name),
+                "season_policy": policy,
+                "fixed_season": fixed,
+                "candidate_seasons": candidate_seasons,
+                "operational_window": operational_window,
+                "latest_core_season": latest_core,
+                "seasons_found": int(seasons_found) if seasons_found is not None else 0,
+                "latest_kickoff_utc": latest_kickoff_utc.isoformat() if latest_kickoff_utc else None,
+                "artifact_filename": str(artifact_filename) if artifact_filename else None,
+                "artifact_years": artifact_years,
+                "model_version": str(model_version) if model_version else None,
+                "snapshots_count": int(snapshots_count) if snapshots_count is not None else 0,
+                "latest_snapshot_updated_at_utc": (
+                    latest_snapshot_updated_at_utc.isoformat()
+                    if latest_snapshot_updated_at_utc
+                    else None
+                ),
+                "min_snapshot_effective_season": min_snapshot_season,
+                "max_snapshot_effective_season": max_snapshot_season,
+                "min_confidence_overall": (
+                    float(min_confidence_overall)
+                    if min_confidence_overall is not None
+                    else None
+                ),
+                "avg_confidence_overall": (
+                    float(avg_confidence_overall)
+                    if avg_confidence_overall is not None
+                    else None
+                ),
+                "status": status,
+                "issues": issues,
+            }
+        )
+
+    summary = {
+        "total": len(items),
+        "ok": sum(1 for x in items if x["status"] == "OK"),
+        "warn": sum(1 for x in items if x["status"] != "OK"),
+        "issues": {},
+    }
+
+    for item in items:
+        for issue in item["issues"]:
+            summary["issues"][issue] = int(summary["issues"].get(issue, 0)) + 1
+
+    return {
+        "ok": True,
+        "current_year": current_year,
+        "operational_window": operational_window,
+        "summary": summary,
+        "items": items,
+    }
+
+@router.post("/pipeline/snapshots/cleanup-stale")
+def admin_ops_cleanup_stale_snapshots(
+    only_sport_key: str | None = Query(default=None),
+    dry_run: bool = Query(default=True),
+):
+    operational_window = current_operational_window()
+
+    sql_select = """
+      WITH league_policy AS (
+        SELECT
+          sport_key,
+          league_id,
+          season_policy,
+          fixed_season
+        FROM odds.odds_league_map
+        WHERE enabled = true
+          AND mapping_status = 'approved'
+          AND (%(only_sport_key)s::text IS NULL OR sport_key = %(only_sport_key)s::text)
+      ),
+      snapshot_rows AS (
+        SELECT
+          s.snapshot_id,
+          s.sport_key,
+          s.event_id,
+          NULLIF(s.payload #>> '{inputs,season}', '')::int AS effective_season,
+          lp.season_policy,
+          lp.fixed_season
+        FROM product.matchup_snapshot_v1 s
+        JOIN league_policy lp
+          ON lp.sport_key = s.sport_key
+      )
+      SELECT
+        snapshot_id,
+        sport_key,
+        event_id,
+        effective_season,
+        season_policy,
+        fixed_season
+      FROM snapshot_rows
+      WHERE
+        (
+          season_policy = 'current'
+          AND effective_season IS NOT NULL
+          AND effective_season <> ALL(%(operational_window)s)
+        )
+        OR
+        (
+          season_policy = 'fixed'
+          AND fixed_season IS NOT NULL
+          AND effective_season IS NOT NULL
+          AND effective_season <> fixed_season
+        )
+      ORDER BY sport_key, effective_season, event_id
+    """
+
+    sql_delete = """
+      DELETE FROM product.matchup_snapshot_v1 s
+      USING odds.odds_league_map m
+      WHERE m.sport_key = s.sport_key
+        AND m.enabled = true
+        AND m.mapping_status = 'approved'
+        AND (%(only_sport_key)s::text IS NULL OR s.sport_key = %(only_sport_key)s::text)
+        AND (
+          (
+            m.season_policy = 'current'
+            AND NULLIF(s.payload #>> '{inputs,season}', '')::int IS NOT NULL
+            AND NULLIF(s.payload #>> '{inputs,season}', '')::int <> ALL(%(operational_window)s)
+          )
+          OR
+          (
+            m.season_policy = 'fixed'
+            AND m.fixed_season IS NOT NULL
+            AND NULLIF(s.payload #>> '{inputs,season}', '')::int IS NOT NULL
+            AND NULLIF(s.payload #>> '{inputs,season}', '')::int <> m.fixed_season
+          )
+        )
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql_select,
+                {
+                    "only_sport_key": only_sport_key,
+                    "operational_window": operational_window,
+                },
+            )
+            rows = cur.fetchall() or []
+
+        candidates = [
+            {
+                "snapshot_id": int(r[0]),
+                "sport_key": str(r[1]),
+                "event_id": str(r[2]) if r[2] is not None else None,
+                "effective_season": int(r[3]) if r[3] is not None else None,
+                "season_policy": str(r[4]),
+                "fixed_season": int(r[5]) if r[5] is not None else None,
+            }
+            for r in rows
+        ]
+
+        deleted = 0
+
+        if not dry_run and candidates:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql_delete,
+                    {
+                        "only_sport_key": only_sport_key,
+                        "operational_window": operational_window,
+                    },
+                )
+                deleted = cur.rowcount or 0
+            conn.commit()
+
+    by_sport_key = {}
+    for item in candidates:
+        sport_key = item["sport_key"]
+        by_sport_key[sport_key] = int(by_sport_key.get(sport_key, 0)) + 1
+
+    return {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "only_sport_key": only_sport_key,
+        "operational_window": operational_window,
+        "candidates_count": len(candidates),
+        "deleted_count": int(deleted),
+        "by_sport_key": by_sport_key,
+        "sample": candidates[:50],
+    }
+
+@router.get("/pipeline/snapshots/low-confidence")
+def admin_ops_snapshots_low_confidence(
+    only_sport_key: str | None = Query(default=None),
+    threshold: float = Query(default=0.55, ge=0.0, le=1.0),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    sql = """
+      SELECT
+        s.sport_key,
+        s.event_id,
+        s.fixture_id,
+        s.kickoff_utc,
+        s.home_name,
+        s.away_name,
+        NULLIF(s.payload #>> '{inputs,season}', '')::int AS effective_season,
+        s.payload #>> '{confidence,overall}' AS confidence_overall_raw,
+        s.payload #>> '{confidence,level}' AS confidence_level,
+        s.payload #>> '{confidence,source}' AS confidence_source,
+        s.payload #>> '{inputs,lambda_source}' AS lambda_source,
+        s.payload #> '{confidence,factors}' AS confidence_factors,
+        s.payload #> '{confidence,coverage}' AS confidence_coverage,
+        s.payload #> '{confidence,reasons}' AS confidence_reasons,
+        s.updated_at_utc
+      FROM product.matchup_snapshot_v1 s
+      WHERE (%(only_sport_key)s::text IS NULL OR s.sport_key = %(only_sport_key)s::text)
+        AND (
+          CASE
+            WHEN (s.payload #>> '{confidence,overall}') ~ '^[0-9]+(\\.[0-9]+)?$'
+            THEN (s.payload #>> '{confidence,overall}')::numeric
+            ELSE NULL
+          END
+        ) < %(threshold)s
+      ORDER BY
+        (s.payload #>> '{confidence,overall}')::numeric ASC,
+        s.sport_key,
+        s.kickoff_utc
+      LIMIT %(limit)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "only_sport_key": only_sport_key,
+                    "threshold": float(threshold),
+                    "limit": int(limit),
+                },
+            )
+            rows = cur.fetchall() or []
+
+    items = []
+
+    for row in rows:
+        (
+            sport_key,
+            event_id,
+            fixture_id,
+            kickoff_utc,
+            home_name,
+            away_name,
+            effective_season,
+            confidence_overall_raw,
+            confidence_level,
+            confidence_source,
+            lambda_source,
+            confidence_factors,
+            confidence_coverage,
+            confidence_reasons,
+            updated_at_utc,
+        ) = row
+
+        try:
+            confidence_overall = float(confidence_overall_raw) if confidence_overall_raw is not None else None
+        except Exception:
+            confidence_overall = None
+
+        items.append(
+            {
+                "sport_key": str(sport_key),
+                "event_id": str(event_id) if event_id else None,
+                "fixture_id": int(fixture_id) if fixture_id is not None else None,
+                "kickoff_utc": kickoff_utc.isoformat() if kickoff_utc else None,
+                "home_name": str(home_name) if home_name else None,
+                "away_name": str(away_name) if away_name else None,
+                "effective_season": int(effective_season) if effective_season is not None else None,
+                "confidence_overall": confidence_overall,
+                "confidence_level": str(confidence_level) if confidence_level else None,
+                "confidence_source": str(confidence_source) if confidence_source else None,
+                "lambda_source": str(lambda_source) if lambda_source else None,
+                "confidence_factors": confidence_factors,
+                "confidence_coverage": confidence_coverage,
+                "confidence_reasons": confidence_reasons,
+                "updated_at_utc": updated_at_utc.isoformat() if updated_at_utc else None,
+            }
+        )
+
+    by_sport_key = {}
+    by_lambda_source = {}
+    by_confidence_source = {}
+
+    for item in items:
+        sport_key = item["sport_key"]
+        lambda_source = item.get("lambda_source") or "unknown"
+        confidence_source = item.get("confidence_source") or "unknown"
+
+        by_sport_key[sport_key] = int(by_sport_key.get(sport_key, 0)) + 1
+        by_lambda_source[lambda_source] = int(by_lambda_source.get(lambda_source, 0)) + 1
+        by_confidence_source[confidence_source] = int(by_confidence_source.get(confidence_source, 0)) + 1
+
+    return {
+        "ok": True,
+        "only_sport_key": only_sport_key,
+        "threshold": float(threshold),
+        "count": len(items),
+        "by_sport_key": by_sport_key,
+        "by_lambda_source": by_lambda_source,
+        "by_confidence_source": by_confidence_source,
+        "items": items,
+    }
+
+
+@router.get("/pipeline/snapshots/confidence-summary")
+def admin_ops_snapshots_confidence_summary():
+    sql = """
+      SELECT
+        s.sport_key,
+        COUNT(*) AS snapshots_count,
+        MIN(
+          CASE
+            WHEN (s.payload #>> '{confidence,overall}') ~ '^[0-9]+(\\.[0-9]+)?$'
+            THEN (s.payload #>> '{confidence,overall}')::numeric
+            ELSE NULL
+          END
+        ) AS min_confidence,
+        AVG(
+          CASE
+            WHEN (s.payload #>> '{confidence,overall}') ~ '^[0-9]+(\\.[0-9]+)?$'
+            THEN (s.payload #>> '{confidence,overall}')::numeric
+            ELSE NULL
+          END
+        ) AS avg_confidence,
+        COUNT(*) FILTER (
+          WHERE (
+            CASE
+              WHEN (s.payload #>> '{confidence,overall}') ~ '^[0-9]+(\\.[0-9]+)?$'
+              THEN (s.payload #>> '{confidence,overall}')::numeric
+              ELSE NULL
+            END
+          ) < 0.55
+        ) AS low_confidence_count,
+        COUNT(*) FILTER (
+          WHERE s.payload #>> '{inputs,lambda_source}' = 'league_prior'
+        ) AS league_prior_count,
+        COUNT(*) FILTER (
+          WHERE s.payload #>> '{inputs,lambda_source}' = 'recent_fixtures'
+        ) AS recent_fixtures_count,
+        COUNT(*) FILTER (
+          WHERE s.payload #>> '{inputs,lambda_source}' = 'team_season_stats_blended'
+        ) AS blended_count
+      FROM product.matchup_snapshot_v1 s
+      GROUP BY s.sport_key
+      ORDER BY low_confidence_count DESC, avg_confidence ASC NULLS LAST, s.sport_key
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall() or []
+
+    items = []
+
+    for row in rows:
+        (
+            sport_key,
+            snapshots_count,
+            min_confidence,
+            avg_confidence,
+            low_confidence_count,
+            league_prior_count,
+            recent_fixtures_count,
+            blended_count,
+        ) = row
+
+        items.append(
+            {
+                "sport_key": str(sport_key),
+                "snapshots_count": int(snapshots_count or 0),
+                "min_confidence": float(min_confidence) if min_confidence is not None else None,
+                "avg_confidence": float(avg_confidence) if avg_confidence is not None else None,
+                "low_confidence_count": int(low_confidence_count or 0),
+                "league_prior_count": int(league_prior_count or 0),
+                "recent_fixtures_count": int(recent_fixtures_count or 0),
+                "blended_count": int(blended_count or 0),
+            }
+        )
+
+    return {
+        "ok": True,
+        "items": items,
     }

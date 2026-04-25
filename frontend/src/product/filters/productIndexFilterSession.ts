@@ -2,6 +2,7 @@ export type PersistedProductIndexFilters = {
   windowMode?: string;
   sortBy?: string;
   onlyOpportunities?: boolean;
+  onlyRevealed?: boolean;
   selectedCountryCodes?: string[];
   selectedLeagueSportKeys?: string[];
   selectedBookKeys?: string[];

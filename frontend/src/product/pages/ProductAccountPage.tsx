@@ -256,6 +256,10 @@ export default function ProductAccountPage() {
   const [billingChangePreview, setBillingChangePreview] =
     React.useState<BillingChangePreviewResponse | null>(null);
   const [billingChangeError, setBillingChangeError] = React.useState<string | null>(null);
+  const [billingChangeResultMessage, setBillingChangeResultMessage] = React.useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   const [isBillingChangePreviewLoading, setIsBillingChangePreviewLoading] = React.useState(false);
   const [isBillingChangeApplyLoading, setIsBillingChangeApplyLoading] = React.useState(false);
   const [isBillingChangeScheduleLoading, setIsBillingChangeScheduleLoading] = React.useState(false);
@@ -297,14 +301,16 @@ export default function ProductAccountPage() {
     isAuthenticated
   );
   const displayEmailVerified = mapVerificationLabel(lang, account.email_verified);
-  const displayPlanLabel = mapPlanLabel(plan);
+  const planUsageSubscription = billingState?.subscription ?? null;
+
+  const displayPlanLabel = mapPlanLabel(planUsageSubscription?.plan_code ?? plan);
   const displaySubscriptionStatus = mapSubscriptionStatusLabel(
     lang,
-    account.subscription.status
+    planUsageSubscription?.billing_status ?? account.subscription.status
   );
   const displaySubscriptionProvider = mapProviderLabel(
     lang,
-    account.subscription.provider
+    planUsageSubscription?.provider ?? account.subscription.provider
   );
 
   const accountPreferences = React.useMemo(
@@ -838,6 +844,7 @@ export default function ProductAccountPage() {
       setIsBillingChangePreviewLoading(true);
       setBillingChangeError(null);
       setBillingActionMessage(null);
+      setBillingChangeResultMessage(null);
 
       const result = await postBillingChangePreview({
         target_plan_code: billingChangePlan,
@@ -880,6 +887,11 @@ export default function ProductAccountPage() {
       setIsBillingChangeApplyLoading(true);
       setBillingChangeError(null);
       setBillingActionMessage(null);
+      setBillingChangeResultMessage(null);
+
+      const confirmedTargetPlanLabel = mapPlanLabel(billingChangePlan);
+      const confirmedTargetCycleLabel = mapBillingCycleLabel(lang, billingChangeCycle);
+      const confirmedAmountDueLabel = billingChangeAmountDueLabel;
 
       const result = await postBillingChangeApply({
         target_plan_code: billingChangePlan,
@@ -894,13 +906,17 @@ export default function ProductAccountPage() {
 
       if (result.applied) {
         await syncAccountFromBackend();
-        setBillingActionMessage(
-          lang === "pt"
-            ? "Plano alterado com sucesso."
-            : lang === "es"
-            ? "Plan cambiado con éxito."
-            : "Plan changed successfully."
-        );
+
+        setBillingChangeResultMessage({
+          type: "success",
+          message:
+            lang === "pt"
+              ? `Plano alterado com sucesso. Seu novo plano é ${confirmedTargetPlanLabel} (${confirmedTargetCycleLabel}). A cobrança foi aprovada pelo Stripe.`
+              : lang === "es"
+              ? `Plan cambiado con éxito. Tu nuevo plan es ${confirmedTargetPlanLabel} (${confirmedTargetCycleLabel}). El cobro fue aprobado por Stripe.`
+              : `Plan changed successfully. Your new plan is ${confirmedTargetPlanLabel} (${confirmedTargetCycleLabel}). The payment was approved by Stripe.`,
+        });
+
         return;
       }
 
@@ -922,10 +938,20 @@ export default function ProductAccountPage() {
           ? "La solicitud fue procesada."
           : "The request was processed."
       );
-    } catch (error) {
-      console.error("handleBillingChangeApply failed", error);
+      } catch (error) {
+        console.error("handleBillingChangeApply failed", error);
 
-      if (error instanceof BillingRequestError) {
+        setBillingChangeResultMessage({
+          type: "error",
+          message:
+            lang === "pt"
+              ? "Não foi possível concluir a mudança de plano. Nenhuma alteração foi aplicada."
+              : lang === "es"
+              ? "No se pudo completar el cambio de plan. No se aplicó ningún cambio."
+              : "Could not complete the plan change. No change was applied.",
+        });
+
+        if (error instanceof BillingRequestError) {
         const friendly = getBillingChangeReasonMessage(lang, error.code || error.message);
         setBillingChangeError(
           friendly ??
@@ -1025,9 +1051,9 @@ export default function ProductAccountPage() {
           ? "Cambio programado cancelado."
           : "Scheduled change cancelled."
       );
-    } catch (error) {
-      console.error("handleBillingChangeCancel failed", error);
-      setBillingChangeError(
+      } catch (error) {
+        console.error("handleBillingChangeCancel failed", error);
+        setBillingChangeError(
         lang === "pt"
           ? "Não foi possível cancelar a mudança agendada."
           : lang === "es"
@@ -1090,18 +1116,22 @@ export default function ProductAccountPage() {
               <button
                 type="button"
                 className="product-secondary"
-                onClick={() => openAuthModal(isAuthenticated ? "changePassword" : "login")}
+                onClick={() => {
+                  setCheckoutFinalizeError(null);
+                  setCheckoutFinalizeSlow(false);
+                  setIsFinalizingCheckout(false);
+                }}
               >
-                {isAuthenticated ? t(lang, "auth.changePassword") : t(lang, "auth.login")}
+                {t(lang, "auth.accountSettings")}
               </button>
 
-              {!isAuthenticated ? (
+              {checkoutFinalizeSlow ? (
                 <button
                   type="button"
                   className="product-primary"
-                  onClick={() => openAuthModal("signup")}
+                  onClick={() => void handleRefreshAfterCheckout()}
                 >
-                  {t(lang, "auth.signup")}
+                  {t(lang, "auth.billingCheckoutRefreshNow")}
                 </button>
               ) : null}
             </div>
@@ -1286,7 +1316,7 @@ export default function ProductAccountPage() {
           </div>
 
           {billingActionMessage ? (
-            <div className="account-note" style={{ marginBottom: 12 }}>
+            <div className="account-note" style={{ marginBottom: 12, whiteSpace: "pre-line" }}>
               {billingActionMessage}
             </div>
           ) : null}
@@ -1384,6 +1414,7 @@ export default function ProductAccountPage() {
                     {lang === "pt" ? "Plano alvo" : lang === "es" ? "Plan objetivo" : "Target plan"}
                   </span>
                   <select
+                    className="account-billing-select"
                     value={billingChangePlan}
                     onChange={(event) => {
                       setBillingChangePlan(
@@ -1391,6 +1422,7 @@ export default function ProductAccountPage() {
                       );
                       setBillingChangePreview(null);
                       setBillingChangeError(null);
+                      setBillingChangeResultMessage(null);
                     }}
                   >
                     {BILLING_CHANGE_PLAN_OPTIONS.map((planId) => (
@@ -1406,11 +1438,13 @@ export default function ProductAccountPage() {
                     {lang === "pt" ? "Recorrência" : lang === "es" ? "Recurrencia" : "Billing cycle"}
                   </span>
                   <select
+                    className="account-billing-select"
                     value={billingChangeCycle}
                     onChange={(event) => {
                       setBillingChangeCycle(event.target.value as BillingCycle);
                       setBillingChangePreview(null);
                       setBillingChangeError(null);
+                      setBillingChangeResultMessage(null);
                     }}
                   >
                     {BILLING_CHANGE_CYCLE_OPTIONS.map((cycle) => (
@@ -1430,53 +1464,88 @@ export default function ProductAccountPage() {
                 <div
                   style={{
                     marginTop: 12,
-                    padding: 12,
-                    borderRadius: 12,
-                    background: "rgba(255,255,255,0.04)",
-                    border: "1px solid rgba(255,255,255,0.08)",
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#f8fbff",
+                    border: "1px solid #dbe5ff",
                     display: "grid",
                     gap: 8,
+                    color: "#24324a",
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>
-                    {billingChangeDecisionMessage ??
-                      (lang === "pt"
-                        ? "Preview gerado."
+                  <div style={{ fontWeight: 800, color: "#0f172a" }}>
+                    {billingChangePreview?.policy?.can_apply_now
+                      ? lang === "pt"
+                        ? `Confirmar mudança para ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                            lang,
+                            billingChangeCycle
+                          )})`
                         : lang === "es"
-                        ? "Vista previa generada."
-                        : "Preview generated.")}
+                        ? `Confirmar cambio a ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                            lang,
+                            billingChangeCycle
+                          )})`
+                        : `Confirm change to ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                            lang,
+                            billingChangeCycle
+                          )})`
+                      : lang === "pt"
+                      ? `Agendar mudança para ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                          lang,
+                          billingChangeCycle
+                        )})`
+                      : lang === "es"
+                      ? `Programar cambio a ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                          lang,
+                          billingChangeCycle
+                        )})`
+                      : `Schedule change to ${mapPlanLabel(billingChangePlan)} (${mapBillingCycleLabel(
+                          lang,
+                          billingChangeCycle
+                        )})`}
                   </div>
 
-                  {billingChangeReasonMessage ? <div>{billingChangeReasonMessage}</div> : null}
+                  <div>
+                    {billingChangePreview?.policy?.can_apply_now
+                      ? lang === "pt"
+                        ? "A mudança será aplicada imediatamente."
+                        : lang === "es"
+                        ? "El cambio se aplicará inmediatamente."
+                        : "The change will be applied immediately."
+                      : lang === "pt"
+                      ? "A mudança será aplicada na próxima renovação."
+                      : lang === "es"
+                      ? "El cambio se aplicará en la próxima renovación."
+                      : "The change will take effect on the next renewal."}
+                  </div>
 
-                  {billingChangeFullDeltaLabel ? (
+                  {billingChangePreview?.policy?.can_apply_now ? (
                     <div>
                       {lang === "pt"
-                        ? `Diferença cheia do período: ${billingChangeFullDeltaLabel}`
+                        ? "O valor final já considera automaticamente o crédito proporcional do seu plano atual."
                         : lang === "es"
-                        ? `Diferencia total del período: ${billingChangeFullDeltaLabel}`
-                        : `Full-period difference: ${billingChangeFullDeltaLabel}`}
+                        ? "El valor final ya considera automáticamente el crédito proporcional de tu plan actual."
+                        : "The final amount already includes the proportional credit from your current plan."}
                     </div>
                   ) : null}
 
-                  {billingChangeAmountDueLabel ? (
-                    <div>
+                  {billingChangeAmountDueLabel && billingChangePreview?.policy?.can_apply_now ? (
+                    <div style={{ fontWeight: 800, color: "#0f172a" }}>
                       {lang === "pt"
-                        ? `Cobrança imediata estimada: ${billingChangeAmountDueLabel}`
+                        ? `Você paga agora: ${billingChangeAmountDueLabel}`
                         : lang === "es"
-                        ? `Cobro inmediato estimado: ${billingChangeAmountDueLabel}`
-                        : `Estimated immediate charge: ${billingChangeAmountDueLabel}`}
+                        ? `Pagas ahora: ${billingChangeAmountDueLabel}`
+                        : `You pay now: ${billingChangeAmountDueLabel}`}
                     </div>
                   ) : null}
 
-                  {billingChangePreview.policy.can_schedule &&
-                  !billingChangePreview.policy.can_apply_now ? (
-                    <div>
+                  {billingChangeAmountDueLabel && !billingChangePreview?.policy?.can_apply_now ? (
+                    <div style={{ fontWeight: 800, color: "#0f172a" }}>
                       {lang === "pt"
-                        ? "Essa mudança será aplicada na próxima renovação."
+                        ? "Sem cobrança imediata."
                         : lang === "es"
-                        ? "Este cambio se aplicará en la próxima renovación."
-                        : "This change will take effect on the next renewal."}
+                        ? "Sin cobro inmediato."
+                        : "No immediate charge."}
                     </div>
                   ) : null}
                 </div>
@@ -1509,8 +1578,8 @@ export default function ProductAccountPage() {
                     : "View preview"}
                 </button>
 
-                {billingChangePreview?.policy.can_schedule &&
-                !billingChangePreview.policy.can_apply_now ? (
+                {billingChangePreview?.policy?.can_schedule &&
+                !billingChangePreview?.policy?.can_apply_now ? (
                   <button
                     type="button"
                     className="product-primary"
@@ -1535,7 +1604,7 @@ export default function ProductAccountPage() {
                   </button>
                 ) : null}
 
-                {billingChangePreview?.policy.can_apply_now ? (
+                {billingChangePreview?.policy?.can_apply_now ? (
                   <button
                     type="button"
                     className="product-primary"
@@ -1554,6 +1623,34 @@ export default function ProductAccountPage() {
                       ? "Aplicar ahora"
                       : "Apply now"}
                   </button>
+                ) : null}
+
+                {billingChangeResultMessage ? (
+                  <div
+                    style={{
+                      width: "100%",
+                      marginTop: 12,
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border:
+                        billingChangeResultMessage.type === "success"
+                          ? "1px solid #bbf7d0"
+                          : "1px solid #fecaca",
+                      background:
+                        billingChangeResultMessage.type === "success"
+                          ? "#f0fdf4"
+                          : "#fef2f2",
+                      color:
+                        billingChangeResultMessage.type === "success"
+                          ? "#166534"
+                          : "#991b1b",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {billingChangeResultMessage.message}
+                  </div>
                 ) : null}
 
 

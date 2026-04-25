@@ -3734,6 +3734,11 @@
   padding-right: 6px;
 }
 
+.public-product-embed-surface {
+  position: relative;
+  min-height: 360px;
+}
+
 /* padroniza a scrollbar da lista e da análise só no embed */
 .public-product-embed-surface .pi-card-list .pi-list,
 .public-product-embed-surface .pi-card-analysis-box {

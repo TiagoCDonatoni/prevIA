@@ -3,28 +3,50 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
+from src.core.season_policy import choose_current_operational_season, resolve_candidate_seasons
 from src.db.pg import pg_conn
 from src.odds.matchup_resolver import resolve_odds_event
 
+def _list_available_core_seasons_for_league(conn, *, league_id: int) -> List[int]:
+    sql = """
+      SELECT DISTINCT season
+      FROM core.fixtures
+      WHERE league_id = %(lid)s
+        AND season IS NOT NULL
+      ORDER BY season DESC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"lid": int(league_id)})
+        rows = cur.fetchall() or []
+
+    return [int(r[0]) for r in rows if r and r[0] is not None]
 
 def _pick_season_for_league(conn, league_id: int, season_policy: str, fixed_season: Optional[int]) -> int:
     """
-    Política de season sem hardcode:
+    Política central:
     - fixed: usa fixed_season
-    - current: usa max(season) existente no core.fixtures para a liga
-    - by_kickoff_year: fallback pro 'current' aqui (refinamos depois quando tivermos kickoff->season robusto)
+    - current/by_kickoff_year:
+        1) tenta ano atual se existir no core
+        2) fallback para ano atual - 1 se existir no core
+        3) se ainda não existir no core, assume ano atual como season operacional
     """
-    if season_policy == "fixed":
-        if not fixed_season:
-            raise ValueError("season_policy='fixed' requires fixed_season")
-        return int(fixed_season)
+    candidates = resolve_candidate_seasons(
+        season_policy=season_policy,
+        fixed_season=fixed_season,
+    )
 
-    # current / by_kickoff_year (v1): usa max season existente
-    sql = "select coalesce(max(season), extract(year from now())::int) from core.fixtures where league_id = %(lid)s"
-    with conn.cursor() as cur:
-        cur.execute(sql, {"lid": int(league_id)})
-        row = cur.fetchone()
-        return int(row[0]) if row and row[0] else datetime.now(timezone.utc).year
+    if str(season_policy or "current").strip().lower() == "fixed":
+        return int(candidates[0])
+
+    available_seasons = _list_available_core_seasons_for_league(conn, league_id=int(league_id))
+    picked = choose_current_operational_season(available_seasons)
+
+    if picked is not None:
+        return int(picked)
+
+    # Se o core ainda não estiver populado na janela ativa,
+    # continua assumindo a season mais recente operacional.
+    return int(candidates[0])
 
 
 def odds_resolve_batch(
@@ -121,6 +143,10 @@ def odds_resolve_batch(
         "season": int(season),
         "season_policy": season_policy,
         "fixed_season": fixed_season,
+        "candidate_seasons": resolve_candidate_seasons(
+            season_policy=season_policy,
+            fixed_season=fixed_season,
+        ),
         "tol_hours": int(tol_hours),
         "window_hours": int(hours_ahead),
         "limit": int(limit),

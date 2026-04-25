@@ -14,6 +14,7 @@ from src.ops.jobs.odds_resolve import odds_resolve_batch
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.models_ensure_1x2_v1 import ensure_models_1x2_v1
 from src.product.model_registry import get_active_model_version
+from src.core.season_policy import resolve_candidate_seasons
 
 
 @dataclass
@@ -78,15 +79,10 @@ def _infer_latest_core_season(*, league_id: int) -> Optional[int]:
 
 
 def _seasons_for_scope(scope: PipelineLeagueScope) -> List[int]:
-    if scope.fixed_season is not None:
-        return [int(scope.fixed_season)]
-
-    inferred = _infer_latest_core_season(league_id=scope.league_id)
-    if inferred is not None:
-        return [int(inferred)]
-
-    year = _current_year_utc()
-    return [year - 1, year]
+    return resolve_candidate_seasons(
+        season_policy=scope.season_policy,
+        fixed_season=scope.fixed_season,
+    )
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -241,6 +237,13 @@ def update_pipeline_run(
         try:
             seasons = _seasons_for_scope(scope)
             league_out["seasons"] = seasons
+            latest_core_season = _infer_latest_core_season(league_id=scope.league_id)
+            league_out["season_resolution"] = {
+                "season_policy": scope.season_policy,
+                "fixed_season": scope.fixed_season,
+                "candidate_seasons": seasons,
+                "latest_core_season_before_update": latest_core_season,
+            }
 
             print(
                 f"[UPDATE_PIPELINE] [{idx}/{total}] step=fixtures_core start seasons={seasons}",

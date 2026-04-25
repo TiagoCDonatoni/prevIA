@@ -159,6 +159,8 @@ export async function patchAuthAccountPreferences(
 
   const data = await readJsonSafe<PatchAuthAccountPreferencesResponse | AuthErrorResponse>(res);
 
+
+
   if (!res.ok) {
     const message =
       (data && "message" in data && data.message) ||
@@ -246,8 +248,33 @@ async function requestAuth<TBody extends Record<string, any> | undefined>(
   return requestJson<AuthMeResponse, TBody>(path, body);
 }
 
+let authMeCache: AuthMeResponse | null = null;
+let authMePromise: Promise<AuthMeResponse> | null = null;
+
+export function clearAuthMeCache() {
+  authMeCache = null;
+  authMePromise = null;
+}
+
+export function writeAuthMeCache(data: AuthMeResponse) {
+  authMeCache = data;
+}
+
 export async function fetchAuthMe(): Promise<AuthMeResponse> {
-  return requestAuth("/auth/me");
+  if (authMeCache) return authMeCache;
+
+  if (authMePromise) return authMePromise;
+
+  authMePromise = requestAuth("/auth/me")
+    .then((data) => {
+      authMeCache = data;
+      return data;
+    })
+    .finally(() => {
+      authMePromise = null;
+    });
+
+  return authMePromise;
 }
 
 export async function postAuthSignup(payload: {
@@ -255,14 +282,18 @@ export async function postAuthSignup(payload: {
   password: string;
   full_name: string | null;
 }): Promise<AuthMeResponse> {
-  return requestAuth("/auth/signup", payload);
+  const data = await requestAuth("/auth/signup", payload);
+  writeAuthMeCache(data);
+  return data;
 }
 
 export async function postAuthLogin(payload: {
   email: string;
   password: string;
 }): Promise<AuthMeResponse> {
-  return requestAuth("/auth/login", payload);
+  const data = await requestAuth("/auth/login", payload);
+  writeAuthMeCache(data);
+  return data;
 }
 
 export async function postAuthLogout(): Promise<{ ok: boolean }> {
@@ -276,6 +307,8 @@ export async function postAuthLogout(): Promise<{ ok: boolean }> {
   });
 
   const data = await readJsonSafe<{ ok: boolean }>(res);
+
+  clearAuthMeCache();
 
   if (!res.ok) {
     throw new AuthRequestError(`auth_logout_failed:${res.status}`, res.status);
@@ -318,7 +351,9 @@ export async function postAuthChangePassword(payload: {
 export async function postAuthGoogleLogin(payload: {
   credential: string;
 }): Promise<AuthGoogleLoginResponse> {
-  return requestJson<AuthGoogleLoginResponse, typeof payload>("/auth/google/login", payload);
+  const data = await requestJson<AuthGoogleLoginResponse, typeof payload>("/auth/google/login", payload);
+  writeAuthMeCache(data);
+  return data;
 }
 
 export async function postAuthGoogleLink(payload: {

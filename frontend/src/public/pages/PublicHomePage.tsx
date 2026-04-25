@@ -79,37 +79,37 @@ const LANDING_PLAN_PRICES: Record<
   BASIC: {
     BRL: {
       monthly: 14.9,
-      quarterly: 44.7,
-      annual: 178.8,
+      quarterly: 39.9,
+      annual: 149,
     },
     USD: {
       monthly: 9,
-      quarterly: 27,
-      annual: 108,
+      quarterly: 24,
+      annual: 90,
     },
   },
   LIGHT: {
     BRL: {
       monthly: 39.9,
-      quarterly: 119.7,
-      annual: 478.8,
+      quarterly: 107.9,
+      annual: 399,
     },
     USD: {
       monthly: 19,
-      quarterly: 57,
-      annual: 228,
+      quarterly: 51,
+      annual: 190,
     },
   },
   PRO: {
     BRL: {
       monthly: 69.9,
-      quarterly: 209.7,
-      annual: 838.8,
+      quarterly: 188.9,
+      annual: 699,
     },
     USD: {
       monthly: 39,
-      quarterly: 117,
-      annual: 468,
+      quarterly: 105,
+      annual: 390,
     },
   },
 };

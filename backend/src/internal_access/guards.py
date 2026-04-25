@@ -69,10 +69,10 @@ def _build_dev_bypass_actor() -> Dict[str, Any]:
 def require_admin_access(request: Request) -> Dict[str, Any]:
     settings = load_settings()
 
-    if not settings.admin_auth_enabled:
-        if settings.app_env in {"dev", "development"} and settings.admin_dev_bypass_enabled:
-            return _build_dev_bypass_actor()
+    if settings.app_env in {"dev", "development", "local"} and settings.admin_dev_bypass_enabled:
+        return _build_dev_bypass_actor()
 
+    if not settings.admin_auth_enabled:
         return {
             "ok": True,
             "auth_mode": "admin_auth_disabled",

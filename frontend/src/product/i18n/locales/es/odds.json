@@ -37,5 +37,8 @@
   "sortEdge": "Ordenar por edge",
   "onlyOpportunities": "✦ Solo oportunidades",
   "upcomingFallbackNotice": "No se encontraron partidos en las próximas 24 horas. Mostrando los próximos partidos disponibles.",
-  "todayEmptyNotice": "No se encontraron partidos para hoy en la selección actual."
+  "todayEmptyNotice": "No se encontraron partidos para hoy en la selección actual.",
+
+  "onlyRevealed": "✓ Ya vistos",
+  "alreadySeen": "✓ Visto"
 }

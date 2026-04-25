@@ -37,5 +37,8 @@
   "sortEdge": "Ordenar por edge",
   "onlyOpportunities": "✦ Só oportunidades",
   "upcomingFallbackNotice": "Nenhum jogo encontrado nas próximas 24h. Exibindo os próximos jogos disponíveis.",
-  "todayEmptyNotice": "Nenhum jogo encontrado para hoje na seleção atual."
+  "todayEmptyNotice": "Nenhum jogo encontrado para hoje na seleção atual.",
+
+  "onlyRevealed": "✓ Já vistos",
+  "alreadySeen": "✓ Visto"
 }

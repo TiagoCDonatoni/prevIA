@@ -170,7 +170,15 @@ def product_index(
 
         event_ids = [str(r[0]) for r in rows]
         books_map = _fetch_latest_books_for_events(conn, event_ids)
-        revealed_fixture_keys = _load_revealed_fixture_keys(conn, request)
+        include_revealed = request.query_params.get("include_revealed") == "1"
+
+        revealed_fixture_keys = set()
+
+        if include_revealed:
+            try:
+                revealed_fixture_keys = _load_revealed_fixture_keys(conn, request)
+            except Exception:
+                revealed_fixture_keys = set()
 
         for (
             event_id,

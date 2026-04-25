@@ -37,5 +37,8 @@
   "sortEdge": "Sort by edge",
   "onlyOpportunities": "✦ Only opportunities",
   "upcomingFallbackNotice": "No matches found in the next 24 hours. Showing the next available matches.",
-  "todayEmptyNotice": "No matches found for today in the current selection."
+  "todayEmptyNotice": "No matches found for today in the current selection.",
+
+  "onlyRevealed": "✓ Already viewed",
+  "alreadySeen": "✓ Viewed"
 }

@@ -527,7 +527,8 @@ def create_checkout_session_for_user(
                     provider_product_id,
                     provider_price_id,
                     provider_product_id_live,
-                    provider_price_id_live
+                    provider_price_id_live,
+                    metadata_json
                 FROM billing.plan_prices
                 WHERE plan_code = %(plan_code)s
                   AND billing_cycle = %(billing_cycle)s
@@ -543,12 +544,59 @@ def create_checkout_session_for_user(
                 },
             )
             price_row = cur.fetchone()
+            uses_dynamic_price_data = False
+
+            if price_row is None and currency_code == "USD":
+                cur.execute(
+                    """
+                    SELECT
+                        plan_price_id,
+                        price_code,
+                        currency_code,
+                        unit_amount_cents,
+                        provider_product_id,
+                        provider_price_id,
+                        provider_product_id_live,
+                        provider_price_id_live,
+                        metadata_json
+                    FROM billing.plan_prices
+                    WHERE plan_code = %(plan_code)s
+                      AND billing_cycle = %(billing_cycle)s
+                      AND currency_code = 'BRL'
+                      AND active = TRUE
+                    ORDER BY sort_order ASC, plan_price_id ASC
+                    LIMIT 1
+                    """,
+                    {
+                        "plan_code": plan_code,
+                        "billing_cycle": billing_cycle,
+                    },
+                )
+                price_row = cur.fetchone()
+                uses_dynamic_price_data = True
+
             if price_row is None:
                 raise ValueError("plan_price_not_found_for_currency")
 
             plan_price_id = int(price_row[0])
             price_code = str(price_row[1])
-            executable_currency_code = str(price_row[2] or "BRL").upper()
+            row_currency_code = str(price_row[2] or "BRL").upper()
+            metadata_json = price_row[8] or {}
+
+            executable_currency_code = row_currency_code
+            executable_unit_amount_cents = int(price_row[3])
+
+            if uses_dynamic_price_data:
+                display_amounts = {}
+                if isinstance(metadata_json, dict):
+                    display_amounts = metadata_json.get("display_amounts") or {}
+
+                usd_amount_cents = display_amounts.get("USD")
+                if usd_amount_cents is None:
+                    raise ValueError("plan_price_not_found_for_currency")
+
+                executable_currency_code = "USD"
+                executable_unit_amount_cents = int(usd_amount_cents)
 
             if normalized_runtime == "sandbox":
                 provider_product_id = price_row[4]
@@ -557,7 +605,7 @@ def create_checkout_session_for_user(
                 provider_product_id = price_row[6]
                 provider_price_id = price_row[7]
 
-            if not provider_price_id:
+            if not provider_price_id and not uses_dynamic_price_data:
                 raise ValueError(f"stripe_price_not_configured_for_{normalized_runtime}")
 
             cur.execute(
@@ -591,8 +639,24 @@ def create_checkout_session_for_user(
         "payment_method_types": ["card"],
         "line_items": [
             {
-                "price": provider_price_id,
                 "quantity": 1,
+                **(
+                    {
+                        "price_data": {
+                            "currency": executable_currency_code.lower(),
+                            "unit_amount": executable_unit_amount_cents,
+                            "recurring": {
+                                "interval": "year" if billing_cycle == "annual" else "month",
+                                **({"interval_count": 3} if billing_cycle == "quarterly" else {}),
+                            },
+                            "product_data": {
+                                "name": f"prevIA {plan_code.title()}",
+                            },
+                        }
+                    }
+                    if uses_dynamic_price_data
+                    else {"price": provider_price_id}
+                ),
             }
         ],
         "return_url": return_url,

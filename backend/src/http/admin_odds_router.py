@@ -16,6 +16,7 @@ from src.integrations.theodds.client import TheOddsClient, TheOddsApiError
 from src.internal_access.guards import require_admin_access
 from src.models.one_x_two_logreg_v1 import predict_1x2_from_artifact
 from src.odds.jobs.odds_refresh_resolve_job import run_odds_refresh_and_resolve
+from src.core.season_policy import choose_current_operational_season, resolve_candidate_seasons
 from src.odds.matchup_resolver import (
     _norm_name,
     _upsert_team_alias_auto,
@@ -105,13 +106,19 @@ def _load_approved_league_map(conn, *, sport_key: str) -> Optional[Dict[str, Any
     }
 
 
-def _infer_season_from_core(conn, *, league_id: int) -> Optional[int]:
-    # heurística simples e robusta: pega o maior season existente para essa liga
-    sql = "SELECT MAX(season) FROM core.fixtures WHERE league_id = %(league_id)s"
+def _list_available_core_seasons(conn, *, league_id: int) -> List[int]:
+    sql = """
+      SELECT DISTINCT season
+      FROM core.fixtures
+      WHERE league_id = %(league_id)s
+        AND season IS NOT NULL
+      ORDER BY season DESC
+    """
     with conn.cursor() as cur:
         cur.execute(sql, {"league_id": int(league_id)})
-        row = cur.fetchone()
-    return int(row[0]) if row and row[0] is not None else None
+        rows = cur.fetchall() or []
+
+    return [int(r[0]) for r in rows if r and r[0] is not None]
 
 
 def _effective_league_season_tol(
@@ -134,23 +141,50 @@ def _effective_league_season_tol(
 
     eff_league_id = int(assume_league_id) if assume_league_id is not None else int(lm["league_id"])
 
-    # season: fixed > inferred > assume
+    # precedência real:
+    # assume > fixed > current_window(core) > current_window(default)
+    season_meta: Dict[str, Any] = {}
+
     if assume_season is not None:
         eff_season = int(assume_season)
+        season_meta = {
+            "season_source": "assume",
+            "available_core_seasons": None,
+        }
     elif lm["fixed_season"] is not None:
         eff_season = int(lm["fixed_season"])
+        season_meta = {
+            "season_source": "fixed",
+            "available_core_seasons": None,
+        }
     else:
-        inferred = _infer_season_from_core(conn, league_id=eff_league_id)
-        if inferred is None:
-            raise ValueError(
-                f"Cannot infer season from core.fixtures for league_id={eff_league_id}. "
-                "You likely need to backfill fixtures (API-football)."
+        available_core_seasons = _list_available_core_seasons(conn, league_id=eff_league_id)
+        picked = choose_current_operational_season(available_core_seasons)
+
+        if picked is not None:
+            eff_season = int(picked)
+            season_meta = {
+                "season_source": "current_window_core",
+                "available_core_seasons": available_core_seasons,
+            }
+        else:
+            candidates = resolve_candidate_seasons(
+                season_policy=str(lm["season_policy"] or "current"),
+                fixed_season=None,
             )
-        eff_season = int(inferred)
+            eff_season = int(candidates[0])
+            season_meta = {
+                "season_source": "current_window_default",
+                "available_core_seasons": available_core_seasons,
+                "candidate_seasons": candidates,
+            }
 
     eff_tol = int(tol_hours) if tol_hours is not None else int(lm["tol_hours"] or 6)
 
-    return eff_league_id, eff_season, eff_tol, {"league_map": lm}
+    return eff_league_id, eff_season, eff_tol, {
+        "league_map": lm,
+        "season_resolution": season_meta,
+    }
 
 def _client() -> TheOddsClient:
     s = load_settings()
