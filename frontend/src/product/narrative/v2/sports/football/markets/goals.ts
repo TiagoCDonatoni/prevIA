@@ -210,9 +210,9 @@ function totalsMarketComparisonOptions(
     return [
       langText(
         lang,
-        `${sideLabel} ${line} com valor: odd ${fmtOddValue(best.odd)}, modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} e EV ${fmtSignedPct(best.ev)}.`,
-        `${sideLabel} ${line} shows value: odds ${fmtOddValue(best.odd)}, model ${fmtPct(best.modelProb)} vs market ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} and EV ${fmtSignedPct(best.ev)}.`,
-        `${sideLabel} ${line} tiene valor: odd ${fmtOddValue(best.odd)}, modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} y EV ${fmtSignedPct(best.ev)}.`
+        `Valor no ${sideLabel} ${line}: odd ${fmtOddValue(best.odd)}. Modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}, com edge ${fmtSignedPp(best.edge)} e EV ${fmtSignedPct(best.ev)}.`,
+        `Value on ${sideLabel} ${line}: odds ${fmtOddValue(best.odd)}. Model ${fmtPct(best.modelProb)} vs market ${fmtPct(best.marketProb)}, with edge ${fmtSignedPp(best.edge)} and EV ${fmtSignedPct(best.ev)}.`,
+        `Valor en ${sideLabel} ${line}: odd ${fmtOddValue(best.odd)}. Modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}, con edge ${fmtSignedPp(best.edge)} y EV ${fmtSignedPct(best.ev)}.`
       ),
     ];
   }
