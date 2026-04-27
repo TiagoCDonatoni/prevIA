@@ -1,4 +1,4 @@
-import type { Lang } from "../../../../../i18n";
+import { t, type Lang } from "../../../../../i18n";
 import type { NarrativeProfile } from "../../../core/profiles";
 import type {
   NarrativeBlock,
@@ -73,6 +73,160 @@ function fmtPct(prob: number | null | undefined) {
   return `${(prob * 100).toFixed(1)}%`;
 }
 
+function fmtOddValue(odd: number | null | undefined) {
+  if (typeof odd !== "number" || !Number.isFinite(odd) || odd <= 1) return "—";
+  return odd.toFixed(2);
+}
+
+function fmtSignedPp(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${(value * 100).toFixed(1)} p.p.`;
+}
+
+function fmtSignedPct(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${(value * 100).toFixed(1)}%`;
+}
+
+function canShowTotalsMarketComparison(plan: SportNarrativeRequest["plan"]) {
+  return plan === "LIGHT" || plan === "PRO";
+}
+
+function calcTotalsMarketProbs(bestOver: number | null | undefined, bestUnder: number | null | undefined) {
+  const overOdd =
+    typeof bestOver === "number" && Number.isFinite(bestOver) && bestOver > 1
+      ? bestOver
+      : null;
+  const underOdd =
+    typeof bestUnder === "number" && Number.isFinite(bestUnder) && bestUnder > 1
+      ? bestUnder
+      : null;
+
+  if (overOdd == null || underOdd == null) return null;
+
+  const rawOver = 1 / overOdd;
+  const rawUnder = 1 / underOdd;
+  const total = rawOver + rawUnder;
+
+  if (!Number.isFinite(total) || total <= 0) return null;
+
+  return {
+    over: rawOver / total,
+    under: rawUnder / total,
+    overround: total - 1,
+  };
+}
+
+function totalsMarketComparisonOptions(
+  lang: Lang,
+  plan: SportNarrativeRequest["plan"],
+  line: string,
+  pOver: number | null | undefined,
+  pUnder: number | null | undefined,
+  bestOver: number | null | undefined,
+  bestUnder: number | null | undefined
+) {
+  if (!canShowTotalsMarketComparison(plan)) return [];
+
+  const market = calcTotalsMarketProbs(bestOver, bestUnder);
+  if (!market) return [];
+
+  const candidates = [
+    {
+      side: "over" as const,
+      modelProb: typeof pOver === "number" && Number.isFinite(pOver) ? pOver : null,
+      marketProb: market.over,
+      odd: bestOver,
+    },
+    {
+      side: "under" as const,
+      modelProb: typeof pUnder === "number" && Number.isFinite(pUnder) ? pUnder : null,
+      marketProb: market.under,
+      odd: bestUnder,
+    },
+  ]
+    .filter((item) => {
+      return (
+        item.modelProb != null &&
+        typeof item.odd === "number" &&
+        Number.isFinite(item.odd) &&
+        item.odd > 1
+      );
+    })
+    .map((item) => {
+      const edge = (item.modelProb ?? 0) - item.marketProb;
+      const ev = (item.modelProb ?? 0) * Number(item.odd) - 1;
+
+      return {
+        ...item,
+        edge,
+        ev,
+      };
+    });
+
+  if (!candidates.length) return [];
+
+  const best = [...candidates].sort((a, b) => {
+    if (b.ev !== a.ev) return b.ev - a.ev;
+    return b.edge - a.edge;
+  })[0];
+
+  const sideLabel =
+    best.side === "over"
+      ? langText(lang, "over", "over", "over")
+      : langText(lang, "under", "under", "under");
+
+  const sideSentence =
+    best.side === "over"
+      ? langText(
+          lang,
+          `mais de ${line} gols`,
+          `over ${line} goals`,
+          `más de ${line} goles`
+        )
+      : langText(
+          lang,
+          `menos de ${line} gols`,
+          `under ${line} goals`,
+          `menos de ${line} goles`
+        );
+
+  const hasClearValue = best.edge >= 0.02 && best.ev > 0;
+
+  if (!hasClearValue) {
+    return [
+      langText(
+        lang,
+        `As odds reais de over/under ${line} estão próximas do nosso modelo. Não há valor claro agora.`,
+        `The real over/under ${line} odds are close to our model. There is no clear value right now.`,
+        `Las odds reales de over/under ${line} están cerca de nuestro modelo. No hay valor claro ahora.`
+      ),
+    ];
+  }
+
+  if (plan === "PRO") {
+    return [
+      langText(
+        lang,
+        `${sideLabel} ${line} com valor: odd ${fmtOddValue(best.odd)}, modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} e EV ${fmtSignedPct(best.ev)}.`,
+        `${sideLabel} ${line} shows value: odds ${fmtOddValue(best.odd)}, model ${fmtPct(best.modelProb)} vs market ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} and EV ${fmtSignedPct(best.ev)}.`,
+        `${sideLabel} ${line} tiene valor: odd ${fmtOddValue(best.odd)}, modelo ${fmtPct(best.modelProb)} vs mercado ${fmtPct(best.marketProb)}. Edge ${fmtSignedPp(best.edge)} y EV ${fmtSignedPct(best.ev)}.`
+      ),
+    ];
+  }
+
+  return [
+    langText(
+      lang,
+      `O mercado paga ${fmtOddValue(best.odd)} para ${sideSentence}. Nosso modelo vê ${fmtPct(best.modelProb)}, acima dos ${fmtPct(best.marketProb)} do mercado.`,
+      `The market pays ${fmtOddValue(best.odd)} for ${sideSentence}. Our model sees ${fmtPct(best.modelProb)}, above the market's ${fmtPct(best.marketProb)}.`,
+      `El mercado paga ${fmtOddValue(best.odd)} para ${sideSentence}. Nuestro modelo ve ${fmtPct(best.modelProb)}, por encima del ${fmtPct(best.marketProb)} del mercado.`
+    ),
+  ];
+}
+
 function goalProbFromLambda(lam: number | null | undefined) {
   if (lam == null || !Number.isFinite(lam)) return null;
   return 1 - Math.exp(-lam);
@@ -144,176 +298,98 @@ function classifyBtts(pYes: number | null | undefined, pNo: number | null | unde
   return { direction, strength };
 }
 
-function totalsLabelOptions(lang: Lang, direction: TotalsDirection, strength: TotalsStrength) {
-  if (direction === "balanced" || strength === "balanced") {
-    return [
-      langText(lang, "Linha de gols bem ajustada", "Balanced goal line", "Línea de goles equilibrada"),
-      langText(lang, "Mercado de gols bem parelho", "Even goals market", "Mercado de goles bastante parejo"),
-    ];
-  }
-
-  const key = direction === "over" ? "over" : "under";
-  const labels = {
-    pt: {
-      over: {
-        slight: ["Leve sinal de over", "Over um pouco melhor"],
-        moderate: ["Over com boa cara", "Over melhor posicionado"],
-        strong: ["Over chama atenção", "Over vem forte"],
-      },
-      under: {
-        slight: ["Leve sinal de under", "Under um pouco melhor"],
-        moderate: ["Under com boa cara", "Under melhor posicionado"],
-        strong: ["Under chama atenção", "Under vem forte"],
-      },
-    },
-    en: {
-      over: {
-        slight: ["Slight over signal", "Over looks a bit better"],
-        moderate: ["Over has a decent look", "Over is in the better spot"],
-        strong: ["Over stands out", "Over comes in strong"],
-      },
-      under: {
-        slight: ["Slight under signal", "Under looks a bit better"],
-        moderate: ["Under has a decent look", "Under is in the better spot"],
-        strong: ["Under stands out", "Under comes in strong"],
-      },
-    },
-    es: {
-      over: {
-        slight: ["Leve señal de over", "Over aparece un poco mejor"],
-        moderate: ["Over tiene buena pinta", "Over queda mejor posicionado"],
-        strong: ["Over llama la atención", "Over viene fuerte"],
-      },
-      under: {
-        slight: ["Leve señal de under", "Under aparece un poco mejor"],
-        moderate: ["Under tiene buena pinta", "Under queda mejor posicionado"],
-        strong: ["Under llama la atención", "Under viene fuerte"],
-      },
-    },
-  };
-
-  if (lang === "en") return labels.en[key][strength as Exclude<TotalsStrength, "balanced">];
-  if (lang === "es") return labels.es[key][strength as Exclude<TotalsStrength, "balanced">];
-  return labels.pt[key][strength as Exclude<TotalsStrength, "balanced">];
-}
-
-function totalsHeadlineOptions(
+function totalsLabelOptions(
   lang: Lang,
   direction: TotalsDirection,
-  strength: TotalsStrength
+  strength: TotalsStrength,
+  line: string
 ) {
   if (direction === "balanced" || strength === "balanced") {
     return [
       langText(
         lang,
-        "A linha de {line} gols parece bem ajustada para este jogo.",
-        "The {line} goals line looks well set for this game.",
-        "La línea de {line} goles parece bien ajustada para este partido."
+        "Gols sem tendência clara",
+        "No clear goals lean",
+        "Sin tendencia clara en goles"
       ),
       langText(
         lang,
-        "Aqui o over e o under aparecem bem próximos na leitura.",
-        "Here over and under show up very close in the read.",
-        "Aquí over y under aparecen muy cerca en la lectura."
+        `Linha ${line} bem ajustada`,
+        `Line ${line} looks well set`,
+        `Línea ${line} bien ajustada`
       ),
     ];
   }
 
-  if (direction === "over") {
-    const pt = {
-      slight: [
-        "O jogo aponta um pouco para over {line}.",
-        "Over {line} aparece levemente à frente neste confronto.",
-      ],
-      moderate: [
-        "Over {line} aparece com uma cara interessante aqui.",
-        "Os números dão um apoio razoável para over {line}.",
-      ],
-      strong: [
-        "Over {line} ganha força neste jogo.",
-        "A leitura de gols puxa bem para over {line} aqui.",
-      ],
-    };
-    const en = {
-      slight: [
-        "The game leans a bit toward over {line}.",
-        "Over {line} sits slightly ahead in this matchup.",
-      ],
-      moderate: [
-        "Over {line} has an interesting look here.",
-        "The numbers give fair support to over {line}.",
-      ],
-      strong: [
-        "Over {line} gains real strength in this game.",
-        "The goals read leans strongly toward over {line} here.",
-      ],
-    };
-    const es = {
-      slight: [
-        "El partido apunta un poco hacia over {line}.",
-        "Over {line} aparece ligeramente por delante en este cruce.",
-      ],
-      moderate: [
-        "Over {line} tiene una pinta interesante aquí.",
-        "Los números dan un apoyo razonable para over {line}.",
-      ],
-      strong: [
-        "Over {line} gana fuerza en este partido.",
-        "La lectura de goles tira con fuerza hacia over {line} aquí.",
-      ],
-    };
+  const labels = {
+    pt: {
+      over: {
+        slight: [`Leve chance de mais de ${line} gols`, `Chance um pouco maior para mais de ${line} gols`],
+        moderate: [`Boa chance de mais de ${line} gols`, `Boa probabilidade de over ${line}`],
+        strong: [`Alta chance de mais de ${line} gols`, `Alta probabilidade de over ${line}`],
+      },
+      under: {
+        slight: [`Leve chance de menos de ${line} gols`, `Chance um pouco maior para menos de ${line} gols`],
+        moderate: [`Boa chance de menos de ${line} gols`, `Boa probabilidade de under ${line}`],
+        strong: [`Alta chance de menos de ${line} gols`, `Alta probabilidade de under ${line}`],
+      },
+    },
+    en: {
+      over: {
+        slight: [`Slight chance of over ${line} goals`, `Slightly higher chance of over ${line}`],
+        moderate: [`Good chance of over ${line} goals`, `Good probability of over ${line}`],
+        strong: [`High chance of over ${line} goals`, `High probability of over ${line}`],
+      },
+      under: {
+        slight: [`Slight chance of under ${line} goals`, `Slightly higher chance of under ${line}`],
+        moderate: [`Good chance of under ${line} goals`, `Good probability of under ${line}`],
+        strong: [`High chance of under ${line} goals`, `High probability of under ${line}`],
+      },
+    },
+    es: {
+      over: {
+        slight: [`Leve probabilidad de más de ${line} goles`, `Probabilidad un poco mayor de más de ${line} goles`],
+        moderate: [`Buena probabilidad de más de ${line} goles`, `Buena probabilidad de over ${line}`],
+        strong: [`Alta probabilidad de más de ${line} goles`, `Alta probabilidad de over ${line}`],
+      },
+      under: {
+        slight: [`Leve probabilidad de menos de ${line} goles`, `Probabilidad un poco mayor de menos de ${line} goles`],
+        moderate: [`Buena probabilidad de menos de ${line} goles`, `Buena probabilidad de under ${line}`],
+        strong: [`Alta probabilidad de menos de ${line} goles`, `Alta probabilidad de under ${line}`],
+      },
+    },
+  };
 
-    if (lang === "en") return en[strength as Exclude<TotalsStrength, "balanced">];
-    if (lang === "es") return es[strength as Exclude<TotalsStrength, "balanced">];
-    return pt[strength as Exclude<TotalsStrength, "balanced">];
+  const key = direction === "over" ? "over" : "under";
+  const strengthKey = strength as Exclude<TotalsStrength, "balanced">;
+
+  if (lang === "en") return labels.en[key][strengthKey];
+  if (lang === "es") return labels.es[key][strengthKey];
+  return labels.pt[key][strengthKey];
+}
+
+function totalsHeadlineOptions(
+  lang: Lang,
+  direction: TotalsDirection,
+  strength: TotalsStrength,
+  line: string
+) {
+  const baseKey = "narrative.v2.goals.totals.headline";
+
+  if (direction === "balanced" || strength === "balanced") {
+    return [
+      t(lang, `${baseKey}.balanced.1`, { line }),
+      t(lang, `${baseKey}.balanced.2`, { line }),
+    ];
   }
 
-  const pt = {
-    slight: [
-      "O jogo aponta um pouco para under {line}.",
-      "Under {line} aparece levemente à frente neste confronto.",
-    ],
-    moderate: [
-      "Under {line} aparece com uma cara interessante aqui.",
-      "Os números dão um apoio razoável para under {line}.",
-    ],
-    strong: [
-      "Under {line} ganha força neste jogo.",
-      "A leitura de gols puxa bem para under {line} aqui.",
-    ],
-  };
-  const en = {
-    slight: [
-      "The game leans a bit toward under {line}.",
-      "Under {line} sits slightly ahead in this matchup.",
-    ],
-    moderate: [
-      "Under {line} has an interesting look here.",
-      "The numbers give fair support to under {line}.",
-    ],
-    strong: [
-      "Under {line} gains real strength in this game.",
-      "The goals read leans strongly toward under {line} here.",
-    ],
-  };
-  const es = {
-    slight: [
-      "El partido apunta un poco hacia under {line}.",
-      "Under {line} aparece ligeramente por delante en este cruce.",
-    ],
-    moderate: [
-      "Under {line} tiene una pinta interesante aquí.",
-      "Los números dan un apoyo razonable para under {line}.",
-    ],
-    strong: [
-      "Under {line} gana fuerza en este partido.",
-      "La lectura de goles tira con fuerza hacia under {line} aquí.",
-    ],
-  };
+  const sideKey = direction === "over" ? "over" : "under";
+  const strengthKey = strength as Exclude<TotalsStrength, "balanced">;
 
-  if (lang === "en") return en[strength as Exclude<TotalsStrength, "balanced">];
-  if (lang === "es") return es[strength as Exclude<TotalsStrength, "balanced">];
-  return pt[strength as Exclude<TotalsStrength, "balanced">];
+  return [
+    t(lang, `${baseKey}.${sideKey}.${strengthKey}.1`, { line }),
+    t(lang, `${baseKey}.${sideKey}.${strengthKey}.2`, { line }),
+  ];
 }
 
 function bttsLabelOptions(lang: Lang, direction: BttsDirection, strength: BttsStrength) {
@@ -524,7 +600,7 @@ export function generateFootballGoalsNarrative(
       type: "headline",
       text: choose(
         `${req.eventId}:goals:totals:${totals.direction}:${strength}:label`,
-        totalsLabelOptions(req.lang, totals.direction, strength),
+        totalsLabelOptions(req.lang, totals.direction, strength, line),
         profile.maxHeadlineVariants
       ),
     });
@@ -536,12 +612,32 @@ export function generateFootballGoalsNarrative(
         style,
         choose(
           `${req.eventId}:goals:totals:${totals.direction}:${strength}:headline`,
-          totalsHeadlineOptions(req.lang, totals.direction, strength),
-          profile.maxSummaryVariants,
-          { line }
+          totalsHeadlineOptions(req.lang, totals.direction, strength, line),
+          profile.maxSummaryVariants
         )
       ),
     });
+
+    const totalsMarketComparison = totalsMarketComparisonOptions(
+      req.lang,
+      req.plan,
+      line,
+      req.market?.totals?.pOver,
+      req.market?.totals?.pUnder,
+      req.market?.totals?.bestOver,
+      req.market?.totals?.bestUnder
+    );
+
+    if (totalsMarketComparison.length) {
+      blocks.push({
+        type: req.plan === "PRO" ? "pricePro" : "price",
+        text: choose(
+          `${req.eventId}:goals:totals:${totals.direction}:${strength}:market-comparison`,
+          totalsMarketComparison,
+          profile.maxSummaryVariants
+        ),
+      });
+    }
 
     tags.push(`totals_${totals.direction}_${strength}`);
   }

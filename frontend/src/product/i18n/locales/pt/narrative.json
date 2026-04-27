@@ -57,5 +57,45 @@
       "away": "Fora ({away})",
       "draw": "Empate"
     }
+  },
+  "v2": {
+    "goals": {
+      "totals": {
+        "headline": {
+          "balanced": {
+            "1": "Esse jogo está equilibrado em gols, sem tendência clara para over ou under.",
+            "2": "A linha de {line} gols parece bem ajustada para este jogo."
+          },
+          "over": {
+            "slight": {
+              "1": "Esse jogo tem leve tendência para mais de {line} gols.",
+              "2": "O over {line} aparece um pouco melhor neste jogo."
+            },
+            "moderate": {
+              "1": "Esse jogo tem boa chance de ter mais de {line} gols.",
+              "2": "Nosso modelo indica boa tendência para over {line}."
+            },
+            "strong": {
+              "1": "Esse jogo tem alta chance de ter mais de {line} gols.",
+              "2": "Alta chance de mais de {line} gols neste jogo."
+            }
+          },
+          "under": {
+            "slight": {
+              "1": "Esse jogo tem leve tendência para menos de {line} gols.",
+              "2": "O under {line} aparece um pouco melhor neste jogo."
+            },
+            "moderate": {
+              "1": "Esse jogo tem boa chance de ter poucos gols, abaixo de {line}.",
+              "2": "Nosso modelo indica boa tendência para under {line}."
+            },
+            "strong": {
+              "1": "Esse jogo tem alta chance de ter menos de {line} gols.",
+              "2": "Alta chance de menos de {line} gols neste jogo."
+            }
+          }
+        }
+      }
+    }
   }
 }

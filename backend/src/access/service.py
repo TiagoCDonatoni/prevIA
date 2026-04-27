@@ -18,7 +18,7 @@ def _today_date_key():
     return _utc_now().date()
 
 PERSISTENT_REVEAL_PLAN_CODES = {"BASIC", "LIGHT", "PRO"}
-
+ACTIVE_EVENT_GRACE_MINUTES = 90
 
 def _normalize_plan_code(raw: Any) -> str:
     plan = str(raw or "FREE").strip().upper()
@@ -133,37 +133,30 @@ def _plan_has_persistent_reveals(plan_code: Any) -> bool:
 
 
 def _fetch_revealed_fixture_rows(cur, *, user_id: int, date_key, plan_code: str):
-    if _plan_has_persistent_reveals(plan_code):
-        cur.execute(
-            """
-            SELECT DISTINCT ure.fixture_key
-            FROM access.user_revealed_events ure
-            LEFT JOIN odds.odds_events oe
-              ON CAST(oe.event_id AS TEXT) = ure.fixture_key
-            WHERE ure.user_id = %(user_id)s
-              AND (
-                oe.event_id IS NULL
-                OR oe.commence_time_utc IS NULL
-                OR oe.commence_time_utc >= NOW()
-              )
-            ORDER BY ure.fixture_key ASC
-            """,
-            {"user_id": user_id},
-        )
-        return cur.fetchall()
+    date_clause = "" if _plan_has_persistent_reveals(plan_code) else "AND ure.date_key = %(date_key)s"
 
     cur.execute(
-        """
-        SELECT fixture_key
-        FROM access.user_revealed_events
-        WHERE user_id = %(user_id)s
-          AND date_key = %(date_key)s
-        ORDER BY revealed_at_utc ASC
+        f"""
+        SELECT DISTINCT ure.fixture_key
+        FROM access.user_revealed_events ure
+        LEFT JOIN odds.odds_events oe
+          ON CAST(oe.event_id AS TEXT) = ure.fixture_key
+        WHERE ure.user_id = %(user_id)s
+          {date_clause}
+          AND (
+            oe.event_id IS NULL
+            OR oe.commence_time_utc IS NULL
+            OR oe.commence_time_utc >= NOW() - (%(active_event_grace_minutes)s || ' minutes')::interval
+          )
+        ORDER BY ure.fixture_key ASC
         """,
-        {"user_id": user_id, "date_key": date_key},
+        {
+            "user_id": user_id,
+            "date_key": date_key,
+            "active_event_grace_minutes": ACTIVE_EVENT_GRACE_MINUTES,
+        },
     )
     return cur.fetchall()
-
 
 def _is_fixture_currently_revealed(
     cur,
@@ -173,42 +166,29 @@ def _is_fixture_currently_revealed(
     fixture_key: str,
     plan_code: str,
 ) -> bool:
-    if _plan_has_persistent_reveals(plan_code):
-        cur.execute(
-            """
-            SELECT 1
-            FROM access.user_revealed_events ure
-            LEFT JOIN odds.odds_events oe
-              ON CAST(oe.event_id AS TEXT) = ure.fixture_key
-            WHERE ure.user_id = %(user_id)s
-              AND ure.fixture_key = %(fixture_key)s
-              AND (
-                oe.event_id IS NULL
-                OR oe.commence_time_utc IS NULL
-                OR oe.commence_time_utc >= NOW()
-              )
-            LIMIT 1
-            """,
-            {
-                "user_id": user_id,
-                "fixture_key": fixture_key,
-            },
-        )
-        return cur.fetchone() is not None
+    date_clause = "" if _plan_has_persistent_reveals(plan_code) else "AND ure.date_key = %(date_key)s"
 
     cur.execute(
-        """
+        f"""
         SELECT 1
-        FROM access.user_revealed_events
-        WHERE user_id = %(user_id)s
-          AND date_key = %(date_key)s
-          AND fixture_key = %(fixture_key)s
+        FROM access.user_revealed_events ure
+        LEFT JOIN odds.odds_events oe
+          ON CAST(oe.event_id AS TEXT) = ure.fixture_key
+        WHERE ure.user_id = %(user_id)s
+          AND ure.fixture_key = %(fixture_key)s
+          {date_clause}
+          AND (
+            oe.event_id IS NULL
+            OR oe.commence_time_utc IS NULL
+            OR oe.commence_time_utc >= NOW() - (%(active_event_grace_minutes)s || ' minutes')::interval
+          )
         LIMIT 1
         """,
         {
             "user_id": user_id,
             "date_key": date_key,
             "fixture_key": fixture_key,
+            "active_event_grace_minutes": ACTIVE_EVENT_GRACE_MINUTES,
         },
     )
     return cur.fetchone() is not None
@@ -398,6 +378,17 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                 """,
                 {"user_id": user_id, "date_key": date_key},
             )
+
+            cur.execute(
+                """
+                SELECT credits_used, revealed_count
+                FROM access.user_daily_usage
+                WHERE user_id = %(user_id)s
+                  AND date_key = %(date_key)s
+                FOR UPDATE
+                """,
+                {"user_id": user_id, "date_key": date_key},
+            )
             row = cur.fetchone()
             credits_used = int(row[0]) if row else 0
             revealed_count = int(row[1]) if row else 0
@@ -422,14 +413,6 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                     ),
                 }
 
-            bonus_balance_after = bonus_balance
-            if using_bonus_credit:
-                bonus_balance_after = _consume_one_bonus_credit(
-                    cur,
-                    user_id=user_id,
-                    reason=f"reveal_fixture:{fixture_key}",
-                )
-
             cur.execute(
                 """
                 INSERT INTO access.user_revealed_events (
@@ -442,6 +425,7 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                     %(date_key)s,
                     %(fixture_key)s
                 )
+                ON CONFLICT (user_id, date_key, fixture_key) DO NOTHING
                 """,
                 {
                     "user_id": user_id,
@@ -449,6 +433,27 @@ def reveal_fixture(request: Request, *, fixture_key: str) -> Dict[str, Any]:
                     "fixture_key": fixture_key,
                 },
             )
+
+            if cur.rowcount == 0:
+                return {
+                    "ok": True,
+                    "already_revealed": True,
+                    "consumed_credit": False,
+                    "usage": _build_usage_payload(
+                        credits_used=credits_used,
+                        revealed_count=revealed_count,
+                        base_daily_limit=base_daily_limit,
+                        bonus_balance=bonus_balance,
+                    ),
+                }
+
+            bonus_balance_after = bonus_balance
+            if using_bonus_credit:
+                bonus_balance_after = _consume_one_bonus_credit(
+                    cur,
+                    user_id=user_id,
+                    reason=f"reveal_fixture:{fixture_key}",
+                )   
 
             cur.execute(
                 """

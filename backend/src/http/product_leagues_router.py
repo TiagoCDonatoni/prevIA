@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter
 
 from src.db.pg import pg_conn
 from src.product.model_registry import get_active_model_version
+from src.access.service import ACTIVE_EVENT_GRACE_MINUTES
 
 router = APIRouter(prefix="/product", tags=["product"])
 
@@ -44,6 +45,7 @@ def _derive_country_name(
 @router.get("/leagues")
 def product_leagues():
     now = datetime.now(timezone.utc)
+    active_event_grace_start = now - timedelta(minutes=ACTIVE_EVENT_GRACE_MINUTES)
     mv = get_active_model_version()
 
     sql = """
@@ -54,7 +56,7 @@ def product_leagues():
         FROM product.matchup_snapshot_v1 s
         WHERE s.model_version = %(model_version)s
           AND s.kickoff_utc IS NOT NULL
-          AND s.kickoff_utc >= %(now)s
+          AND s.kickoff_utc >= %(active_event_grace_start)s
         GROUP BY s.sport_key
       )
       SELECT
@@ -86,7 +88,13 @@ def product_leagues():
     items = []
     with pg_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, {"model_version": str(mv), "now": now})
+            cur.execute(
+                sql,
+                {
+                    "model_version": str(mv),
+                    "active_event_grace_start": active_event_grace_start,
+                },
+            )
             rows = cur.fetchall()
 
     for r in rows:

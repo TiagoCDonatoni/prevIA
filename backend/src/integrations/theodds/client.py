@@ -71,7 +71,10 @@ class TheOddsClient:
         odds_format: str = "decimal",
         date_format: str = "iso",
     ) -> Dict[str, Any]:
-        # GET /v4/sports/{sport_key}/events/{event_id}/odds?markets=...
+        """
+        Single-event odds endpoint.
+        Used for additional markets such as btts.
+        """
         return self._get(
             f"/sports/{sport_key}/events/{event_id}/odds",
             params={

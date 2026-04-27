@@ -19,6 +19,7 @@ from src.http.odds_router import (
 
 from src.auth.service import get_auth_me_payload
 from src.access.service import (
+    ACTIVE_EVENT_GRACE_MINUTES,
     _fetch_revealed_fixture_rows,
     _resolve_product_plan_code,
     _today_date_key,
@@ -90,6 +91,7 @@ def product_index(
     limit: int = Query(200, ge=1, le=1000),
 ) -> OddsEventsResponse:
     now = datetime.now(timezone.utc)
+    active_event_grace_start = now - timedelta(minutes=ACTIVE_EVENT_GRACE_MINUTES)
     end = now + timedelta(hours=int(hours_ahead))
     mv = get_active_model_version()
 
@@ -107,7 +109,7 @@ def product_index(
         WHERE s.sport_key = %(sport_key)s
           AND s.model_version = %(model_version)s
           AND s.kickoff_utc IS NOT NULL
-          AND s.kickoff_utc >= %(now)s
+          AND s.kickoff_utc >= %(active_event_grace_start)s
           AND s.kickoff_utc <= %(end)s
         ORDER BY s.kickoff_utc ASC
         LIMIT %(limit)s
@@ -164,6 +166,7 @@ def product_index(
                     "now": now,
                     "end": end,
                     "limit": int(limit),
+                    "active_event_grace_start": active_event_grace_start,
                 },
             )
             rows = cur.fetchall()

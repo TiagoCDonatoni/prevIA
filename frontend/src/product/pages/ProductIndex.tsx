@@ -64,6 +64,9 @@ const OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60;
 const POSITIVE_EDGE_THRESHOLD = 0.02;
 const NEUTRAL_EDGE_THRESHOLD = -0.02;
 
+const ACTIVE_EVENT_GRACE_MINUTES = 90;
+const ACTIVE_EVENT_GRACE_MS = ACTIVE_EVENT_GRACE_MINUTES * 60 * 1000;
+
 type AnalysisSectionKey = "probabilities" | "goals" | "oddsEdge";
 
 const DEFAULT_ANALYSIS_SECTIONS_OPEN: Record<AnalysisSectionKey, boolean> = {
@@ -177,11 +180,15 @@ function buildEventsCacheKey(input: {
   productMode: ProductIndexMode;
   hoursAhead: number;
   leagueKeys: string[];
+  includeRevealed?: boolean;
+  revealedKeys?: string[];
 }) {
   return [
     input.productMode,
     String(input.hoursAhead),
+    input.includeRevealed ? "revealed" : "public",
     input.leagueKeys.slice().sort().join(","),
+    (input.revealedKeys ?? []).slice().sort().join(","),
   ].join("|");
 }
 
@@ -801,6 +808,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
   const eventsRequestSeqRef = useRef(0);
   const isLoadingEventsRef = useRef(false);
+  const pendingEventsReloadRef = useRef(false);
+  const autoQuoteRequestRef = useRef<string>("");
   const eventsCacheRef = useRef<Record<string, ProductEventsCacheEntry>>({});
 
   const countryOptions = useMemo(() => buildCountryOptions(leagues, lang), [leagues, lang]);
@@ -829,7 +838,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
       const kickoffMs = new Date(kickoffRaw).getTime();
       if (!Number.isFinite(kickoffMs)) continue;
-      if (kickoffMs < nowMs) continue;
+      if (kickoffMs + ACTIVE_EVENT_GRACE_MS < nowMs) continue;
 
       future.push(item.sport_key);
 
@@ -1254,7 +1263,12 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const loadEvents = useCallback(async () => {
     if (!hasLoadedLeaguesOnce) return;
 
-    if (isLoadingEventsRef.current) return;
+    if (isLoadingEventsRef.current) {
+      pendingEventsReloadRef.current = true;
+      return;
+    }
+
+    pendingEventsReloadRef.current = false;
     isLoadingEventsRef.current = true;
 
     const requestSeq = ++eventsRequestSeqRef.current;
@@ -1278,10 +1292,15 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
       const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
       const fetchLeagueKeys = fetchLeagues.map((item) => item.sport_key);
+      const includeRevealed = !isPublicEmbed && store.backendUsage.is_ready;
+      const revealedKeys = includeRevealed ? store.backendUsage.revealed_fixture_keys : [];
+
       const cacheKey = buildEventsCacheKey({
         productMode: mode,
         hoursAhead,
         leagueKeys: fetchLeagueKeys,
+        includeRevealed,
+        revealedKeys,
       });
       const cacheTtlMs = isPublicEmbed ? PUBLIC_EMBED_EVENTS_CACHE_TTL_MS : EVENTS_CACHE_TTL_MS;
       const cached = eventsCacheRef.current[cacheKey] ?? readStoredEventsCache(cacheKey);
@@ -1307,6 +1326,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
             assume_league_id: cfg.league_id,
             assume_season: cfg.assume_season,
             artifact_filename: cfg.artifact_filename ?? undefined,
+            include_revealed: includeRevealed,
           });
 
           return res?.events ?? [];
@@ -1355,11 +1375,28 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     } finally {
       isLoadingEventsRef.current = false;
 
+      const shouldReloadAfterCurrentRun = pendingEventsReloadRef.current;
+      pendingEventsReloadRef.current = false;
+
       if (requestSeq !== eventsRequestSeqRef.current) return;
       setLoadingEvents(false);
       setHasLoadedEventsOnce(true);
+
+      if (shouldReloadAfterCurrentRun) {
+        window.setTimeout(() => {
+          void loadEvents();
+        }, 0);
+      }
     }
-  }, [fetchLeagues, windowMode, hasLoadedLeaguesOnce, isPublicEmbed, mode]);
+  }, [
+    fetchLeagues,
+    windowMode,
+    hasLoadedLeaguesOnce,
+    isPublicEmbed,
+    mode,
+    store.backendUsage.is_ready,
+    store.backendUsage.revealed_fixture_keys,
+  ]);
 
   // Auto-refresh: 12h (fallback) + refresh ao voltar para a aba
   useEffect(() => {
@@ -1494,16 +1531,27 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
   function handleSelectEvent(eventId: string) {
     const nextId = String(eventId);
+    const cachedQuote = quoteCacheByEventId[nextId] ?? null;
 
     if (nextId === String(selectedId)) {
       if (isMobileAnalysisView) {
         setMobileAnalysisOpen(true);
       }
+
+      if (
+        store.isRevealed(nextId) &&
+        !quote &&
+        !quoteLoading &&
+        !analysisOpening
+      ) {
+        void runQuote(nextId);
+      }
+
       return;
     }
 
     setSelectedId(nextId);
-    setQuote(quoteCacheByEventId[nextId] ?? null);
+    setQuote(cachedQuote);
     setQuoteError("");
 
     if (isMobileAnalysisView) {
@@ -1530,9 +1578,57 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     setAnalysisOpening(true);
 
     try {
-      const r = store.backendUsage.is_ready
-        ? await store.revealViaBackend(fixtureKey)
-        : store.tryReveal(fixtureKey);
+      const isAuthenticatedProductUser =
+        !isPublicEmbed &&
+        store.bootstrap.is_ready &&
+        store.bootstrap.user_id != null;
+
+      const isAuthBootstrapPending =
+        !isPublicEmbed &&
+        !store.bootstrap.is_ready;
+
+      if (isAuthBootstrapPending) {
+        setQuoteError(
+          lang === "en"
+            ? "Still loading your account. Please try again in a moment."
+            : lang === "es"
+            ? "Aún estamos cargando tu cuenta. Inténtalo de nuevo en un momento."
+            : "Ainda estamos carregando sua conta. Tente novamente em instantes."
+        );
+        return;
+      }
+
+      if (isAuthenticatedProductUser) {
+        if (store.backendUsage.is_ready && store.isRevealed(fixtureKey)) {
+          await runQuote(fixtureKey);
+          return;
+        }
+
+        const r = await store.revealViaBackend(fixtureKey);
+
+        if (!r.ok) {
+          if (r.reason === "NO_CREDITS") {
+            setUpgradeReason("NO_CREDITS");
+            setUpgradeOpen(true);
+            return;
+          }
+
+          if (r.reason !== "ALREADY_REVEALED") {
+            console.error("Reveal failed:", r.reason);
+            return;
+          }
+        }
+
+        await runQuote(fixtureKey);
+        return;
+      }
+
+      if (store.isRevealed(fixtureKey)) {
+        await runQuote(fixtureKey);
+        return;
+      }
+
+      const r = store.tryReveal(fixtureKey);
 
       if (!r.ok) {
         if (r.reason === "NO_CREDITS") {
@@ -1585,7 +1681,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
       const kickoff = new Date(kickoffRaw);
       if (Number.isNaN(kickoff.getTime())) return false;
-      if (kickoff.getTime() < nowMs) return false;
+      if (kickoff.getTime() + ACTIVE_EVENT_GRACE_MS < nowMs) return false;
 
       if (!hasUsableAnalysisStatus(e.match_status)) return false;
 
@@ -1819,9 +1915,29 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     quote?.edge_summary ??
     (alreadyRevealed ? (selected?.edge_summary ?? null) : null);
 
-  const totalsLine = selectedSnapshot?.totals?.line ?? null;
-  const totalsOver = selectedSnapshot?.totals?.p_over ?? null;
-  const totalsUnder = selectedSnapshot?.totals?.p_under ?? null;
+  const selectedTotals = selectedSnapshot?.totals as
+    | {
+        line?: number | null;
+        main_line?: number | null;
+        p_over?: number | null;
+        p_under?: number | null;
+        best_over?: number | null;
+        best_under?: number | null;
+        best_odds?: {
+          over?: number | null;
+          under?: number | null;
+        } | null;
+      }
+    | null
+    | undefined;
+
+  const totalsLine = selectedTotals?.line ?? selectedTotals?.main_line ?? null;
+  const totalsOver = selectedTotals?.p_over ?? null;
+  const totalsUnder = selectedTotals?.p_under ?? null;
+  const totalsBestOver =
+    selectedTotals?.best_over ?? selectedTotals?.best_odds?.over ?? null;
+  const totalsBestUnder =
+    selectedTotals?.best_under ?? selectedTotals?.best_odds?.under ?? null;
 
   const bttsYes = selectedSnapshot?.btts?.p_yes ?? null;
   const bttsNo = selectedSnapshot?.btts?.p_no ?? null;
@@ -1865,10 +1981,41 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     effectiveMatchStatus === "MODEL_FOUND" ||
     !!selected?.has_model;
 
+  const selectedHasUnlockedPayload =
+    !!selectedUnlockedProbs ||
+    !!selectedUnlockedSnapshot ||
+    !!effectiveEdgeSummary;
+
   const analysisOpened =
-    alreadyRevealed ||
     !!quote ||
-    !!quoteError;
+    !!quoteError ||
+    (alreadyRevealed && selectedHasUnlockedPayload);
+
+  useEffect(() => {
+    const eventId = String(selectedId ?? "").trim();
+    if (!eventId) return;
+    if (!alreadyRevealed) return;
+    if (quote || quoteLoading || analysisOpening) return;
+
+    const cachedQuote = quoteCacheByEventId[eventId] ?? null;
+
+    if (cachedQuote) {
+      setQuote(cachedQuote);
+      return;
+    }
+
+    if (autoQuoteRequestRef.current === eventId) return;
+
+    autoQuoteRequestRef.current = eventId;
+
+    void runQuote(eventId).finally(() => {
+      if (autoQuoteRequestRef.current === eventId) {
+        autoQuoteRequestRef.current = "";
+      }
+    });
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, alreadyRevealed]);
 
   function renderAnalysisPane() {
     return (
@@ -1987,6 +2134,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                         line: totalsLine,
                         pOver: totalsOver,
                         pUnder: totalsUnder,
+                        bestOver: totalsBestOver,
+                        bestUnder: totalsBestUnder,
                       },
                       btts: {
                         pYes: bttsYes,
@@ -2155,6 +2304,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                                   line: totalsLine,
                                   pOver: totalsOver,
                                   pUnder: totalsUnder,
+                                  bestOver: totalsBestOver,
+                                  bestUnder: totalsBestUnder,
                                 },
                                 btts: {
                                   pYes: bttsYes,
@@ -2170,6 +2321,9 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
                             const goalsHeadline = goalsNarrative?.blocks.find((b) => b.type === "headline")?.text;
                             const goalsSummary = goalsNarrative?.blocks.find((b) => b.type === "summary")?.text;
+                            const goalsPrice = goalsNarrative?.blocks.find(
+                              (b) => b.type === "price" || b.type === "pricePro"
+                            )?.text;
 
                             return (
                               <>
@@ -2186,6 +2340,12 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                                       ? totalsInsightHeadline(lang, totalsLine, totalsOver, totalsUnder)
                                       : bttsInsightHeadline(lang, bttsYes))}
                                 </div>
+
+                                {goalsPrice ? (
+                                  <div className="pi-muted" style={{ marginTop: 6 }}>
+                                    {goalsPrice}
+                                  </div>
+                                ) : null}
                               </>
                             );
                           })()}

@@ -56,5 +56,45 @@
       "away": "Away ({away})",
       "draw": "Draw"
     }
+  },
+  "v2": {
+    "goals": {
+      "totals": {
+        "headline": {
+          "balanced": {
+            "1": "This game looks balanced for goals, with no clear over or under lean.",
+            "2": "The {line} goals line looks well set for this game."
+          },
+          "over": {
+            "slight": {
+              "1": "This game has a slight lean toward more than {line} goals.",
+              "2": "Over {line} looks a bit better in this game."
+            },
+            "moderate": {
+              "1": "Esse jogo tem boa chance de ter mais de {line} gols.",
+              "2": "Boa chance de mais de {line} gols neste jogo."
+            },
+            "strong": {
+              "1": "This game has a high chance of going over {line} goals.",
+              "2": "High chance of over {line} goals in this game."
+            }
+          },
+          "under": {
+            "slight": {
+              "1": "This game has a slight lean toward fewer than {line} goals.",
+              "2": "Under {line} looks a bit better in this game."
+            },
+            "moderate": {
+              "1": "Esse jogo tem boa chance de ter poucos gols, abaixo de {line}.",
+              "2": "Boa chance de menos de {line} gols neste jogo."
+            },
+            "strong": {
+              "1": "This game has a high chance of staying under {line} goals.",
+              "2": "High chance of under {line} goals in this game."
+            }
+          }
+        }
+      }
+    }
   }
 }

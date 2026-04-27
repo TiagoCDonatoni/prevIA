@@ -884,12 +884,6 @@ def rebuild_matchup_snapshots_v1(
                 league_id=league_id,
             )
 
-            season_policy_ctx = _load_snapshot_season_policy_context(
-                conn,
-                sport_key=str(ev["sport_key"]),
-                league_id=int(fx["league_id"]),
-            )
-
             estimate = estimate_lambdas_with_fallback(
                 conn,
                 league_id=league_id,
@@ -973,6 +967,12 @@ def rebuild_matchup_snapshots_v1(
         if not fx:
             c["skipped_no_fixture"] += 1
             continue
+
+        season_policy_ctx = _load_snapshot_season_policy_context(
+            conn,
+            sport_key=str(ev["sport_key"]),
+            league_id=int(fx["league_id"]),
+        )
 
         estimate = estimate_lambdas_with_fallback(
             conn,

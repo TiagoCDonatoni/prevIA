@@ -57,5 +57,45 @@
       "away": "Visitante ({away})",
       "draw": "Empate"
     }
+  },
+  "v2": {
+    "goals": {
+      "totals": {
+        "headline": {
+          "balanced": {
+            "1": "Este partido está equilibrado en goles, sin una tendencia clara hacia over o under.",
+            "2": "La línea de {line} goles parece bien ajustada para este partido."
+          },
+          "over": {
+            "slight": {
+              "1": "Este partido tiene una leve tendencia a más de {line} goles.",
+              "2": "Over {line} aparece un poco mejor en este partido."
+            },
+            "moderate": {
+              "1": "Este partido tiene buena probabilidad de superar los {line} goles.",
+              "2": "Buena probabilidad de más de {line} goles en este partido."
+            },
+            "strong": {
+              "1": "Este partido tiene alta probabilidad de superar los {line} goles.",
+              "2": "Alta probabilidad de más de {line} goles en este partido."
+            }
+          },
+          "under": {
+            "slight": {
+              "1": "Este partido tiene una leve tendencia a menos de {line} goles.",
+              "2": "Under {line} aparece un poco mejor en este partido."
+            },
+            "moderate": {
+              "1": "Este partido tiene buena probabilidad de quedar por debajo de {line} goles.",
+              "2": "Buena probabilidad de menos de {line} goles en este partido."
+            },
+            "strong": {
+              "1": "Este partido tiene alta probabilidad de quedar por debajo de {line} goles.",
+              "2": "Alta probabilidad de menos de {line} goles en este partido."
+            }
+          }
+        }
+      }
+    }
   }
 }

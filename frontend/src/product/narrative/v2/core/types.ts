@@ -2,6 +2,7 @@ import type { Lang } from "../../../i18n";
 import type { PlanId } from "../../../entitlements";
 
 export type NarrativeStyleId = "leve" | "equilibrado" | "pro";
+export type NarrativePlanProfileId = "free" | "basic" | "light" | "pro";
 
 export type NarrativeBlockType =
   | "headline"
@@ -57,6 +58,8 @@ export type SportNarrativeRequest = {
       line?: number | null;
       pOver?: number | null;
       pUnder?: number | null;
+      bestOver?: number | null;
+      bestUnder?: number | null;
     } | null;
     btts?: {
       pYes?: number | null;

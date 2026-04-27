@@ -3,6 +3,7 @@
  * Replace these with real fetch calls when the backend is ready.
  */
 import { API_BASE_URL } from "../config";
+import { buildProductRuntimeHeaders } from "../product/api/auth";
 
 import type {
   ArtifactRow,
@@ -656,6 +657,7 @@ export async function productListOddsEvents(params: {
   assume_league_id?: number;
   assume_season?: number;
   artifact_filename?: string;
+  include_revealed?: boolean;
 }): Promise<ProductOddsEventsResponse> {
   const qs = new URLSearchParams();
   qs.set("sport_key", params.sport_key);
@@ -665,10 +667,17 @@ export async function productListOddsEvents(params: {
   if (params.assume_league_id != null) qs.set("assume_league_id", String(params.assume_league_id));
   if (params.assume_season != null) qs.set("assume_season", String(params.assume_season));
   if (params.artifact_filename) qs.set("artifact_filename", params.artifact_filename);
+  if (params.include_revealed) qs.set("include_revealed", "1");
 
   const url = new URL("/product/index", API_BASE_URL);
   url.search = qs.toString();
-  return fetchJson<ProductOddsEventsResponse>(url.toString(), { headers: { Accept: "application/json" } });
+
+  return fetchJson<ProductOddsEventsResponse>(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+  });
 }
 
 export async function productListLeagues(): Promise<ProductLeaguesResponse> {
@@ -680,7 +689,11 @@ export async function productQuoteOdds(req: ProductOddsQuoteRequest): Promise<Pr
   const url = new URL("/odds/quote", API_BASE_URL);
   return fetchJson<ProductOddsQuoteResponse>(url.toString(), {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
     body: JSON.stringify(req),
   });
 }
