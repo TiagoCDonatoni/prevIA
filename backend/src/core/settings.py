@@ -58,8 +58,13 @@ def _env_csv(name: str, default: Optional[List[str]] = None) -> List[str]:
 class Settings:
     apifootball_base_url: str
     apifootball_key: str
-    the_odds_api_base_url: str
-    the_odds_api_key: str
+    oddspapi_base_url: str
+    oddspapi_api_key: str
+    oddspapi_enrichment_enabled: bool
+    oddspapi_monthly_hard_cap: int
+    oddspapi_monthly_reserve: int
+    oddspapi_primary_bookmakers: List[str]
+    oddspapi_secondary_bookmakers: List[str]
 
     db_path: str
     database_url: Optional[str]
@@ -116,6 +121,23 @@ def load_settings() -> Settings:
     apifootball_key = _env_str("APIFOOTBALL_KEY")
     the_odds_api_base_url = _env_str("THE_ODDS_API_BASE_URL")
     the_odds_api_key = _env_str("THE_ODDS_API_KEY")
+
+    oddspapi_base_url = _env_str("ODDSPAPI_BASE_URL", "https://v5.oddspapi.io/pt")
+    oddspapi_api_key = _env_str("ODDSPAPI_API_KEY")
+    oddspapi_enrichment_enabled = _env_bool("ODDSPAPI_ENRICHMENT_ENABLED", default=False)
+    oddspapi_monthly_hard_cap = max(0, _env_int("ODDSPAPI_MONTHLY_HARD_CAP", 250))
+    oddspapi_monthly_reserve = max(0, _env_int("ODDSPAPI_MONTHLY_RESERVE", 20))
+    if oddspapi_monthly_reserve > oddspapi_monthly_hard_cap:
+        oddspapi_monthly_reserve = oddspapi_monthly_hard_cap
+
+    oddspapi_primary_bookmakers = _env_csv(
+        "ODDSPAPI_PRIMARY_BOOKMAKERS",
+        default=["betano", "superbet", "betfair", "sportingbet", "bet365"],
+    )
+    oddspapi_secondary_bookmakers = _env_csv(
+        "ODDSPAPI_SECONDARY_BOOKMAKERS",
+        default=[],
+    )
 
     app_defaults = _read_json(CONFIG_DIR / "app.defaults.json")
     db_path = _env_str("PREVIA_DB_PATH", app_defaults.get("db_path", "data/app.db"))
@@ -203,6 +225,13 @@ def load_settings() -> Settings:
         apifootball_key=apifootball_key,
         the_odds_api_base_url=the_odds_api_base_url,
         the_odds_api_key=the_odds_api_key,
+        oddspapi_base_url=oddspapi_base_url,
+        oddspapi_api_key=oddspapi_api_key,
+        oddspapi_enrichment_enabled=oddspapi_enrichment_enabled,
+        oddspapi_monthly_hard_cap=oddspapi_monthly_hard_cap,
+        oddspapi_monthly_reserve=oddspapi_monthly_reserve,
+        oddspapi_primary_bookmakers=oddspapi_primary_bookmakers,
+        oddspapi_secondary_bookmakers=oddspapi_secondary_bookmakers,
         db_path=db_path,
         database_url=database_url,
         default_lang=default_lang,
