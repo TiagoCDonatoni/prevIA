@@ -15,6 +15,7 @@ from src.integrations.oddspapi.client import (
 )
 from src.odds.provider_event_tracking import (
     get_active_provider_event_map,
+    record_provider_refresh_log,
     should_skip_provider_refresh,
     upsert_provider_event_map,
 )
@@ -1174,46 +1175,149 @@ def _extract_bookmaker_odds(data: Any) -> Dict[str, Any]:
     return {}
 
 
+def _first_non_empty(*values: Any) -> Optional[str]:
+    for value in values:
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _extract_players_from_outcome(outcome: Any) -> List[Dict[str, Any]]:
+    if not isinstance(outcome, dict):
+        return []
+
+    players = outcome.get("players")
+
+    if isinstance(players, list):
+        return [item for item in players if isinstance(item, dict)]
+
+    if isinstance(players, dict):
+        return [item for item in players.values() if isinstance(item, dict)]
+
+    return []
+
+
+def _extract_price_from_outcome(outcome: Any) -> Optional[float]:
+    if not isinstance(outcome, dict):
+        return None
+
+    direct_price = (
+        outcome.get("price")
+        or outcome.get("odds")
+        or outcome.get("decimal")
+        or outcome.get("decimalOdds")
+        or outcome.get("value")
+    )
+
+    direct = _safe_float(direct_price)
+    if direct is not None:
+        return direct
+
+    for player in _extract_players_from_outcome(outcome):
+        player_price = (
+            player.get("price")
+            or player.get("odds")
+            or player.get("decimal")
+            or player.get("decimalOdds")
+            or player.get("value")
+        )
+        parsed = _safe_float(player_price)
+        if parsed is not None:
+            return parsed
+
+    return None
+
+
+def _extract_name_from_outcome(
+    *,
+    outcome_id: Optional[str],
+    outcome: Any,
+) -> Optional[str]:
+    if not isinstance(outcome, dict):
+        return None
+
+    for player in _extract_players_from_outcome(outcome):
+        player_name = _first_non_empty(
+            player.get("name"),
+            player.get("label"),
+            player.get("outcomeName"),
+            player.get("participantName"),
+            player.get("selectionName"),
+        )
+        if player_name:
+            return player_name
+
+    direct_name = _first_non_empty(
+        outcome.get("name"),
+        outcome.get("label"),
+        outcome.get("outcomeName"),
+        outcome.get("participantName"),
+        outcome.get("selectionName"),
+    )
+
+    if direct_name:
+        return direct_name
+
+    # Convenção usada para market 101 / 1X2.
+    if str(outcome_id) == "101":
+        return "home"
+    if str(outcome_id) == "102":
+        return "draw"
+    if str(outcome_id) == "103":
+        return "away"
+
+    return None
+
 def _extract_outcomes_from_market(market: Any) -> List[Dict[str, Any]]:
     if not isinstance(market, dict):
         return []
 
     raw_outcomes = market.get("outcomes")
-    items: List[Any]
 
     if isinstance(raw_outcomes, dict):
-        items = list(raw_outcomes.values())
+        iterable = raw_outcomes.items()
     elif isinstance(raw_outcomes, list):
-        items = raw_outcomes
+        iterable = [(str(index), item) for index, item in enumerate(raw_outcomes)]
     else:
-        items = []
+        iterable = []
 
     outcomes: List[Dict[str, Any]] = []
 
-    for item in items:
+    for outcome_id, item in iterable:
         if not isinstance(item, dict):
             continue
 
-        name = (
-            item.get("name")
-            or item.get("label")
-            or item.get("outcomeName")
-            or item.get("participantName")
-            or item.get("selectionName")
-        )
-
-        price = (
-            item.get("price")
-            or item.get("odds")
-            or item.get("decimal")
-            or item.get("decimalOdds")
-            or item.get("value")
-        )
+        players = _extract_players_from_outcome(item)
 
         outcomes.append(
             {
-                "name": str(name).strip() if name is not None else None,
-                "price": _safe_float(price),
+                "outcome_id": str(outcome_id) if outcome_id is not None else None,
+                "name": _extract_name_from_outcome(
+                    outcome_id=str(outcome_id) if outcome_id is not None else None,
+                    outcome=item,
+                ),
+                "price": _extract_price_from_outcome(item),
+                "player_count": len(players),
+                "players_sample": [
+                    {
+                        "price": _safe_float(
+                            player.get("price")
+                            or player.get("odds")
+                            or player.get("decimal")
+                            or player.get("decimalOdds")
+                            or player.get("value")
+                        ),
+                        "name": _first_non_empty(
+                            player.get("name"),
+                            player.get("label"),
+                            player.get("outcomeName"),
+                            player.get("participantName"),
+                            player.get("selectionName"),
+                        ),
+                        "raw_keys": sorted(list(player.keys()))[:20],
+                    }
+                    for player in players[:3]
+                ],
                 "raw_keys": sorted(list(item.keys()))[:20],
             }
         )
@@ -1221,8 +1325,71 @@ def _extract_outcomes_from_market(market: Any) -> List[Dict[str, Any]]:
     return outcomes
 
 
+def _extract_1x2_from_bookmaker_market(
+    *,
+    bookmaker: str,
+    market: Any,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(market, dict):
+        return None
+
+    outcomes = _extract_outcomes_from_market(market)
+
+    prices_by_outcome_id: Dict[str, Optional[float]] = {
+        str(item.get("outcome_id")): item.get("price")
+        for item in outcomes
+        if item.get("outcome_id") is not None
+    }
+
+    home_price = prices_by_outcome_id.get("101")
+    draw_price = prices_by_outcome_id.get("102")
+    away_price = prices_by_outcome_id.get("103")
+
+    if home_price is None or draw_price is None or away_price is None:
+        return None
+
+    return {
+        "bookmaker": bookmaker,
+        "market_id": "101",
+        "market_active": bool(market.get("marketActive", True)),
+        "bookmaker_market_id": market.get("bookmakerMarketId"),
+        "home": home_price,
+        "draw": draw_price,
+        "away": away_price,
+        "outcomes": outcomes,
+        "raw_keys": sorted(list(market.keys()))[:20],
+    }
+
+
+def _extract_1x2_candidates_from_odds_payload(data: Any) -> List[Dict[str, Any]]:
+    bookmaker_odds = _extract_bookmaker_odds(data)
+    candidates: List[Dict[str, Any]] = []
+
+    for bookmaker_slug, bookmaker_data in bookmaker_odds.items():
+        if not isinstance(bookmaker_data, dict):
+            continue
+
+        markets = bookmaker_data.get("markets")
+        if not isinstance(markets, dict):
+            continue
+
+        market_101 = markets.get("101")
+        if not isinstance(market_101, dict):
+            continue
+
+        parsed = _extract_1x2_from_bookmaker_market(
+            bookmaker=str(bookmaker_slug),
+            market=market_101,
+        )
+
+        if parsed:
+            candidates.append(parsed)
+
+    return sorted(candidates, key=lambda item: item.get("bookmaker") or "")
+
 def _summarize_oddspapi_odds_payload(data: Any) -> Dict[str, Any]:
     bookmaker_odds = _extract_bookmaker_odds(data)
+    one_x_two_candidates = _extract_1x2_candidates_from_odds_payload(data)
 
     bookmaker_summaries: List[Dict[str, Any]] = []
     total_markets = 0
@@ -1295,6 +1462,13 @@ def _summarize_oddspapi_odds_payload(data: Any) -> Dict[str, Any]:
         "bookmaker_count": len(bookmaker_summaries),
         "total_markets_detected": total_markets,
         "total_outcomes_detected": total_outcomes,
+        "one_x_two_candidate_count": len(one_x_two_candidates),
+        "one_x_two_candidates": one_x_two_candidates[:80],
+        "one_x_two_bookmakers": [
+            item["bookmaker"]
+            for item in one_x_two_candidates
+            if item.get("bookmaker")
+        ],
         "bookmakers": bookmaker_summaries[:40],
         "bookmaker_slugs": [item["bookmaker"] for item in bookmaker_summaries],
         "raw_shape": {
@@ -1451,3 +1625,465 @@ def oddspapi_odds_diagnostic(
         result["raw"] = response.data
 
     return result
+
+def _parse_allowed_bookmakers(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+
+    return [
+        item.strip()
+        for item in str(value).split(",")
+        if item and item.strip()
+    ]
+
+
+def _bookmaker_root(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    return raw.split(".")[0].strip()
+
+
+def _bookmaker_is_allowed(
+    *,
+    bookmaker: str,
+    allowed_bookmakers: List[str],
+) -> bool:
+    if not allowed_bookmakers:
+        return True
+
+    bookmaker_token = _normalize_bookmaker_token(bookmaker)
+    bookmaker_root = _bookmaker_root(bookmaker)
+
+    for allowed in allowed_bookmakers:
+        allowed_token = _normalize_bookmaker_token(allowed)
+        allowed_root = _bookmaker_root(allowed)
+
+        if not allowed_token:
+            continue
+
+        if bookmaker_token == allowed_token:
+            return True
+
+        # Permite casar "estrelabet" com "estrelabet.bet.br",
+        # "superbet.ro" com "superbet", etc.
+        if bookmaker_root and allowed_root and bookmaker_root == allowed_root:
+            return True
+
+        if bookmaker_token and allowed_token:
+            if bookmaker_token.startswith(allowed_token) or allowed_token.startswith(bookmaker_token):
+                return True
+
+    return False
+
+
+def _select_1x2_candidates_for_write(
+    *,
+    candidates: List[Dict[str, Any]],
+    allowed_bookmakers: List[str],
+    max_bookmakers: int,
+) -> List[Dict[str, Any]]:
+    max_bookmakers = max(1, min(int(max_bookmakers or 10), 40))
+
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in candidates or []:
+        bookmaker = str(item.get("bookmaker") or "").strip()
+        if not bookmaker:
+            continue
+
+        if bookmaker in seen:
+            continue
+
+        if not _bookmaker_is_allowed(
+            bookmaker=bookmaker,
+            allowed_bookmakers=allowed_bookmakers,
+        ):
+            continue
+
+        home = _safe_float(item.get("home"))
+        draw = _safe_float(item.get("draw"))
+        away = _safe_float(item.get("away"))
+
+        if home is None or draw is None or away is None:
+            continue
+
+        if home <= 1.0 or draw <= 1.0 or away <= 1.0:
+            continue
+
+        selected.append(
+            {
+                "bookmaker": bookmaker,
+                "market_id": item.get("market_id") or "101",
+                "market_active": bool(item.get("market_active", True)),
+                "bookmaker_market_id": item.get("bookmaker_market_id"),
+                "home": home,
+                "draw": draw,
+                "away": away,
+            }
+        )
+        seen.add(bookmaker)
+
+        if len(selected) >= max_bookmakers:
+            break
+
+    return selected
+
+
+def _get_core_fixture_policy_bucket(
+    conn,
+    *,
+    core_fixture_id: int,
+) -> str:
+    sql = """
+      SELECT EXTRACT(EPOCH FROM (kickoff_utc - now())) / 3600.0 AS hours_until
+      FROM core.fixtures
+      WHERE fixture_id = %(fixture_id)s
+      LIMIT 1
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(sql, {"fixture_id": int(core_fixture_id)})
+        row = cur.fetchone()
+
+    if not row:
+        return "unknown"
+
+    hours_until = float(row[0]) if row[0] is not None else None
+    return _policy_bucket(hours_until)
+
+
+def _insert_oddspapi_1x2_snapshots(
+    conn,
+    *,
+    canonical_event_id: str,
+    selected_candidates: List[Dict[str, Any]],
+    captured_at_utc: datetime,
+) -> Dict[str, Any]:
+    sql = """
+      INSERT INTO odds.odds_snapshots_1x2 (
+        event_id,
+        bookmaker,
+        market,
+        odds_home,
+        odds_draw,
+        odds_away,
+        captured_at_utc
+      )
+      VALUES (
+        %(event_id)s,
+        %(bookmaker)s,
+        %(market)s,
+        %(odds_home)s,
+        %(odds_draw)s,
+        %(odds_away)s,
+        %(captured_at_utc)s
+      )
+      ON CONFLICT DO NOTHING
+    """
+
+    inserted = 0
+    skipped = 0
+    rows: List[Dict[str, Any]] = []
+
+    with conn.cursor() as cur:
+        for item in selected_candidates:
+            bookmaker = str(item.get("bookmaker") or "").strip()
+            if not bookmaker:
+                skipped += 1
+                continue
+
+            params = {
+                "event_id": str(canonical_event_id),
+                "bookmaker": f"oddspapi:{bookmaker}",
+                "market": "h2h",
+                "odds_home": _safe_float(item.get("home")),
+                "odds_draw": _safe_float(item.get("draw")),
+                "odds_away": _safe_float(item.get("away")),
+                "captured_at_utc": captured_at_utc,
+            }
+
+            if (
+                params["odds_home"] is None
+                or params["odds_draw"] is None
+                or params["odds_away"] is None
+            ):
+                skipped += 1
+                continue
+
+            cur.execute(sql, params)
+
+            if cur.rowcount == 1:
+                inserted += 1
+            else:
+                skipped += 1
+
+            rows.append(
+                {
+                    "event_id": params["event_id"],
+                    "bookmaker": params["bookmaker"],
+                    "market": params["market"],
+                    "odds_home": float(params["odds_home"]),
+                    "odds_draw": float(params["odds_draw"]),
+                    "odds_away": float(params["odds_away"]),
+                    "captured_at_utc": captured_at_utc.isoformat(),
+                    "inserted": cur.rowcount == 1,
+                }
+            )
+
+    return {
+        "inserted": inserted,
+        "skipped": skipped,
+        "rows": rows,
+    }
+
+
+def oddspapi_write_1x2_snapshots(
+    *,
+    core_fixture_id: Optional[int] = None,
+    allowed_bookmakers: Optional[str] = None,
+    max_bookmakers: int = 10,
+    dry_run: bool = True,
+    force: bool = False,
+    verbosity: int = 2,
+) -> Dict[str, Any]:
+    """
+    Writer controlado de OddsPapi -> odds.odds_snapshots_1x2.
+
+    Atenção:
+    - Consome 1 request real quando não for pulado por refresh log.
+    - Usa provider_event_map já salvo.
+    - Grava somente market 1X2 / h2h.
+    - Não cria evento.
+    - Não altera fixture.
+    - Não entra no run_all.
+    """
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    verbosity = max(1, min(int(verbosity or 2), 5))
+    max_bookmakers = max(1, min(int(max_bookmakers or 10), 40))
+
+    explicit_allowed = _parse_allowed_bookmakers(allowed_bookmakers)
+
+    configured_allowed = list(settings.oddspapi_primary_bookmakers or []) + list(
+        settings.oddspapi_secondary_bookmakers or []
+    )
+
+    effective_allowed = explicit_allowed or configured_allowed
+
+    client = OddspapiClient.from_settings(settings)
+
+    with pg_conn() as conn:
+        mapping = _select_oddspapi_mapping_for_odds(
+            conn,
+            core_fixture_id=core_fixture_id,
+        )
+
+        if not mapping:
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "no_active_oddspapi_mapping",
+                "core_fixture_id": core_fixture_id,
+                "request_count_consumed": 0,
+            }
+
+        core_fixture_id_value = int(mapping.get("core_fixture_id") or 0)
+        canonical_event_id = str(mapping.get("canonical_event_id") or "").strip()
+        provider_event_id = str(mapping.get("provider_event_id") or "").strip()
+
+        if not core_fixture_id_value or not canonical_event_id or not provider_event_id:
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "invalid_mapping",
+                "mapping": mapping,
+                "request_count_consumed": 0,
+            }
+
+        policy_bucket = _get_core_fixture_policy_bucket(
+            conn,
+            core_fixture_id=core_fixture_id_value,
+        )
+
+        skip_info = should_skip_provider_refresh(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            core_fixture_id=core_fixture_id_value,
+            policy_bucket=policy_bucket,
+        )
+
+        if skip_info.get("skip") and not force:
+            return {
+                "ok": True,
+                "provider": PROVIDER_ODDSPAPI,
+                "mode": "write_1x2_snapshots",
+                "skipped": True,
+                "skip_reason": skip_info.get("reason"),
+                "existing_refresh_log": skip_info.get("existing"),
+                "mapping": mapping,
+                "policy_bucket": policy_bucket,
+                "request_count_consumed": 0,
+                "dry_run": bool(dry_run),
+            }
+
+        try:
+            response = client.get_odds(
+                params={
+                    "fixtureId": provider_event_id,
+                    "oddsFormat": "decimal",
+                    "language": "en",
+                    "verbosity": verbosity,
+                },
+                usage_conn=conn,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+        except OddspapiUsageCapReached as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "provider_monthly_operational_cap_reached",
+                "message": str(exc),
+                "mapping": mapping,
+                "request_count_consumed": 0,
+                "usage": status,
+            }
+        except OddspapiClientError as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "oddspapi_client_error",
+                "message": str(exc),
+                "endpoint": exc.endpoint,
+                "status_code": exc.status_code,
+                "payload": exc.payload,
+                "mapping": mapping,
+                "usage": status,
+            }
+
+        all_candidates = _extract_1x2_candidates_from_odds_payload(response.data)
+        selected_candidates = _select_1x2_candidates_for_write(
+            candidates=all_candidates,
+            allowed_bookmakers=effective_allowed,
+            max_bookmakers=max_bookmakers,
+        )
+
+        captured_at_utc = datetime.now(timezone.utc)
+
+        write_result: Dict[str, Any] = {
+            "inserted": 0,
+            "skipped": 0,
+            "rows": [],
+        }
+
+        refresh_log = None
+
+        if not selected_candidates:
+            if not dry_run:
+                refresh_log = record_provider_refresh_log(
+                    conn,
+                    provider=PROVIDER_ODDSPAPI,
+                    core_fixture_id=core_fixture_id_value,
+                    canonical_event_id=canonical_event_id,
+                    provider_event_id=provider_event_id,
+                    policy_bucket=policy_bucket,
+                    status="skipped_no_supported_bookmakers",
+                    error=None,
+                )
+                conn.commit()
+        elif not dry_run:
+            write_result = _insert_oddspapi_1x2_snapshots(
+                conn,
+                canonical_event_id=canonical_event_id,
+                selected_candidates=selected_candidates,
+                captured_at_utc=captured_at_utc,
+            )
+
+            refresh_log = record_provider_refresh_log(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                core_fixture_id=core_fixture_id_value,
+                canonical_event_id=canonical_event_id,
+                provider_event_id=provider_event_id,
+                policy_bucket=policy_bucket,
+                status="ok",
+                error=None,
+            )
+            conn.commit()
+        else:
+            conn.commit()
+
+        status = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "write_1x2_snapshots",
+        "dry_run": bool(dry_run),
+        "request_count_consumed": 1,
+        "endpoint": response.endpoint,
+        "request_url_redacted": response.request_url_redacted,
+        "status_code": response.status_code,
+        "usage_claim": response.usage_claim,
+        "usage": status,
+        "mapping": mapping,
+        "policy_bucket": policy_bucket,
+        "allowed_bookmakers": effective_allowed,
+        "all_1x2_candidate_count": len(all_candidates),
+        "selected_1x2_candidate_count": len(selected_candidates),
+        "selected_1x2_candidates": selected_candidates,
+        "write_result": write_result,
+        "refresh_log": refresh_log,
+        "policy": {
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_snapshots": not bool(dry_run),
+            "bookmaker_prefix": "oddspapi:",
+            "market": "h2h",
+        },
+    }

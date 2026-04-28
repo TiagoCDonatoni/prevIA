@@ -40,6 +40,7 @@ from src.ops.jobs.oddspapi_enrichment import (
     oddspapi_fixture_match_diagnostic,
     oddspapi_manual_confirm_mapping,
     oddspapi_odds_diagnostic,
+    oddspapi_write_1x2_snapshots,
 )
 
 router = APIRouter(
@@ -580,6 +581,24 @@ def admin_ops_oddspapi_odds_diagnostic(
     return oddspapi_odds_diagnostic(
         core_fixture_id=core_fixture_id,
         include_raw=include_raw,
+        verbosity=verbosity,
+    )
+
+@router.post("/odds/enrichment/oddspapi/write/1x2")
+def admin_ops_oddspapi_write_1x2_snapshots(
+    core_fixture_id: Optional[int] = Query(default=None),
+    allowed_bookmakers: Optional[str] = Query(default=None),
+    max_bookmakers: int = Query(default=10, ge=1, le=40),
+    dry_run: bool = Query(default=True),
+    force: bool = Query(default=False),
+    verbosity: int = Query(default=2, ge=1, le=5),
+):
+    return oddspapi_write_1x2_snapshots(
+        core_fixture_id=core_fixture_id,
+        allowed_bookmakers=allowed_bookmakers,
+        max_bookmakers=max_bookmakers,
+        dry_run=dry_run,
+        force=force,
         verbosity=verbosity,
     )
 
