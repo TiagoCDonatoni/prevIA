@@ -1648,6 +1648,7 @@ def _bookmaker_is_allowed(
     *,
     bookmaker: str,
     allowed_bookmakers: List[str],
+    allow_root_match: bool = False,
 ) -> bool:
     if not allowed_bookmakers:
         return True
@@ -1662,17 +1663,20 @@ def _bookmaker_is_allowed(
         if not allowed_token:
             continue
 
+        # Padrão seguro: match exato normalizado.
+        # Ex.: "bet365" casa com "bet365", mas NÃO casa com "bet365.de".
         if bookmaker_token == allowed_token:
             return True
 
-        # Permite casar "estrelabet" com "estrelabet.bet.br",
-        # "superbet.ro" com "superbet", etc.
-        if bookmaker_root and allowed_root and bookmaker_root == allowed_root:
-            return True
-
-        if bookmaker_token and allowed_token:
-            if bookmaker_token.startswith(allowed_token) or allowed_token.startswith(bookmaker_token):
+        # Modo permissivo opcional para diagnóstico/expansão futura.
+        # Ex.: "estrelabet" pode casar com "estrelabet.bet.br" se explicitamente habilitado.
+        if allow_root_match:
+            if bookmaker_root and allowed_root and bookmaker_root == allowed_root:
                 return True
+
+            if bookmaker_token and allowed_token:
+                if bookmaker_token.startswith(allowed_token) or allowed_token.startswith(bookmaker_token):
+                    return True
 
     return False
 
@@ -1682,6 +1686,8 @@ def _select_1x2_candidates_for_write(
     candidates: List[Dict[str, Any]],
     allowed_bookmakers: List[str],
     max_bookmakers: int,
+    allow_root_bookmaker_match: bool = False,
+    include_inactive_markets: bool = False,
 ) -> List[Dict[str, Any]]:
     max_bookmakers = max(1, min(int(max_bookmakers or 10), 40))
 
@@ -1699,7 +1705,13 @@ def _select_1x2_candidates_for_write(
         if not _bookmaker_is_allowed(
             bookmaker=bookmaker,
             allowed_bookmakers=allowed_bookmakers,
+            allow_root_match=allow_root_bookmaker_match,
         ):
+            continue
+
+        market_active = bool(item.get("market_active", True))
+
+        if not market_active and not include_inactive_markets:
             continue
 
         home = _safe_float(item.get("home"))
@@ -1716,7 +1728,7 @@ def _select_1x2_candidates_for_write(
             {
                 "bookmaker": bookmaker,
                 "market_id": item.get("market_id") or "101",
-                "market_active": bool(item.get("market_active", True)),
+                "market_active": market_active,
                 "bookmaker_market_id": item.get("bookmaker_market_id"),
                 "home": home,
                 "draw": draw,
@@ -1847,6 +1859,8 @@ def oddspapi_write_1x2_snapshots(
     dry_run: bool = True,
     force: bool = False,
     verbosity: int = 2,
+    allow_root_bookmaker_match: bool = False,
+    include_inactive_markets: bool = False,
 ) -> Dict[str, Any]:
     """
     Writer controlado de OddsPapi -> odds.odds_snapshots_1x2.
@@ -2003,6 +2017,8 @@ def oddspapi_write_1x2_snapshots(
             candidates=all_candidates,
             allowed_bookmakers=effective_allowed,
             max_bookmakers=max_bookmakers,
+            allow_root_bookmaker_match=allow_root_bookmaker_match,
+            include_inactive_markets=include_inactive_markets,
         )
 
         captured_at_utc = datetime.now(timezone.utc)
@@ -2085,6 +2101,8 @@ def oddspapi_write_1x2_snapshots(
             "writes_snapshots": not bool(dry_run),
             "bookmaker_prefix": "oddspapi:",
             "market": "h2h",
+            "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
+            "include_inactive_markets": bool(include_inactive_markets),
         },
     }
 
@@ -2385,6 +2403,8 @@ def oddspapi_batch_write_1x2_mapped_events(
     dry_run: bool = True,
     force: bool = False,
     verbosity: int = 2,
+    allow_root_bookmaker_match: bool = False,
+    include_inactive_markets: bool = False,
 ) -> Dict[str, Any]:
     """
     Batch manual de OddsPapi para eventos já mapeados.
@@ -2533,6 +2553,8 @@ def oddspapi_batch_write_1x2_mapped_events(
             dry_run=False,
             force=force,
             verbosity=verbosity,
+            allow_root_bookmaker_match=allow_root_bookmaker_match,
+            include_inactive_markets=include_inactive_markets,
         )
 
         consumed = int(write_result.get("request_count_consumed") or 0)
@@ -2582,6 +2604,8 @@ def oddspapi_batch_write_1x2_mapped_events(
             "max_bookmakers_per_event": int(max_bookmakers_per_event),
             "force": bool(force),
             "verbosity": int(verbosity),
+            "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
+            "include_inactive_markets": bool(include_inactive_markets),
         },
         "usage_before": usage_before,
         "usage_after": usage_after,
@@ -2596,6 +2620,8 @@ def oddspapi_batch_write_1x2_mapped_events(
             "writes_snapshots": not bool(dry_run),
             "requires_existing_mapping": True,
             "does_auto_matching": False,
+            "default_exact_bookmaker_match": not bool(allow_root_bookmaker_match),
+            "default_skips_inactive_markets": not bool(include_inactive_markets),
         },
     }
 
@@ -3283,5 +3309,286 @@ def oddspapi_auto_confirm_mappings(
             "writes_mapping": not bool(dry_run),
             "writes_snapshots": False,
             "auto_confirms_mapping": not bool(dry_run),
+        },
+    }
+
+def oddspapi_run_controlled_enrichment(
+    *,
+    window_hours: int = 72,
+    max_events: int = 10,
+    max_external_requests: int = 5,
+    max_candidates_per_event: int = 3,
+    min_score: float = 0.90,
+    min_score_gap: float = 0.15,
+    max_confirmations: int = 10,
+    allowed_bookmakers: Optional[str] = None,
+    max_bookmakers_per_event: int = 8,
+    dry_run: bool = True,
+    force: bool = False,
+    verbosity: int = 2,
+    allow_root_bookmaker_match: bool = False,
+    include_inactive_markets: bool = False,
+) -> Dict[str, Any]:
+    """
+    Runner controlado da integração OddsPapi.
+
+    Fases:
+    1. Auto-confirmar mappings seguros via /fixtures.
+    2. Gravar odds 1X2 via /odds para mappings elegíveis.
+
+    Atenção:
+    - dry_run=True não chama OddsPapi.
+    - dry_run=False respeita max_external_requests total.
+    - Não entra no pipeline run_all.
+    - Não roda no produto em tempo real.
+    """
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    max_events = max(1, min(int(max_events or 10), 100))
+    max_external_requests = max(0, min(int(max_external_requests or 0), 20))
+    max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
+    min_score = max(0.0, min(float(min_score or 0.90), 1.0))
+    min_score_gap = max(0.0, min(float(min_score_gap or 0.15), 1.0))
+    max_confirmations = max(1, min(int(max_confirmations or 10), 50))
+    max_bookmakers_per_event = max(1, min(int(max_bookmakers_per_event or 8), 40))
+    verbosity = max(1, min(int(verbosity or 2), 5))
+
+    with pg_conn() as conn:
+        usage_before = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+
+        unmapped_candidates = _select_unmapped_core_events_for_oddspapi_auto_match(
+            conn,
+            window_hours=window_hours,
+            limit=max_events,
+        )
+
+    if dry_run:
+        write_plan = oddspapi_batch_write_1x2_mapped_events(
+            window_hours=window_hours,
+            max_events=max_events,
+            max_external_requests=max_external_requests,
+            allowed_bookmakers=allowed_bookmakers,
+            max_bookmakers_per_event=max_bookmakers_per_event,
+            dry_run=True,
+            force=force,
+            verbosity=verbosity,
+            allow_root_bookmaker_match=allow_root_bookmaker_match,
+            include_inactive_markets=include_inactive_markets,
+        )
+
+        with pg_conn() as conn:
+            usage_after = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+
+        return {
+            "ok": True,
+            "provider": PROVIDER_ODDSPAPI,
+            "mode": "controlled_enrichment_run",
+            "dry_run": True,
+            "request_count_consumed": 0,
+            "usage_before": usage_before,
+            "usage_after": usage_after,
+            "params": {
+                "window_hours": int(window_hours),
+                "max_events": int(max_events),
+                "max_external_requests": int(max_external_requests),
+                "max_candidates_per_event": int(max_candidates_per_event),
+                "min_score": float(min_score),
+                "min_score_gap": float(min_score_gap),
+                "max_confirmations": int(max_confirmations),
+                "allowed_bookmakers": allowed_bookmakers,
+                "max_bookmakers_per_event": int(max_bookmakers_per_event),
+                "force": bool(force),
+                "verbosity": int(verbosity),
+                "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
+                "include_inactive_markets": bool(include_inactive_markets),
+            },
+            "phases": {
+                "auto_confirm_mappings": {
+                    "skipped": True,
+                    "reason": "dry_run_does_not_call_oddspapi_fixtures",
+                    "eligible_unmapped_count": len(unmapped_candidates),
+                    "eligible_unmapped_sample": unmapped_candidates[:20],
+                    "would_consume_requests_if_real": 1 if unmapped_candidates else 0,
+                },
+                "write_1x2_snapshots": write_plan,
+            },
+            "counters": {
+                "eligible_unmapped_count": len(unmapped_candidates),
+                "mapped_write_candidate_count": int(
+                    ((write_plan.get("counters") or {}).get("candidate_count")) or 0
+                ),
+                "mapped_would_call_provider": int(
+                    ((write_plan.get("counters") or {}).get("would_call_provider")) or 0
+                ),
+                "request_count_consumed": 0,
+            },
+            "policy": {
+                "calls_oddspapi": False,
+                "runs_inside_pipeline_run_all": False,
+                "runs_in_realtime_product": False,
+                "creates_events": False,
+                "updates_event_metadata": False,
+                "writes_mapping": False,
+                "writes_snapshots": False,
+                "dry_run_is_zero_request": True,
+            },
+        }
+
+    request_budget_remaining = int(max_external_requests)
+    request_count_consumed = 0
+
+    auto_confirm_result: Dict[str, Any] = {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "auto_confirm_mappings",
+        "skipped": True,
+        "reason": None,
+        "request_count_consumed": 0,
+    }
+
+    if request_budget_remaining <= 0:
+        auto_confirm_result["reason"] = "max_external_requests_is_zero"
+    elif not unmapped_candidates:
+        auto_confirm_result["reason"] = "no_unmapped_core_events"
+    else:
+        auto_confirm_result = oddspapi_auto_confirm_mappings(
+            window_hours=window_hours,
+            max_events=max_events,
+            max_candidates_per_event=max_candidates_per_event,
+            min_score=min_score,
+            min_score_gap=min_score_gap,
+            max_confirmations=max_confirmations,
+            dry_run=False,
+        )
+
+        consumed = int(auto_confirm_result.get("request_count_consumed") or 0)
+        request_count_consumed += consumed
+        request_budget_remaining = max(0, request_budget_remaining - consumed)
+
+    if request_budget_remaining <= 0:
+        write_result: Dict[str, Any] = {
+            "ok": True,
+            "provider": PROVIDER_ODDSPAPI,
+            "mode": "batch_write_1x2_mapped_events",
+            "skipped": True,
+            "reason": "request_budget_exhausted_before_write_phase",
+            "request_count_consumed": 0,
+            "dry_run": False,
+        }
+    else:
+        write_result = oddspapi_batch_write_1x2_mapped_events(
+            window_hours=window_hours,
+            max_events=max_events,
+            max_external_requests=request_budget_remaining,
+            allowed_bookmakers=allowed_bookmakers,
+            max_bookmakers_per_event=max_bookmakers_per_event,
+            dry_run=False,
+            force=force,
+            verbosity=verbosity,
+            allow_root_bookmaker_match=allow_root_bookmaker_match,
+            include_inactive_markets=include_inactive_markets,
+        )
+
+        consumed = int(write_result.get("request_count_consumed") or 0)
+        request_count_consumed += consumed
+        request_budget_remaining = max(0, request_budget_remaining - consumed)
+
+    with pg_conn() as conn:
+        usage_after = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+
+    return {
+        "ok": bool(auto_confirm_result.get("ok") is True and write_result.get("ok") is True),
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "controlled_enrichment_run",
+        "dry_run": False,
+        "request_count_consumed": int(request_count_consumed),
+        "request_budget_remaining": int(request_budget_remaining),
+        "usage_before": usage_before,
+        "usage_after": usage_after,
+        "params": {
+            "window_hours": int(window_hours),
+            "max_events": int(max_events),
+            "max_external_requests": int(max_external_requests),
+            "max_candidates_per_event": int(max_candidates_per_event),
+            "min_score": float(min_score),
+            "min_score_gap": float(min_score_gap),
+            "max_confirmations": int(max_confirmations),
+            "allowed_bookmakers": allowed_bookmakers,
+            "max_bookmakers_per_event": int(max_bookmakers_per_event),
+            "force": bool(force),
+            "verbosity": int(verbosity),
+            "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
+            "include_inactive_markets": bool(include_inactive_markets),
+        },
+        "phases": {
+            "auto_confirm_mappings": auto_confirm_result,
+            "write_1x2_snapshots": write_result,
+        },
+        "counters": {
+            "eligible_unmapped_before_run": len(unmapped_candidates),
+            "auto_confirm_request_count": int(
+                auto_confirm_result.get("request_count_consumed") or 0
+            ),
+            "write_request_count": int(
+                write_result.get("request_count_consumed") or 0
+            ),
+            "request_count_consumed": int(request_count_consumed),
+            "auto_confirmed": int(
+                ((auto_confirm_result.get("counters") or {}).get("confirmed")) or 0
+            ),
+            "write_executed": int(
+                ((write_result.get("counters") or {}).get("executed")) or 0
+            ),
+            "write_inserted_snapshots": int(
+                ((write_result.get("counters") or {}).get("inserted_snapshots")) or 0
+            ),
+        },
+        "policy": {
+            "calls_oddspapi": True,
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_mapping": True,
+            "writes_snapshots": True,
+            "max_external_requests_total_enforced": True,
+            "default_exact_bookmaker_match": not bool(allow_root_bookmaker_match),
+            "default_skips_inactive_markets": not bool(include_inactive_markets),
         },
     }
