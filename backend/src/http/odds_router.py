@@ -322,16 +322,45 @@ def _book_key(raw: Optional[str]) -> str:
         v = v.replace("__", "_")
     return v.strip("_") or "unknown"
 
+
 _AFF_CACHE: Optional[Dict[str, Dict[str, str]]] = None
 
-def _book_key(raw: Optional[str]) -> str:
-    v = (raw or "").strip().lower()
-    v = v.replace("&", "and")
-    for ch in [" ", "-", ".", ",", "/", "\\", "(", ")", "[", "]", "{", "}", "’", "'", "\""]:
-        v = v.replace(ch, "_")
-    while "__" in v:
-        v = v.replace("__", "_")
-    return v.strip("_") or "unknown"
+
+_ODDSPAPI_BOOKMAKER_DISPLAY_NAMES: Dict[str, str] = {
+    "bet365": "Bet365",
+    "betano": "Betano",
+    "betfair-ex": "Betfair Exchange",
+    "blaze": "Blaze",
+    "estrelabet": "EstrelaBet",
+    "sportingbet": "Sportingbet",
+    "stake": "Stake",
+    "superbet": "Superbet",
+    "betnacional": "Betnacional",
+    "kto": "KTO",
+    "pixbet": "Pixbet",
+    "pagbet": "PagBet",
+}
+
+
+def _book_display_name(raw: Optional[str]) -> str:
+    bookmaker = str(raw or "").strip()
+    if not bookmaker:
+        return "unknown"
+
+    if bookmaker.lower().startswith("oddspapi:"):
+        slug = bookmaker.split(":", 1)[1].strip().lower()
+        if slug in _ODDSPAPI_BOOKMAKER_DISPLAY_NAMES:
+            return _ODDSPAPI_BOOKMAKER_DISPLAY_NAMES[slug]
+
+        return (
+            slug.replace("_", " ")
+            .replace("-", " ")
+            .strip()
+            .title()
+            or bookmaker
+        )
+
+    return bookmaker
 
 def _load_affiliates() -> Dict[str, Dict[str, str]]:
     global _AFF_CACHE
@@ -367,7 +396,7 @@ def _snapshots_to_books(rows: List[tuple]) -> List[OddsBook]:
     for (bookmaker, oh, od, oa, captured_at_utc) in rows:
         key = _book_key(bookmaker)
         meta = aff.get(key) or {}
-        raw_name = meta.get("name") or bookmaker or key
+        raw_name = meta.get("name") or _book_display_name(bookmaker) or key
         name = str(raw_name).strip() or key
 
         is_aff = key in aff
