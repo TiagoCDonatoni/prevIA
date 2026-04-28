@@ -27,6 +27,13 @@ from src.core.season_policy import (
     resolve_candidate_seasons,
 )
 
+from src.core.settings import load_settings
+from src.odds.provider_usage import (
+    ENDPOINT_GROUP_REST,
+    PROVIDER_ODDSPAPI,
+    get_provider_usage_status,
+)
+
 router = APIRouter(
     prefix="/admin/ops",
     tags=["admin-ops"],
@@ -463,6 +470,65 @@ def _auto_resolve_single_league(cur, sport_key: str) -> dict:
         "suggested_candidate": suggested_candidate,
     }
 
+@router.get("/odds/enrichment/oddspapi/status")
+def admin_ops_oddspapi_enrichment_status():
+    settings = load_settings()
+
+    with pg_conn() as conn:
+        status = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+        conn.commit()
+
+    operational_cap = int(status.get("operational_cap") or 0)
+    request_count = int(status.get("request_count") or 0)
+
+    return {
+        "ok": bool(status.get("ok")),
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "bookmaker_enrichment",
+        "source_of_truth": "current_primary_provider",
+        "enabled": bool(settings.oddspapi_enrichment_enabled),
+        "api_key_set": bool(settings.oddspapi_api_key),
+        "base_url": settings.oddspapi_base_url,
+        "usage": {
+            "month_start_utc": status.get("month_start_utc"),
+            "request_count": request_count,
+            "hard_cap": int(status.get("hard_cap") or settings.oddspapi_monthly_hard_cap),
+            "reserve": int(status.get("reserve") or settings.oddspapi_monthly_reserve),
+            "operational_cap": operational_cap,
+            "remaining_operational": int(status.get("remaining_operational") or 0),
+            "is_capped": bool(status.get("is_capped")),
+        },
+        "bookmakers": {
+            "primary": settings.oddspapi_primary_bookmakers,
+            "secondary": settings.oddspapi_secondary_bookmakers,
+        },
+        "last_request": {
+            "endpoint": status.get("last_endpoint"),
+            "at_utc": status.get("last_request_at_utc"),
+            "status": status.get("last_status"),
+            "error": status.get("last_error"),
+        },
+        "policy": {
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_snapshots_only": True,
+            "eligible_events": {
+                "sport": "soccer",
+                "window_hours_ahead": 72,
+                "requires_core_resolved_fixture": True,
+                "skip_started_or_finished": True,
+            },
+        },
+    }
+
 @router.post("/odds/refresh")
 def admin_ops_odds_refresh(
     sport_key: str = Query(..., min_length=3),
@@ -854,8 +920,13 @@ def admin_ops_league_map_autoclassify():
 def admin_ops_league_map_discover_candidates(
     default_enabled: bool = False,
     auto_resolve: bool = True,
+    all_sports: bool = True,
 ):
-    catalog_sync = _run_admin_job("odds_catalog_sync", sync_odds_sport_catalog)
+    catalog_sync = _run_admin_job(
+        "odds_catalog_sync",
+        sync_odds_sport_catalog,
+        all_sports=all_sports,
+    )
     gap_scan = _run_admin_job(
         "odds_league_gap_scan",
         odds_league_gap_scan,
@@ -881,7 +952,11 @@ def admin_ops_league_map_discover_candidates(
                     """
                     select m.sport_key
                     from odds.odds_league_map m
+                    join odds.odds_sport_catalog c on c.sport_key = m.sport_key
                     where coalesce(m.league_id, 0) = 0
+                      and m.mapping_status = 'pending'
+                      and c.sport_group = 'Soccer'
+                      and m.sport_key like 'soccer_%'
                     order by m.sport_key
                     """
                 )
@@ -929,6 +1004,7 @@ def admin_ops_league_map_discover_candidates(
         "summary": {
             "catalog_upserted": int((catalog_sync.get("counters") or {}).get("catalog_upserted") or 0),
             "sports_seen": int((catalog_sync.get("counters") or {}).get("sports_seen") or 0),
+            "all_sports": bool((catalog_sync.get("counters") or {}).get("all_sports") or False),
             "inserted": int((gap_scan.get("counters") or {}).get("inserted") or 0),
             "inserted_pending": int((gap_scan.get("counters") or {}).get("inserted_pending") or 0),
             "inserted_ignored": int((gap_scan.get("counters") or {}).get("inserted_ignored") or 0),
@@ -1128,7 +1204,11 @@ def admin_ops_auto_resolve_leagues(only_unresolved: bool = True):
                     """
                     select m.sport_key
                     from odds.odds_league_map m
+                    join odds.odds_sport_catalog c on c.sport_key = m.sport_key
                     where coalesce(m.league_id, 0) = 0
+                      and m.mapping_status = 'pending'
+                      and c.sport_group = 'Soccer'
+                      and m.sport_key like 'soccer_%'
                     order by m.sport_key
                     """
                 )

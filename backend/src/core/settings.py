@@ -58,6 +58,10 @@ def _env_csv(name: str, default: Optional[List[str]] = None) -> List[str]:
 class Settings:
     apifootball_base_url: str
     apifootball_key: str
+
+    the_odds_api_base_url: str
+    the_odds_api_key: str
+
     oddspapi_base_url: str
     oddspapi_api_key: str
     oddspapi_enrichment_enabled: bool
