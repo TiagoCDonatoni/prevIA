@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
@@ -2596,5 +2596,377 @@ def oddspapi_batch_write_1x2_mapped_events(
             "writes_snapshots": not bool(dry_run),
             "requires_existing_mapping": True,
             "does_auto_matching": False,
+        },
+    }
+
+def _select_unmapped_core_events_for_oddspapi_auto_match(
+    conn,
+    *,
+    window_hours: int,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    limit = max(1, min(int(limit or 10), 100))
+
+    sql = """
+      SELECT
+        oe.event_id,
+        oe.sport_key,
+        oe.commence_time_utc,
+        oe.home_name AS odds_home_name,
+        oe.away_name AS odds_away_name,
+        oe.resolved_fixture_id,
+
+        f.fixture_id,
+        f.kickoff_utc,
+        f.status_short,
+        f.status_long,
+        f.is_finished,
+        f.is_cancelled,
+        EXTRACT(EPOCH FROM (f.kickoff_utc - now())) / 3600.0 AS hours_until,
+
+        l.league_id,
+        l.name AS league_name,
+        l.country_name AS league_country_name,
+
+        ht.name AS core_home_name,
+        at.name AS core_away_name
+
+      FROM odds.odds_events oe
+      JOIN core.fixtures f
+        ON f.fixture_id = oe.resolved_fixture_id
+      JOIN core.leagues l
+        ON l.league_id = f.league_id
+      JOIN core.teams ht
+        ON ht.team_id = f.home_team_id
+      JOIN core.teams at
+        ON at.team_id = f.away_team_id
+
+      LEFT JOIN odds.provider_event_map pem
+        ON pem.provider = %(provider)s
+       AND pem.core_fixture_id = f.fixture_id
+       AND pem.active = true
+
+      WHERE oe.resolved_fixture_id IS NOT NULL
+        AND oe.sport_key LIKE 'soccer_%%'
+        AND pem.provider_event_id IS NULL
+        AND f.kickoff_utc > now()
+        AND f.kickoff_utc <= now() + (%(window_hours)s || ' hours')::interval
+        AND COALESCE(f.is_finished, false) = false
+        AND COALESCE(f.is_cancelled, false) = false
+        AND COALESCE(f.status_short, 'NS') NOT IN (
+          '1H', 'HT', '2H', 'ET', 'P', 'FT', 'AET', 'PEN', 'BT',
+          'SUSP', 'INT', 'PST', 'CANC', 'ABD', 'AWD', 'WO'
+        )
+      ORDER BY f.kickoff_utc ASC, oe.sport_key ASC, oe.event_id ASC
+      LIMIT %(limit)s
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "provider": PROVIDER_ODDSPAPI,
+                "window_hours": int(window_hours),
+                "limit": int(limit),
+            },
+        )
+        rows = cur.fetchall() or []
+
+    items: List[Dict[str, Any]] = []
+
+    for row in rows:
+        hours_until = float(row[12]) if row[12] is not None else None
+
+        items.append(
+            {
+                "event_id": str(row[0]),
+                "sport_key": str(row[1]),
+                "commence_time_utc": row[2].isoformat() if row[2] else None,
+                "odds_home_name": str(row[3]) if row[3] is not None else None,
+                "odds_away_name": str(row[4]) if row[4] is not None else None,
+                "resolved_fixture_id": int(row[5]) if row[5] is not None else None,
+                "fixture_id": int(row[6]) if row[6] is not None else None,
+                "kickoff_utc": row[7].isoformat() if row[7] else None,
+                "status_short": str(row[8]) if row[8] is not None else None,
+                "status_long": str(row[9]) if row[9] is not None else None,
+                "is_finished": bool(row[10]),
+                "is_cancelled": bool(row[11]),
+                "hours_until": round(hours_until, 3) if hours_until is not None else None,
+                "policy_bucket": _policy_bucket(hours_until),
+                "league_id": int(row[13]) if row[13] is not None else None,
+                "league_name": str(row[14]) if row[14] is not None else None,
+                "league_country_name": str(row[15]) if row[15] is not None else None,
+                "core_home_name": str(row[16]) if row[16] is not None else None,
+                "core_away_name": str(row[17]) if row[17] is not None else None,
+            }
+        )
+
+    return items
+
+
+def _score_auto_match_candidates_for_core_event(
+    *,
+    core_event: Dict[str, Any],
+    fixture_items: List[Dict[str, Any]],
+    max_candidates_per_event: int,
+) -> List[Dict[str, Any]]:
+    max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
+
+    scored = [
+        _score_oddspapi_fixture_candidate(
+            core_event={
+                "kickoff_utc": core_event.get("kickoff_utc"),
+                "core_home_name": core_event.get("core_home_name"),
+                "core_away_name": core_event.get("core_away_name"),
+                "league_name": core_event.get("league_name"),
+            },
+            candidate=item,
+        )
+        for item in fixture_items
+    ]
+
+    scored = [
+        item
+        for item in scored
+        if item.get("fixture_id")
+    ]
+
+    scored = sorted(
+        scored,
+        key=lambda item: item.get("scores", {}).get("final_score", 0),
+        reverse=True,
+    )
+
+    return scored[:max_candidates_per_event]
+
+
+def oddspapi_auto_match_diagnostic(
+    *,
+    window_hours: int = 72,
+    max_events: int = 10,
+    max_candidates_per_event: int = 3,
+    min_score: float = 0.90,
+) -> Dict[str, Any]:
+    """
+    Diagnóstico conservador de auto-matching OddsPapi.
+
+    Atenção:
+    - Consome 1 request real quando há eventos unmapped.
+    - Chama /fixtures uma única vez para a janela inteira.
+    - Não grava mapping.
+    - Não grava snapshots.
+    - Não chama /odds.
+    """
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    max_events = max(1, min(int(max_events or 10), 100))
+    max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
+    min_score = max(0.0, min(float(min_score or 0.90), 1.0))
+
+    query_from = datetime.now(timezone.utc).replace(microsecond=0)
+    query_to = query_from + timedelta(hours=window_hours)
+
+    query_from_iso = query_from.isoformat().replace("+00:00", "Z")
+    query_to_iso = query_to.isoformat().replace("+00:00", "Z")
+
+    client = OddspapiClient.from_settings(settings)
+
+    with pg_conn() as conn:
+        core_events = _select_unmapped_core_events_for_oddspapi_auto_match(
+            conn,
+            window_hours=window_hours,
+            limit=max_events,
+        )
+
+        if not core_events:
+            usage = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+
+            return {
+                "ok": True,
+                "provider": PROVIDER_ODDSPAPI,
+                "mode": "auto_match_diagnostic",
+                "request_count_consumed": 0,
+                "reason": "no_unmapped_core_events",
+                "usage": usage,
+                "count": 0,
+                "items": [],
+            }
+
+        try:
+            response = client.get_fixtures(
+                params={
+                    "sportId": 10,
+                    "from": query_from_iso,
+                    "to": query_to_iso,
+                    "statusId": 0,
+                    "hasOdds": "true",
+                    "language": "en",
+                },
+                usage_conn=conn,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+        except OddspapiUsageCapReached as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "provider_monthly_operational_cap_reached",
+                "message": str(exc),
+                "request_count_consumed": 0,
+                "usage": status,
+            }
+        except OddspapiClientError as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "oddspapi_client_error",
+                "message": str(exc),
+                "endpoint": exc.endpoint,
+                "status_code": exc.status_code,
+                "payload": exc.payload,
+                "usage": status,
+            }
+
+        usage = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+        conn.commit()
+
+    fixture_items = _extract_fixture_items(response.data)
+
+    items: List[Dict[str, Any]] = []
+
+    counters = {
+        "core_event_count": len(core_events),
+        "fixtures_returned": len(fixture_items),
+        "likely_match": 0,
+        "ambiguous": 0,
+        "no_match": 0,
+    }
+
+    for core_event in core_events:
+        candidates = _score_auto_match_candidates_for_core_event(
+            core_event=core_event,
+            fixture_items=fixture_items,
+            max_candidates_per_event=max_candidates_per_event,
+        )
+
+        best = candidates[0] if candidates else None
+        second = candidates[1] if len(candidates) > 1 else None
+
+        best_score = float((best or {}).get("scores", {}).get("final_score") or 0)
+        second_score = float((second or {}).get("scores", {}).get("final_score") or 0)
+
+        score_gap = best_score - second_score if best else 0.0
+
+        decision = "no_match"
+
+        if best and best_score >= min_score:
+            if second and score_gap < 0.05:
+                decision = "ambiguous"
+                counters["ambiguous"] += 1
+            else:
+                decision = "likely_match"
+                counters["likely_match"] += 1
+        else:
+            counters["no_match"] += 1
+
+        items.append(
+            {
+                "core_event": core_event,
+                "decision": decision,
+                "min_score": min_score,
+                "best_score": round(best_score, 4),
+                "second_score": round(second_score, 4) if second else None,
+                "score_gap": round(score_gap, 4) if best else None,
+                "best_match": best,
+                "top_candidates": candidates,
+                "would_auto_confirm": decision == "likely_match",
+            }
+        )
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "auto_match_diagnostic",
+        "request_count_consumed": 1,
+        "endpoint": response.endpoint,
+        "request_url_redacted": response.request_url_redacted,
+        "status_code": response.status_code,
+        "usage_claim": response.usage_claim,
+        "usage": usage,
+        "oddspapi_query": {
+            "sportId": 10,
+            "from": query_from_iso,
+            "to": query_to_iso,
+            "statusId": 0,
+            "hasOdds": True,
+            "language": "en",
+        },
+        "params": {
+            "window_hours": int(window_hours),
+            "max_events": int(max_events),
+            "max_candidates_per_event": int(max_candidates_per_event),
+            "min_score": float(min_score),
+        },
+        "counters": counters,
+        "items": items,
+        "policy": {
+            "calls_oddspapi": True,
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_mapping": False,
+            "writes_snapshots": False,
+            "does_auto_matching": True,
+            "auto_confirms_mapping": False,
         },
     }

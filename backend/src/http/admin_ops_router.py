@@ -35,6 +35,7 @@ from src.odds.provider_usage import (
 )
 
 from src.ops.jobs.oddspapi_enrichment import (
+    oddspapi_auto_match_diagnostic,
     oddspapi_batch_write_1x2_mapped_events,
     oddspapi_bookmakers_diagnostic,
     oddspapi_enrichment_dry_run,
@@ -636,6 +637,20 @@ def admin_ops_oddspapi_batch_write_1x2_mapped_events(
         dry_run=dry_run,
         force=force,
         verbosity=verbosity,
+    )
+
+@router.post("/odds/enrichment/oddspapi/diagnostics/auto-match")
+def admin_ops_oddspapi_auto_match_diagnostic(
+    window_hours: int = Query(default=72, ge=1, le=72),
+    max_events: int = Query(default=10, ge=1, le=100),
+    max_candidates_per_event: int = Query(default=3, ge=1, le=10),
+    min_score: float = Query(default=0.90, ge=0.0, le=1.0),
+):
+    return oddspapi_auto_match_diagnostic(
+        window_hours=window_hours,
+        max_events=max_events,
+        max_candidates_per_event=max_candidates_per_event,
+        min_score=min_score,
     )
 
 @router.post("/odds/refresh")
