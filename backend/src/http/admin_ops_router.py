@@ -34,6 +34,8 @@ from src.odds.provider_usage import (
     get_provider_usage_status,
 )
 
+from src.ops.jobs.oddspapi_enrichment import oddspapi_enrichment_dry_run
+
 router = APIRouter(
     prefix="/admin/ops",
     tags=["admin-ops"],
@@ -528,6 +530,18 @@ def admin_ops_oddspapi_enrichment_status():
             },
         },
     }
+
+@router.get("/odds/enrichment/oddspapi/dry-run")
+def admin_ops_oddspapi_enrichment_dry_run(
+    window_hours: int = Query(default=72, ge=1, le=72),
+    limit: int = Query(default=50, ge=1, le=200),
+    respect_refresh_log: bool = Query(default=True),
+):
+    return oddspapi_enrichment_dry_run(
+        window_hours=window_hours,
+        limit=limit,
+        respect_refresh_log=respect_refresh_log,
+    )
 
 @router.post("/odds/refresh")
 def admin_ops_odds_refresh(
