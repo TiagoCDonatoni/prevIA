@@ -7,6 +7,25 @@ export type GlossaryCategory =
   | "bankroll"
   | "strategy";
 
+export type GlossaryContentSection = {
+  title: string;
+  body: string[];
+};
+
+export type GlossaryFaqItem = {
+  question: string;
+  answer: string;
+};
+
+export type GlossaryTermEnhancement = {
+  seoTitle?: string;
+  seoDescription?: string;
+  intro?: string;
+  sections?: GlossaryContentSection[];
+  productNote?: string;
+  faq?: GlossaryFaqItem[];
+};
+
 export type GlossaryTranslation = {
   term: string;
   slug: string;
@@ -21,6 +40,12 @@ export type GlossaryTerm = {
   category: GlossaryCategory;
   translations: Record<Lang, GlossaryTranslation>;
 };
+
+export type GlossaryTermView = {
+  id: string;
+  category: GlossaryCategory;
+} & GlossaryTranslation &
+  GlossaryTermEnhancement;
 
 export const GLOSSARY_CATEGORY_LABELS: Record<
   Lang,
@@ -50,6 +75,410 @@ export const GLOSSARY_CATEGORY_LABELS: Record<
 };
 
 
+const GLOSSARY_TERM_ENRICHMENTS: Record<
+  string,
+  Partial<Record<Lang, GlossaryTermEnhancement>>
+> = {
+  "implied-probability": {
+    pt: {
+      seoTitle:
+        "Probabilidade implícita: o que é e como calcular a partir da odd",
+      seoDescription:
+        "Entenda o que é probabilidade implícita, como converter odds em percentual e por que esse conceito é essencial para comparar preço e valor em apostas.",
+      intro:
+        "Probabilidade implícita é um dos primeiros conceitos que qualquer pessoa precisa entender para sair da leitura superficial de odds. Em vez de olhar apenas se uma odd parece alta ou baixa, ela mostra qual chance percentual está embutida naquele preço.",
+      sections: [
+        {
+          title: "Como calcular probabilidade implícita",
+          body: [
+            "Em odds decimais, o cálculo básico é simples: probabilidade implícita = 1 dividido pela odd. Uma odd 2.00 representa 50% de probabilidade implícita. Uma odd 4.00 representa 25%. Uma odd 1.50 representa aproximadamente 66,7%.",
+            "Esse cálculo não diz, sozinho, se a aposta é boa. Ele apenas traduz o preço para uma linguagem mais clara: percentual de chance. A partir daí, você consegue comparar a leitura do mercado com a sua própria estimativa ou com uma estimativa gerada por modelo.",
+          ],
+        },
+        {
+          title: "Por que isso importa para análise de odds",
+          body: [
+            "Sem converter odd em probabilidade, o apostador fica preso à sensação de preço. Uma odd 3.00 pode parecer atrativa, mas ela exige que o evento aconteça mais de 33,3% das vezes para fazer sentido no longo prazo. Se a chance real for menor que isso, o preço pode estar ruim mesmo parecendo alto.",
+            "A probabilidade implícita também ajuda a entender margem da casa, comparar casas diferentes e identificar quando uma cotação está distante da probabilidade estimada.",
+          ],
+        },
+        {
+          title: "Erro comum",
+          body: [
+            "O erro mais comum é tratar a probabilidade implícita como probabilidade real. A odd publicada carrega margem, liquidez, comportamento do mercado e ajustes da casa. Por isso, ela deve ser lida como uma referência de preço, não como verdade absoluta.",
+          ],
+        },
+      ],
+      productNote:
+        "No prevIA, a probabilidade implícita ajuda a traduzir odds de mercado para uma leitura comparável com probabilidade estimada, odd justa e leitura de valor.",
+      faq: [
+        {
+          question: "Probabilidade implícita é a mesma coisa que chance real?",
+          answer:
+            "Não. Ela mostra a chance embutida na odd, mas essa odd pode incluir margem da casa e distorções de mercado. A chance real depende de uma estimativa própria ou de modelo.",
+        },
+        {
+          question: "Uma odd alta sempre significa boa oportunidade?",
+          answer:
+            "Não. Uma odd alta só é interessante se a chance real do evento for maior do que a probabilidade implícita exigida por aquele preço.",
+        },
+      ],
+    },
+    en: {
+      seoTitle:
+        "Implied probability: what it is and how to calculate it from odds",
+      seoDescription:
+        "Learn what implied probability means, how to convert odds into percentages, and why it matters when comparing price, probability, and value.",
+      intro:
+        "Implied probability is one of the first concepts to understand if you want to read odds beyond intuition. Instead of asking whether a price looks high or low, it shows the percentage chance embedded in that price.",
+      sections: [
+        {
+          title: "How to calculate implied probability",
+          body: [
+            "With decimal odds, the basic calculation is simple: implied probability = 1 divided by the odds. Odds of 2.00 imply 50%. Odds of 4.00 imply 25%. Odds of 1.50 imply roughly 66.7%.",
+            "This calculation does not tell you whether a bet is good by itself. It only translates the price into a clearer language: probability. From there, you can compare the market price with your own estimate or with a model-based estimate.",
+          ],
+        },
+        {
+          title: "Why it matters for odds analysis",
+          body: [
+            "Without converting odds into probability, bettors often rely on price perception alone. Odds of 3.00 may look attractive, but they require the event to happen more than 33.3% of the time to make long-term sense.",
+            "Implied probability also helps with bookmaker margin, line comparison, and spotting prices that may be far from your estimated probability.",
+          ],
+        },
+        {
+          title: "Common mistake",
+          body: [
+            "The most common mistake is treating implied probability as true probability. Listed odds may include bookmaker margin, liquidity, market behavior, and pricing adjustments. They should be read as a price reference, not as absolute truth.",
+          ],
+        },
+      ],
+      productNote:
+        "In prevIA, implied probability helps translate market odds into a format that can be compared with estimated probability, fair odds, and value reading.",
+      faq: [
+        {
+          question: "Is implied probability the same as true probability?",
+          answer:
+            "No. It shows the probability embedded in the odds, but those odds may include bookmaker margin and market distortions. True probability depends on your own estimate or model.",
+        },
+        {
+          question: "Does a high odd always mean a good opportunity?",
+          answer:
+            "No. A high odd is only interesting if the real chance of the event is higher than the implied probability required by that price.",
+        },
+      ],
+    },
+    es: {
+      seoTitle:
+        "Probabilidad implícita: qué es y cómo calcularla desde una cuota",
+      seoDescription:
+        "Entiende qué es la probabilidad implícita, cómo convertir cuotas en porcentajes y por qué importa al comparar precio, probabilidad y valor.",
+      intro:
+        "La probabilidad implícita es uno de los primeros conceptos para leer cuotas con más claridad. En vez de mirar solo si una cuota parece alta o baja, muestra qué probabilidad porcentual está incorporada en ese precio.",
+      sections: [
+        {
+          title: "Cómo calcular la probabilidad implícita",
+          body: [
+            "En cuotas decimales, el cálculo básico es simple: probabilidad implícita = 1 dividido por la cuota. Una cuota 2.00 implica 50%. Una cuota 4.00 implica 25%. Una cuota 1.50 implica aproximadamente 66,7%.",
+            "Este cálculo no dice por sí solo si una apuesta es buena. Solo traduce el precio a un lenguaje más claro: probabilidad. Desde ahí, puedes comparar la lectura del mercado con tu propia estimación o con una estimación de modelo.",
+          ],
+        },
+        {
+          title: "Por qué importa en el análisis de cuotas",
+          body: [
+            "Sin convertir cuotas en probabilidad, el apostador depende demasiado de la sensación de precio. Una cuota 3.00 puede parecer atractiva, pero exige que el evento ocurra más del 33,3% de las veces para tener sentido a largo plazo.",
+            "La probabilidad implícita también ayuda a entender margen de la casa, comparar casas y detectar precios alejados de la probabilidad estimada.",
+          ],
+        },
+        {
+          title: "Error común",
+          body: [
+            "El error más común es tratar la probabilidad implícita como probabilidad real. La cuota publicada puede incluir margen, liquidez, comportamiento del mercado y ajustes de la casa. Debe leerse como referencia de precio, no como verdad absoluta.",
+          ],
+        },
+      ],
+      productNote:
+        "En prevIA, la probabilidad implícita ayuda a traducir cuotas de mercado a una lectura comparable con probabilidad estimada, cuota justa y lectura de valor.",
+      faq: [
+        {
+          question:
+            "¿Probabilidad implícita es lo mismo que probabilidad real?",
+          answer:
+            "No. Muestra la probabilidad incorporada en la cuota, pero esa cuota puede incluir margen de la casa y distorsiones del mercado. La probabilidad real depende de una estimación propia o de modelo.",
+        },
+        {
+          question: "¿Una cuota alta siempre significa una buena oportunidad?",
+          answer:
+            "No. Una cuota alta solo es interesante si la probabilidad real del evento es mayor que la probabilidad implícita exigida por ese precio.",
+        },
+      ],
+    },
+  },
+
+  "fair-odds": {
+    pt: {
+      seoTitle: "Odd justa: o que é, como calcular e comparar com o mercado",
+      seoDescription:
+        "Entenda o que é odd justa, como ela se relaciona com probabilidade real e como comparar esse preço teórico com as odds oferecidas pelo mercado.",
+      intro:
+        "Odd justa é o preço teórico de uma aposta quando você remove margem, comissão e distorções comerciais. Ela representa quanto uma odd deveria pagar se refletisse exatamente a probabilidade estimada de um evento.",
+      sections: [
+        {
+          title: "Como calcular odd justa",
+          body: [
+            "Em odds decimais, a odd justa é o inverso da probabilidade estimada. Se você estima que um evento tem 50% de chance, a odd justa é 2.00. Se estima 25%, a odd justa é 4.00. Se estima 60%, a odd justa é aproximadamente 1.67.",
+            "O ponto central é que a odd justa nasce da probabilidade, não da cotação publicada pela casa. Por isso, ela funciona como uma referência independente para avaliar se o mercado está caro, barato ou próximo do equilíbrio.",
+          ],
+        },
+        {
+          title: "Como comparar odd justa com a odd de mercado",
+          body: [
+            "Se a sua odd justa é 1.67 e o mercado oferece 1.90, o mercado está pagando mais do que o preço teórico estimado. Isso pode indicar valor. Se a sua odd justa é 1.67 e o mercado oferece 1.50, o preço pode estar ruim, mesmo que o evento pareça provável.",
+            "Essa comparação não transforma uma aposta em certeza. Ela apenas organiza a relação entre chance estimada e preço disponível.",
+          ],
+        },
+        {
+          title: "Erro comum",
+          body: [
+            "Um erro comum é achar que odd justa é uma previsão exata. Na prática, ela depende da qualidade da probabilidade estimada. Se a probabilidade estiver mal calculada, a odd justa também estará.",
+          ],
+        },
+      ],
+      productNote:
+        "No prevIA, a odd justa é usada como ponte entre probabilidade estimada e preço de mercado, ajudando o usuário a entender se uma cotação parece acima, abaixo ou próxima do preço teórico.",
+      faq: [
+        {
+          question: "Odd justa garante que existe valor?",
+          answer:
+            "Não. Ela ajuda a comparar preço e probabilidade, mas depende da qualidade da estimativa usada. Valor real exige boa leitura de probabilidade e preço disponível.",
+        },
+        {
+          question: "Odd justa é igual à odd da casa?",
+          answer:
+            "Não necessariamente. A odd da casa inclui margem, ajustes comerciais e movimento de mercado. A odd justa é uma referência teórica sem margem.",
+        },
+      ],
+    },
+    en: {
+      seoTitle: "Fair odds: what they are and how to compare them with market odds",
+      seoDescription:
+        "Understand fair odds, how they relate to true probability, and how to compare theoretical price with market odds.",
+      intro:
+        "Fair odds are the theoretical price of a bet after removing bookmaker margin, commission, and commercial distortions. They represent what odds should pay if they reflected the estimated probability exactly.",
+      sections: [
+        {
+          title: "How to calculate fair odds",
+          body: [
+            "In decimal format, fair odds are the inverse of your estimated probability. If you estimate a 50% chance, fair odds are 2.00. If you estimate 25%, fair odds are 4.00. If you estimate 60%, fair odds are roughly 1.67.",
+            "The key point is that fair odds come from probability, not from the price listed by the bookmaker. This makes them an independent reference for evaluating whether the market price looks expensive, cheap, or balanced.",
+          ],
+        },
+        {
+          title: "How to compare fair odds with market odds",
+          body: [
+            "If your fair odds are 1.67 and the market offers 1.90, the market is paying more than your theoretical price. That may indicate value. If your fair odds are 1.67 and the market offers 1.50, the price may be poor even if the event looks likely.",
+            "This comparison does not make a bet certain. It only organizes the relationship between estimated chance and available price.",
+          ],
+        },
+        {
+          title: "Common mistake",
+          body: [
+            "A common mistake is treating fair odds as an exact prediction. In practice, fair odds depend on the quality of the probability estimate. If the probability is weak, the fair odds will also be weak.",
+          ],
+        },
+      ],
+      productNote:
+        "In prevIA, fair odds connect estimated probability with market price, helping users understand whether a listed price looks above, below, or close to theoretical value.",
+      faq: [
+        {
+          question: "Do fair odds guarantee value?",
+          answer:
+            "No. They help compare price and probability, but they depend on the quality of the estimate. Real value requires both a sound probability estimate and an available market price.",
+        },
+        {
+          question: "Are fair odds the same as bookmaker odds?",
+          answer:
+            "Not necessarily. Bookmaker odds include margin, commercial adjustments, and market movement. Fair odds are a theoretical no-margin reference.",
+        },
+      ],
+    },
+    es: {
+      seoTitle: "Cuota justa: qué es, cómo calcularla y compararla con el mercado",
+      seoDescription:
+        "Entiende qué es cuota justa, cómo se relaciona con probabilidad real y cómo comparar ese precio teórico con las cuotas del mercado.",
+      intro:
+        "La cuota justa es el precio teórico de una apuesta cuando se elimina margen, comisión y distorsiones comerciales. Representa cuánto debería pagar una cuota si reflejara exactamente la probabilidad estimada de un evento.",
+      sections: [
+        {
+          title: "Cómo calcular la cuota justa",
+          body: [
+            "En formato decimal, la cuota justa es el inverso de la probabilidad estimada. Si estimas 50% de probabilidad, la cuota justa es 2.00. Si estimas 25%, es 4.00. Si estimas 60%, es aproximadamente 1.67.",
+            "La idea central es que la cuota justa nace de la probabilidad, no de la cotización publicada por la casa. Por eso funciona como referencia independiente para evaluar si el mercado está caro, barato o equilibrado.",
+          ],
+        },
+        {
+          title: "Cómo comparar cuota justa con cuota de mercado",
+          body: [
+            "Si tu cuota justa es 1.67 y el mercado ofrece 1.90, el mercado paga más que tu precio teórico. Eso puede indicar valor. Si tu cuota justa es 1.67 y el mercado ofrece 1.50, el precio puede ser malo aunque el evento parezca probable.",
+            "Esta comparación no convierte una apuesta en certeza. Solo organiza la relación entre probabilidad estimada y precio disponible.",
+          ],
+        },
+        {
+          title: "Error común",
+          body: [
+            "Un error común es pensar que la cuota justa es una predicción exacta. En la práctica, depende de la calidad de la probabilidad estimada. Si la probabilidad está mal calculada, la cuota justa también lo estará.",
+          ],
+        },
+      ],
+      productNote:
+        "En prevIA, la cuota justa conecta probabilidad estimada y precio de mercado, ayudando a entender si una cotización parece por encima, por debajo o cerca del precio teórico.",
+      faq: [
+        {
+          question: "¿La cuota justa garantiza que hay valor?",
+          answer:
+            "No. Ayuda a comparar precio y probabilidad, pero depende de la calidad de la estimación usada. El valor real exige buena lectura de probabilidad y precio disponible.",
+        },
+        {
+          question: "¿La cuota justa es igual a la cuota de la casa?",
+          answer:
+            "No necesariamente. La cuota de la casa incluye margen, ajustes comerciales y movimiento de mercado. La cuota justa es una referencia teórica sin margen.",
+        },
+      ],
+    },
+  },
+
+  "value-bet": {
+    pt: {
+      seoTitle: "Value bet: o que é e como identificar valor em uma odd",
+      seoDescription:
+        "Entenda o conceito de value bet, por que uma aposta de valor não é aposta certa e como comparar odd de mercado com probabilidade estimada.",
+      intro:
+        "Value bet é uma aposta em que o preço oferecido pelo mercado parece melhor do que a probabilidade real estimada. É um conceito central para quem quer analisar odds com lógica de longo prazo, e não apenas tentar adivinhar resultados.",
+      sections: [
+        {
+          title: "O que caracteriza uma value bet",
+          body: [
+            "Existe value quando a odd disponível paga mais do que deveria segundo uma estimativa de probabilidade. Se um evento tem 60% de chance, a odd justa seria aproximadamente 1.67. Se o mercado oferece 1.90, o preço está acima da referência teórica.",
+            "Isso não significa que a aposta vai vencer. Significa que, se a estimativa estiver correta e situações semelhantes se repetirem muitas vezes, aquele tipo de preço tende a ser favorável.",
+          ],
+        },
+        {
+          title: "Value bet não é certeza",
+          body: [
+            "Uma aposta com valor pode perder. Uma aposta sem valor pode ganhar. O resultado isolado não valida nem invalida a análise. O conceito de value depende de amostra, consistência e comparação entre probabilidade e preço.",
+            "Por isso, value betting é mais próximo de gestão de decisão do que de previsão perfeita. O foco é tomar decisões melhores repetidamente, não acertar todos os jogos.",
+          ],
+        },
+        {
+          title: "Erro comum",
+          body: [
+            "O erro mais perigoso é chamar qualquer odd alta de value. Uma odd só tem valor quando paga mais do que a chance real exige. Sem estimativa de probabilidade, a palavra value vira apenas opinião.",
+          ],
+        },
+      ],
+      productNote:
+        "No prevIA, a leitura de valor aparece quando probabilidade estimada, odd justa e preço de mercado são colocados lado a lado para apoiar uma decisão mais clara.",
+      faq: [
+        {
+          question: "Value bet significa aposta garantida?",
+          answer:
+            "Não. Significa que a relação entre preço e probabilidade parece favorável. Ainda assim, o evento pode perder normalmente.",
+        },
+        {
+          question: "Como saber se uma odd tem valor?",
+          answer:
+            "Você precisa comparar a probabilidade implícita da odd com uma estimativa de probabilidade real. Se a chance estimada for maior que a exigida pela odd, pode haver valor.",
+        },
+      ],
+    },
+    en: {
+      seoTitle: "Value bet: what it is and how to identify value in odds",
+      seoDescription:
+        "Understand value betting, why a value bet is not a guaranteed bet, and how to compare market odds with estimated probability.",
+      intro:
+        "A value bet is a bet where the market price appears better than the estimated true probability. It is central for anyone who wants to analyze odds with long-term logic instead of simply trying to predict results.",
+      sections: [
+        {
+          title: "What makes a value bet",
+          body: [
+            "Value exists when the available odds pay more than they should according to a probability estimate. If an event has a 60% chance, fair odds are roughly 1.67. If the market offers 1.90, the price is above the theoretical reference.",
+            "This does not mean the bet will win. It means that, if the estimate is sound and similar situations repeat many times, that type of price may be favorable.",
+          ],
+        },
+        {
+          title: "Value betting is not certainty",
+          body: [
+            "A value bet can lose. A non-value bet can win. A single result does not prove or disprove the analysis. Value depends on sample size, consistency, and the relationship between probability and price.",
+            "That is why value betting is closer to decision quality than perfect prediction. The goal is to make better decisions repeatedly, not to win every match.",
+          ],
+        },
+        {
+          title: "Common mistake",
+          body: [
+            "The most dangerous mistake is calling any high odd a value bet. Odds only have value when they pay more than the true chance requires. Without probability estimation, value becomes just an opinion.",
+          ],
+        },
+      ],
+      productNote:
+        "In prevIA, value reading appears when estimated probability, fair odds, and market price are shown side by side to support a clearer decision.",
+      faq: [
+        {
+          question: "Does value bet mean guaranteed bet?",
+          answer:
+            "No. It means the relationship between price and probability appears favorable. The event can still lose normally.",
+        },
+        {
+          question: "How do I know if odds have value?",
+          answer:
+            "You need to compare the odds' implied probability with an estimate of true probability. If your estimated chance is higher than the chance required by the odds, there may be value.",
+        },
+      ],
+    },
+    es: {
+      seoTitle: "Value bet: qué es y cómo identificar valor en una cuota",
+      seoDescription:
+        "Entiende el concepto de value bet, por qué una apuesta de valor no es una apuesta segura y cómo comparar cuota de mercado con probabilidad estimada.",
+      intro:
+        "Value bet es una apuesta en la que el precio ofrecido por el mercado parece mejor que la probabilidad real estimada. Es un concepto central para analizar cuotas con lógica de largo plazo, no solo para intentar adivinar resultados.",
+      sections: [
+        {
+          title: "Qué caracteriza una value bet",
+          body: [
+            "Existe value cuando la cuota disponible paga más de lo que debería según una estimación de probabilidad. Si un evento tiene 60% de probabilidad, la cuota justa sería aproximadamente 1.67. Si el mercado ofrece 1.90, el precio está por encima de la referencia teórica.",
+            "Esto no significa que la apuesta vaya a ganar. Significa que, si la estimación es correcta y situaciones similares se repiten muchas veces, ese tipo de precio puede ser favorable.",
+          ],
+        },
+        {
+          title: "Value bet no es certeza",
+          body: [
+            "Una apuesta con valor puede perder. Una apuesta sin valor puede ganar. El resultado aislado no valida ni invalida el análisis. El concepto de value depende de muestra, consistencia y comparación entre probabilidad y precio.",
+            "Por eso, value betting está más cerca de la calidad de decisión que de la predicción perfecta. El objetivo es tomar mejores decisiones repetidamente, no acertar todos los partidos.",
+          ],
+        },
+        {
+          title: "Error común",
+          body: [
+            "El error más peligroso es llamar value a cualquier cuota alta. Una cuota solo tiene valor cuando paga más de lo que exige la probabilidad real. Sin estimación de probabilidad, la palabra value se vuelve solo opinión.",
+          ],
+        },
+      ],
+      productNote:
+        "En prevIA, la lectura de valor aparece cuando probabilidad estimada, cuota justa y precio de mercado se muestran lado a lado para apoyar una decisión más clara.",
+      faq: [
+        {
+          question: "¿Value bet significa apuesta garantizada?",
+          answer:
+            "No. Significa que la relación entre precio y probabilidad parece favorable. Aun así, el evento puede perder normalmente.",
+        },
+        {
+          question: "¿Cómo saber si una cuota tiene valor?",
+          answer:
+            "Debes comparar la probabilidad implícita de la cuota con una estimación de probabilidad real. Si la probabilidad estimada es mayor que la exigida por la cuota, puede haber valor.",
+        },
+      ],
+    },
+  },
+};
 
 
 export const GLOSSARY_TERMS: GlossaryTerm[] = [
@@ -1945,35 +2374,45 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
   }
 ];
 
-export function getGlossaryTerms(lang: Lang) {
-  return GLOSSARY_TERMS.map((term) => ({
+function getGlossaryTermEnhancement(
+  id: string,
+  lang: Lang
+): GlossaryTermEnhancement {
+  return GLOSSARY_TERM_ENRICHMENTS[id]?.[lang] ?? {};
+}
+
+function toGlossaryTermView(term: GlossaryTerm, lang: Lang): GlossaryTermView {
+  return {
     id: term.id,
     category: term.category,
     ...term.translations[lang],
-  }));
+    ...getGlossaryTermEnhancement(term.id, lang),
+  };
 }
 
-export function getGlossaryTermBySlug(lang: Lang, slug: string) {
+export function getGlossaryTerms(lang: Lang): GlossaryTermView[] {
+  return GLOSSARY_TERMS.map((term) => toGlossaryTermView(term, lang));
+}
+
+export function getGlossaryTermBySlug(
+  lang: Lang,
+  slug: string
+): GlossaryTermView | null {
   const found = GLOSSARY_TERMS.find(
     (term) => term.translations[lang].slug === slug
   );
 
   if (!found) return null;
 
-  return {
-    id: found.id,
-    category: found.category,
-    ...found.translations[lang],
-  };
+  return toGlossaryTermView(found, lang);
 }
 
-export function getGlossaryTermById(lang: Lang, id: string) {
+export function getGlossaryTermById(
+  lang: Lang,
+  id: string
+): GlossaryTermView | null {
   const found = GLOSSARY_TERMS.find((term) => term.id === id);
   if (!found) return null;
 
-  return {
-    id: found.id,
-    category: found.category,
-    ...found.translations[lang],
-  };
+  return toGlossaryTermView(found, lang);
 }
