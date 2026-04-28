@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
@@ -13,7 +13,10 @@ from src.integrations.oddspapi.client import (
     OddspapiClientError,
     OddspapiUsageCapReached,
 )
-from src.odds.provider_event_tracking import should_skip_provider_refresh
+from src.odds.provider_event_tracking import (
+    should_skip_provider_refresh,
+    upsert_provider_event_map,
+)
 from src.odds.provider_usage import (
     ENDPOINT_GROUP_REST,
     PROVIDER_ODDSPAPI,
@@ -856,8 +859,14 @@ def oddspapi_fixture_match_diagnostic(
             "request_count_consumed": 0,
         }
 
-    # v4 /fixtures usa datas YYYY-MM-DD. Buscar o dia do jogo é suficiente para diagnóstico.
-    query_date: date = kickoff.date()
+    query_from = kickoff.replace(minute=0, second=0, microsecond=0)
+    query_from = query_from.replace(hour=max(0, query_from.hour - 4))
+
+    query_to = kickoff.replace(minute=0, second=0, microsecond=0)
+    query_to = query_to.replace(hour=min(23, query_to.hour + 4))
+
+    query_from_iso = query_from.isoformat().replace("+00:00", "Z")
+    query_to_iso = query_to.isoformat().replace("+00:00", "Z")
 
     client = OddspapiClient.from_settings(settings)
 
@@ -866,8 +875,11 @@ def oddspapi_fixture_match_diagnostic(
             response = client.get_fixtures(
                 params={
                     "sportId": 10,
-                    "from": query_date.isoformat(),
-                    "to": query_date.isoformat(),
+                    "from": query_from_iso,
+                    "to": query_to_iso,
+                    "statusId": 0,
+                    "hasOdds": "true",
+                    "language": "en",
                 },
                 usage_conn=conn,
                 hard_cap=settings.oddspapi_monthly_hard_cap,
@@ -959,8 +971,13 @@ def oddspapi_fixture_match_diagnostic(
         "core_event": core_event,
         "oddspapi_query": {
             "sportId": 10,
-            "from": query_date.isoformat(),
-            "to": query_date.isoformat(),
+            "from": query_from_iso,
+            "to": query_to_iso,
+            "statusId": 0,
+            "hasOdds": True,
+            "language": "en",
+            "bookmakers_filter_applied": False,
+            "note": "Bookmaker filter intentionally omitted to avoid restricted bookmaker errors during fixture matching.",
         },
         "fixtures_returned": len(fixture_items),
         "min_score": float(min_score),
@@ -973,6 +990,98 @@ def oddspapi_fixture_match_diagnostic(
             "creates_events": False,
             "updates_event_metadata": False,
             "writes_mapping": False,
+            "writes_snapshots": False,
+        },
+    }
+
+def oddspapi_manual_confirm_mapping(
+    *,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Confirma manualmente um mapping entre evento canônico prevIA e fixture OddsPapi.
+
+    Atenção:
+    - Não chama OddsPapi.
+    - Não consome request.
+    - Não grava snapshot.
+    - Não cria evento.
+    - Não altera metadados do evento canônico.
+    """
+
+    provider_event_id = str(payload.get("provider_event_id") or "").strip()
+    canonical_event_id = str(payload.get("canonical_event_id") or "").strip()
+    core_fixture_id = int(payload.get("core_fixture_id") or 0)
+    sport_key = str(payload.get("sport_key") or "").strip()
+    confidence = payload.get("confidence")
+    match_reason = str(payload.get("match_reason") or "manual_fixture_match_confirmed").strip()
+
+    if not provider_event_id:
+        return {
+            "ok": False,
+            "reason": "provider_event_id_required",
+            "request_count_consumed": 0,
+        }
+
+    if not canonical_event_id:
+        return {
+            "ok": False,
+            "reason": "canonical_event_id_required",
+            "request_count_consumed": 0,
+        }
+
+    if not core_fixture_id:
+        return {
+            "ok": False,
+            "reason": "core_fixture_id_required",
+            "request_count_consumed": 0,
+        }
+
+    if not sport_key:
+        return {
+            "ok": False,
+            "reason": "sport_key_required",
+            "request_count_consumed": 0,
+        }
+
+    try:
+        confidence_value = float(confidence) if confidence is not None else None
+    except Exception:
+        confidence_value = None
+
+    raw_json = {
+        "source": "manual_confirm_endpoint",
+        "confirmed_from": "oddspapi_fixture_match_diagnostic",
+        "payload": payload,
+    }
+
+    with pg_conn() as conn:
+        mapping = upsert_provider_event_map(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            provider_event_id=provider_event_id,
+            canonical_event_id=canonical_event_id,
+            core_fixture_id=core_fixture_id,
+            sport_key=sport_key,
+            confidence=confidence_value,
+            match_reason=match_reason[:255],
+            raw_json=raw_json,
+            active=True,
+        )
+        conn.commit()
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "manual_mapping_confirm",
+        "request_count_consumed": 0,
+        "mapping": mapping,
+        "policy": {
+            "calls_oddspapi": False,
+            "runs_inside_pipeline_run_all": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_mapping": True,
             "writes_snapshots": False,
         },
     }

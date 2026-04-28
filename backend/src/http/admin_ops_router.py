@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Body, Depends, Query, HTTPException
 
 from time import perf_counter
 from typing import Any, Callable, Dict
@@ -38,6 +38,7 @@ from src.ops.jobs.oddspapi_enrichment import (
     oddspapi_bookmakers_diagnostic,
     oddspapi_enrichment_dry_run,
     oddspapi_fixture_match_diagnostic,
+    oddspapi_manual_confirm_mapping,
 )
 
 router = APIRouter(
@@ -560,6 +561,14 @@ def admin_ops_oddspapi_fixture_match_diagnostic(
         min_score=min_score,
     )
 
+
+@router.post("/odds/enrichment/oddspapi/mappings/manual-confirm")
+def admin_ops_oddspapi_manual_confirm_mapping(
+    payload: Dict[str, Any] = Body(...),
+):
+    return oddspapi_manual_confirm_mapping(
+        payload=payload,
+    )
 
 @router.post("/odds/refresh")
 def admin_ops_odds_refresh(
