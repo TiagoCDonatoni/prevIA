@@ -34,7 +34,11 @@ from src.odds.provider_usage import (
     get_provider_usage_status,
 )
 
-from src.ops.jobs.oddspapi_enrichment import oddspapi_enrichment_dry_run
+from src.ops.jobs.oddspapi_enrichment import (
+    oddspapi_bookmakers_diagnostic,
+    oddspapi_enrichment_dry_run,
+    oddspapi_fixture_match_diagnostic,
+)
 
 router = APIRouter(
     prefix="/admin/ops",
@@ -542,6 +546,20 @@ def admin_ops_oddspapi_enrichment_dry_run(
         limit=limit,
         respect_refresh_log=respect_refresh_log,
     )
+
+
+@router.post("/odds/enrichment/oddspapi/diagnostics/fixture-match")
+def admin_ops_oddspapi_fixture_match_diagnostic(
+    window_hours: int = Query(default=72, ge=1, le=72),
+    max_candidates: int = Query(default=10, ge=1, le=25),
+    min_score: float = Query(default=0.65, ge=0.0, le=1.0),
+):
+    return oddspapi_fixture_match_diagnostic(
+        window_hours=window_hours,
+        max_candidates=max_candidates,
+        min_score=min_score,
+    )
+
 
 @router.post("/odds/refresh")
 def admin_ops_odds_refresh(
