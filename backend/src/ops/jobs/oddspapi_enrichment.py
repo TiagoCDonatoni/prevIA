@@ -2254,3 +2254,347 @@ def oddspapi_enrichment_events_status(
             "writes_mapping": False,
         },
     }
+
+def _select_mapped_events_for_oddspapi_batch(
+    conn,
+    *,
+    window_hours: int,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    limit = max(1, min(int(limit or 20), 200))
+
+    sql = """
+      SELECT
+        pem.provider,
+        pem.provider_event_id,
+        pem.canonical_event_id,
+        pem.core_fixture_id,
+        pem.sport_key,
+        pem.confidence,
+        pem.match_reason,
+        pem.active,
+        pem.created_at_utc,
+        pem.updated_at_utc,
+
+        f.kickoff_utc,
+        f.status_short,
+        f.status_long,
+        f.is_finished,
+        f.is_cancelled,
+        EXTRACT(EPOCH FROM (f.kickoff_utc - now())) / 3600.0 AS hours_until,
+
+        ht.name AS home_name,
+        at.name AS away_name,
+        l.name AS league_name,
+        l.country_name AS country_name,
+
+        COALESCE(snapshot_stats.snapshot_count, 0) AS oddspapi_snapshot_count,
+        snapshot_stats.last_captured_at_utc
+
+      FROM odds.provider_event_map pem
+      JOIN core.fixtures f
+        ON f.fixture_id = pem.core_fixture_id
+      JOIN core.teams ht
+        ON ht.team_id = f.home_team_id
+      JOIN core.teams at
+        ON at.team_id = f.away_team_id
+      JOIN core.leagues l
+        ON l.league_id = f.league_id
+
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) AS snapshot_count,
+          MAX(os.captured_at_utc) AS last_captured_at_utc
+        FROM odds.odds_snapshots_1x2 os
+        WHERE os.event_id = pem.canonical_event_id
+          AND os.bookmaker LIKE 'oddspapi:%%'
+      ) snapshot_stats ON true
+
+      WHERE pem.provider = %(provider)s
+        AND pem.active = true
+        AND f.kickoff_utc > now()
+        AND f.kickoff_utc <= now() + (%(window_hours)s || ' hours')::interval
+        AND COALESCE(f.is_finished, false) = false
+        AND COALESCE(f.is_cancelled, false) = false
+        AND COALESCE(f.status_short, 'NS') NOT IN (
+          '1H', 'HT', '2H', 'ET', 'P', 'FT', 'AET', 'PEN', 'BT',
+          'SUSP', 'INT', 'PST', 'CANC', 'ABD', 'AWD', 'WO'
+        )
+      ORDER BY f.kickoff_utc ASC, pem.updated_at_utc DESC
+      LIMIT %(limit)s
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "provider": PROVIDER_ODDSPAPI,
+                "window_hours": int(window_hours),
+                "limit": int(limit),
+            },
+        )
+        rows = cur.fetchall() or []
+
+    items: List[Dict[str, Any]] = []
+
+    for row in rows:
+        hours_until = float(row[15]) if row[15] is not None else None
+        policy_bucket = _policy_bucket(hours_until)
+
+        items.append(
+            {
+                "provider": row[0],
+                "provider_event_id": row[1],
+                "canonical_event_id": row[2],
+                "core_fixture_id": int(row[3]) if row[3] is not None else None,
+                "sport_key": row[4],
+                "confidence": float(row[5]) if row[5] is not None else None,
+                "match_reason": row[6],
+                "active": bool(row[7]),
+                "created_at_utc": row[8].isoformat() if row[8] else None,
+                "updated_at_utc": row[9].isoformat() if row[9] else None,
+                "kickoff_utc": row[10].isoformat() if row[10] else None,
+                "status_short": row[11],
+                "status_long": row[12],
+                "is_finished": bool(row[13]),
+                "is_cancelled": bool(row[14]),
+                "hours_until": round(hours_until, 3) if hours_until is not None else None,
+                "policy_bucket": policy_bucket,
+                "home_name": row[16],
+                "away_name": row[17],
+                "league_name": row[18],
+                "country_name": row[19],
+                "existing_oddspapi_snapshots": {
+                    "count": int(row[20] or 0),
+                    "last_captured_at_utc": row[21].isoformat() if row[21] else None,
+                },
+            }
+        )
+
+    return items
+
+
+def oddspapi_batch_write_1x2_mapped_events(
+    *,
+    window_hours: int = 72,
+    max_events: int = 3,
+    max_external_requests: int = 3,
+    allowed_bookmakers: Optional[str] = None,
+    max_bookmakers_per_event: int = 10,
+    dry_run: bool = True,
+    force: bool = False,
+    verbosity: int = 2,
+) -> Dict[str, Any]:
+    """
+    Batch manual de OddsPapi para eventos já mapeados.
+
+    Atenção:
+    - dry_run=True não chama OddsPapi.
+    - dry_run=False pode consumir até max_external_requests.
+    - Só processa eventos com provider_event_map ativo.
+    - Não faz auto-matching.
+    - Não entra no run_all.
+    """
+
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    max_events = max(1, min(int(max_events or 3), 50))
+    max_external_requests = max(0, min(int(max_external_requests or 0), 20))
+    max_bookmakers_per_event = max(1, min(int(max_bookmakers_per_event or 10), 40))
+    verbosity = max(1, min(int(verbosity or 2), 5))
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    with pg_conn() as conn:
+        candidates = _select_mapped_events_for_oddspapi_batch(
+            conn,
+            window_hours=window_hours,
+            limit=max_events,
+        )
+
+        usage_before = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+
+        planned_items: List[Dict[str, Any]] = []
+
+        for item in candidates:
+            core_fixture_id_value = int(item.get("core_fixture_id") or 0)
+            policy_bucket = str(item.get("policy_bucket") or "unknown")
+
+            skip_info = should_skip_provider_refresh(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                core_fixture_id=core_fixture_id_value,
+                policy_bucket=policy_bucket,
+            )
+
+            would_call_provider = bool(not skip_info.get("skip"))
+
+            planned_items.append(
+                {
+                    **item,
+                    "refresh_decision": {
+                        "would_call_provider": would_call_provider,
+                        "skip": bool(skip_info.get("skip")),
+                        "skip_reason": skip_info.get("reason"),
+                        "existing_refresh_log": skip_info.get("existing"),
+                    },
+                }
+            )
+
+    request_budget_remaining = int(max_external_requests)
+    request_count_consumed = 0
+
+    results: List[Dict[str, Any]] = []
+    counters = {
+        "candidate_count": len(planned_items),
+        "would_call_provider": 0,
+        "skipped_by_refresh_log": 0,
+        "skipped_by_request_budget": 0,
+        "executed": 0,
+        "failed": 0,
+        "inserted_snapshots": 0,
+    }
+
+    for item in planned_items:
+        refresh_decision = item.get("refresh_decision") or {}
+        core_fixture_id_value = int(item.get("core_fixture_id") or 0)
+
+        if refresh_decision.get("skip") and not force:
+            counters["skipped_by_refresh_log"] += 1
+            results.append(
+                {
+                    "core_fixture_id": core_fixture_id_value,
+                    "canonical_event_id": item.get("canonical_event_id"),
+                    "provider_event_id": item.get("provider_event_id"),
+                    "policy_bucket": item.get("policy_bucket"),
+                    "action": "skipped_by_refresh_log",
+                    "request_count_consumed": 0,
+                    "skip_reason": refresh_decision.get("skip_reason"),
+                }
+            )
+            continue
+
+        counters["would_call_provider"] += 1
+
+        if dry_run:
+            results.append(
+                {
+                    "core_fixture_id": core_fixture_id_value,
+                    "canonical_event_id": item.get("canonical_event_id"),
+                    "provider_event_id": item.get("provider_event_id"),
+                    "policy_bucket": item.get("policy_bucket"),
+                    "action": "would_call_provider",
+                    "request_count_consumed": 0,
+                    "dry_run": True,
+                }
+            )
+            continue
+
+        if request_budget_remaining <= 0:
+            counters["skipped_by_request_budget"] += 1
+            results.append(
+                {
+                    "core_fixture_id": core_fixture_id_value,
+                    "canonical_event_id": item.get("canonical_event_id"),
+                    "provider_event_id": item.get("provider_event_id"),
+                    "policy_bucket": item.get("policy_bucket"),
+                    "action": "skipped_by_request_budget",
+                    "request_count_consumed": 0,
+                }
+            )
+            continue
+
+        write_result = oddspapi_write_1x2_snapshots(
+            core_fixture_id=core_fixture_id_value,
+            allowed_bookmakers=allowed_bookmakers,
+            max_bookmakers=max_bookmakers_per_event,
+            dry_run=False,
+            force=force,
+            verbosity=verbosity,
+        )
+
+        consumed = int(write_result.get("request_count_consumed") or 0)
+        request_count_consumed += consumed
+        request_budget_remaining -= consumed
+
+        if write_result.get("ok") is True:
+            counters["executed"] += 1
+            counters["inserted_snapshots"] += int(
+                ((write_result.get("write_result") or {}).get("inserted")) or 0
+            )
+        else:
+            counters["failed"] += 1
+
+        results.append(
+            {
+                "core_fixture_id": core_fixture_id_value,
+                "canonical_event_id": item.get("canonical_event_id"),
+                "provider_event_id": item.get("provider_event_id"),
+                "policy_bucket": item.get("policy_bucket"),
+                "action": "executed",
+                "request_count_consumed": consumed,
+                "result": write_result,
+            }
+        )
+
+    with pg_conn() as conn:
+        usage_after = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "batch_write_1x2_mapped_events",
+        "dry_run": bool(dry_run),
+        "request_count_consumed": request_count_consumed,
+        "params": {
+            "window_hours": int(window_hours),
+            "max_events": int(max_events),
+            "max_external_requests": int(max_external_requests),
+            "allowed_bookmakers": allowed_bookmakers,
+            "max_bookmakers_per_event": int(max_bookmakers_per_event),
+            "force": bool(force),
+            "verbosity": int(verbosity),
+        },
+        "usage_before": usage_before,
+        "usage_after": usage_after,
+        "counters": counters,
+        "items": results,
+        "policy": {
+            "calls_oddspapi": not bool(dry_run),
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_snapshots": not bool(dry_run),
+            "requires_existing_mapping": True,
+            "does_auto_matching": False,
+        },
+    }

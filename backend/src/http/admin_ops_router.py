@@ -35,6 +35,7 @@ from src.odds.provider_usage import (
 )
 
 from src.ops.jobs.oddspapi_enrichment import (
+    oddspapi_batch_write_1x2_mapped_events,
     oddspapi_bookmakers_diagnostic,
     oddspapi_enrichment_dry_run,
     oddspapi_enrichment_events_status,
@@ -613,6 +614,28 @@ def admin_ops_oddspapi_enrichment_events_status(
         core_fixture_id=core_fixture_id,
         canonical_event_id=canonical_event_id,
         limit=limit,
+    )
+
+@router.post("/odds/enrichment/oddspapi/batch/1x2")
+def admin_ops_oddspapi_batch_write_1x2_mapped_events(
+    window_hours: int = Query(default=72, ge=1, le=72),
+    max_events: int = Query(default=3, ge=1, le=50),
+    max_external_requests: int = Query(default=3, ge=0, le=20),
+    allowed_bookmakers: Optional[str] = Query(default=None),
+    max_bookmakers_per_event: int = Query(default=10, ge=1, le=40),
+    dry_run: bool = Query(default=True),
+    force: bool = Query(default=False),
+    verbosity: int = Query(default=2, ge=1, le=5),
+):
+    return oddspapi_batch_write_1x2_mapped_events(
+        window_hours=window_hours,
+        max_events=max_events,
+        max_external_requests=max_external_requests,
+        allowed_bookmakers=allowed_bookmakers,
+        max_bookmakers_per_event=max_bookmakers_per_event,
+        dry_run=dry_run,
+        force=force,
+        verbosity=verbosity,
     )
 
 @router.post("/odds/refresh")
