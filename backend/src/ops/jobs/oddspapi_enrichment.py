@@ -14,6 +14,7 @@ from src.integrations.oddspapi.client import (
     OddspapiUsageCapReached,
 )
 from src.odds.provider_event_tracking import (
+    get_active_provider_event_map,
     should_skip_provider_refresh,
     upsert_provider_event_map,
 )
@@ -1085,3 +1086,368 @@ def oddspapi_manual_confirm_mapping(
             "writes_snapshots": False,
         },
     }
+
+def _select_oddspapi_mapping_for_odds(
+    conn,
+    *,
+    core_fixture_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    if core_fixture_id:
+        return get_active_provider_event_map(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            core_fixture_id=int(core_fixture_id),
+        )
+
+    sql = """
+      SELECT
+        provider,
+        provider_event_id,
+        canonical_event_id,
+        core_fixture_id,
+        sport_key,
+        confidence,
+        match_reason,
+        raw_json,
+        active,
+        created_at_utc,
+        updated_at_utc
+      FROM odds.provider_event_map
+      WHERE provider = %(provider)s
+        AND active = true
+      ORDER BY updated_at_utc DESC
+      LIMIT 1
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "provider": PROVIDER_ODDSPAPI,
+            },
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "provider": row[0],
+        "provider_event_id": row[1],
+        "canonical_event_id": row[2],
+        "core_fixture_id": int(row[3]) if row[3] is not None else None,
+        "sport_key": row[4],
+        "confidence": float(row[5]) if row[5] is not None else None,
+        "match_reason": row[6],
+        "raw_json": row[7],
+        "active": bool(row[8]),
+        "created_at_utc": row[9].isoformat() if row[9] else None,
+        "updated_at_utc": row[10].isoformat() if row[10] else None,
+    }
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _extract_bookmaker_odds(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+
+    value = data.get("bookmakerOdds")
+    if isinstance(value, dict):
+        return value
+
+    value = data.get("bookmakers")
+    if isinstance(value, dict):
+        return value
+
+    value = data.get("odds")
+    if isinstance(value, dict):
+        return value
+
+    return {}
+
+
+def _extract_outcomes_from_market(market: Any) -> List[Dict[str, Any]]:
+    if not isinstance(market, dict):
+        return []
+
+    raw_outcomes = market.get("outcomes")
+    items: List[Any]
+
+    if isinstance(raw_outcomes, dict):
+        items = list(raw_outcomes.values())
+    elif isinstance(raw_outcomes, list):
+        items = raw_outcomes
+    else:
+        items = []
+
+    outcomes: List[Dict[str, Any]] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        name = (
+            item.get("name")
+            or item.get("label")
+            or item.get("outcomeName")
+            or item.get("participantName")
+            or item.get("selectionName")
+        )
+
+        price = (
+            item.get("price")
+            or item.get("odds")
+            or item.get("decimal")
+            or item.get("decimalOdds")
+            or item.get("value")
+        )
+
+        outcomes.append(
+            {
+                "name": str(name).strip() if name is not None else None,
+                "price": _safe_float(price),
+                "raw_keys": sorted(list(item.keys()))[:20],
+            }
+        )
+
+    return outcomes
+
+
+def _summarize_oddspapi_odds_payload(data: Any) -> Dict[str, Any]:
+    bookmaker_odds = _extract_bookmaker_odds(data)
+
+    bookmaker_summaries: List[Dict[str, Any]] = []
+    total_markets = 0
+    total_outcomes = 0
+
+    for bookmaker_slug, bookmaker_data in bookmaker_odds.items():
+        if not isinstance(bookmaker_data, dict):
+            continue
+
+        markets = bookmaker_data.get("markets")
+        if not isinstance(markets, dict):
+            markets = {}
+
+        market_summaries: List[Dict[str, Any]] = []
+
+        for market_id, market_data in markets.items():
+            outcomes = _extract_outcomes_from_market(market_data)
+            total_markets += 1
+            total_outcomes += len(outcomes)
+
+            market_name = None
+            if isinstance(market_data, dict):
+                market_name = (
+                    market_data.get("name")
+                    or market_data.get("marketName")
+                    or market_data.get("label")
+                    or market_data.get("slug")
+                )
+
+            market_summaries.append(
+                {
+                    "market_id": str(market_id),
+                    "market_name": str(market_name).strip() if market_name else None,
+                    "outcome_count": len(outcomes),
+                    "outcomes_sample": outcomes[:6],
+                    "raw_keys": sorted(list(market_data.keys()))[:20] if isinstance(market_data, dict) else [],
+                }
+            )
+
+        bookmaker_summaries.append(
+            {
+                "bookmaker": str(bookmaker_slug),
+                "market_count": len(markets),
+                "markets_sample": market_summaries[:12],
+                "raw_keys": sorted(list(bookmaker_data.keys()))[:20],
+            }
+        )
+
+    bookmaker_summaries = sorted(
+        bookmaker_summaries,
+        key=lambda item: item.get("bookmaker") or "",
+    )
+
+    top_level = data if isinstance(data, dict) else {}
+
+    return {
+        "fixture": {
+            "fixtureId": top_level.get("fixtureId"),
+            "sportId": top_level.get("sportId"),
+            "tournamentId": top_level.get("tournamentId"),
+            "statusId": top_level.get("statusId"),
+            "hasOdds": top_level.get("hasOdds"),
+            "startTime": top_level.get("startTime"),
+            "participant1Name": top_level.get("participant1Name"),
+            "participant2Name": top_level.get("participant2Name"),
+            "tournamentName": top_level.get("tournamentName"),
+            "categoryName": top_level.get("categoryName"),
+            "updatedAt": top_level.get("updatedAt"),
+        },
+        "bookmaker_count": len(bookmaker_summaries),
+        "total_markets_detected": total_markets,
+        "total_outcomes_detected": total_outcomes,
+        "bookmakers": bookmaker_summaries[:40],
+        "bookmaker_slugs": [item["bookmaker"] for item in bookmaker_summaries],
+        "raw_shape": {
+            "type": type(data).__name__,
+            "top_level_keys": sorted(list(data.keys()))[:40] if isinstance(data, dict) else None,
+        },
+    }
+
+
+def oddspapi_odds_diagnostic(
+    *,
+    core_fixture_id: Optional[int] = None,
+    include_raw: bool = False,
+    verbosity: int = 2,
+) -> Dict[str, Any]:
+    """
+    Diagnóstico manual de odds para fixture OddsPapi mapeado.
+
+    Atenção:
+    - Consome 1 request real.
+    - Usa provider_event_map já salvo.
+    - Não grava snapshots.
+    - Não cria eventos.
+    - Não altera evento canônico.
+    """
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    verbosity = max(1, min(int(verbosity or 2), 5))
+
+    client = OddspapiClient.from_settings(settings)
+
+    with pg_conn() as conn:
+        mapping = _select_oddspapi_mapping_for_odds(
+            conn,
+            core_fixture_id=core_fixture_id,
+        )
+
+        if not mapping:
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "no_active_oddspapi_mapping",
+                "core_fixture_id": core_fixture_id,
+                "request_count_consumed": 0,
+            }
+
+        provider_event_id = str(mapping.get("provider_event_id") or "").strip()
+
+        try:
+            response = client.get_odds(
+                params={
+                    "fixtureId": provider_event_id,
+                    "oddsFormat": "decimal",
+                    "language": "en",
+                    "verbosity": verbosity,
+                },
+                usage_conn=conn,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+        except OddspapiUsageCapReached as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "provider_monthly_operational_cap_reached",
+                "message": str(exc),
+                "mapping": mapping,
+                "request_count_consumed": 0,
+                "usage": status,
+            }
+        except OddspapiClientError as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "oddspapi_client_error",
+                "message": str(exc),
+                "endpoint": exc.endpoint,
+                "status_code": exc.status_code,
+                "payload": exc.payload,
+                "mapping": mapping,
+                "usage": status,
+            }
+
+        status = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+        conn.commit()
+
+    summary = _summarize_oddspapi_odds_payload(response.data)
+
+    result: Dict[str, Any] = {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "odds_diagnostic",
+        "request_count_consumed": 1,
+        "endpoint": response.endpoint,
+        "request_url_redacted": response.request_url_redacted,
+        "status_code": response.status_code,
+        "usage_claim": response.usage_claim,
+        "usage": status,
+        "mapping": mapping,
+        "odds_summary": summary,
+        "policy": {
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_mapping": False,
+            "writes_snapshots": False,
+            "bookmaker_filter_applied": False,
+        },
+    }
+
+    if include_raw:
+        result["raw"] = response.data
+
+    return result

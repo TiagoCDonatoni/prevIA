@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
 
 from time import perf_counter
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 import json
 import re
 import unicodedata
@@ -39,6 +39,7 @@ from src.ops.jobs.oddspapi_enrichment import (
     oddspapi_enrichment_dry_run,
     oddspapi_fixture_match_diagnostic,
     oddspapi_manual_confirm_mapping,
+    oddspapi_odds_diagnostic,
 )
 
 router = APIRouter(
@@ -568,6 +569,18 @@ def admin_ops_oddspapi_manual_confirm_mapping(
 ):
     return oddspapi_manual_confirm_mapping(
         payload=payload,
+    )
+
+@router.post("/odds/enrichment/oddspapi/diagnostics/odds")
+def admin_ops_oddspapi_odds_diagnostic(
+    core_fixture_id: Optional[int] = Query(default=None),
+    include_raw: bool = Query(default=False),
+    verbosity: int = Query(default=2, ge=1, le=5),
+):
+    return oddspapi_odds_diagnostic(
+        core_fixture_id=core_fixture_id,
+        include_raw=include_raw,
+        verbosity=verbosity,
     )
 
 @router.post("/odds/refresh")
