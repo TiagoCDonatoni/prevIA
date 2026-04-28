@@ -37,6 +37,7 @@ from src.odds.provider_usage import (
 from src.ops.jobs.oddspapi_enrichment import (
     oddspapi_bookmakers_diagnostic,
     oddspapi_enrichment_dry_run,
+    oddspapi_enrichment_events_status,
     oddspapi_fixture_match_diagnostic,
     oddspapi_manual_confirm_mapping,
     oddspapi_odds_diagnostic,
@@ -600,6 +601,18 @@ def admin_ops_oddspapi_write_1x2_snapshots(
         dry_run=dry_run,
         force=force,
         verbosity=verbosity,
+    )
+
+@router.get("/odds/enrichment/oddspapi/events/status")
+def admin_ops_oddspapi_enrichment_events_status(
+    core_fixture_id: Optional[int] = Query(default=None),
+    canonical_event_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return oddspapi_enrichment_events_status(
+        core_fixture_id=core_fixture_id,
+        canonical_event_id=canonical_event_id,
+        limit=limit,
     )
 
 @router.post("/odds/refresh")

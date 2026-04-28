@@ -2087,3 +2087,170 @@ def oddspapi_write_1x2_snapshots(
             "market": "h2h",
         },
     }
+
+def oddspapi_enrichment_events_status(
+    *,
+    core_fixture_id: Optional[int] = None,
+    canonical_event_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Status operacional da integração OddsPapi por evento.
+
+    Atenção:
+    - Não chama OddsPapi.
+    - Não consome request.
+    - Não grava nada.
+    - Serve para Admin/observabilidade.
+    """
+
+    limit = max(1, min(int(limit or 50), 200))
+
+    where_parts = [
+        "pem.provider = %(provider)s",
+    ]
+
+    params: Dict[str, Any] = {
+        "provider": PROVIDER_ODDSPAPI,
+        "limit": int(limit),
+    }
+
+    if core_fixture_id:
+        where_parts.append("pem.core_fixture_id = %(core_fixture_id)s")
+        params["core_fixture_id"] = int(core_fixture_id)
+
+    safe_canonical_event_id = str(canonical_event_id or "").strip()
+    if safe_canonical_event_id:
+        where_parts.append("pem.canonical_event_id = %(canonical_event_id)s")
+        params["canonical_event_id"] = safe_canonical_event_id
+
+    where_sql = " AND ".join(where_parts)
+
+    sql = f"""
+      SELECT
+        pem.provider,
+        pem.provider_event_id,
+        pem.canonical_event_id,
+        pem.core_fixture_id,
+        pem.sport_key,
+        pem.confidence,
+        pem.match_reason,
+        pem.active,
+        pem.created_at_utc,
+        pem.updated_at_utc,
+
+        COALESCE(snapshot_stats.snapshot_count, 0) AS oddspapi_snapshot_count,
+        snapshot_stats.last_captured_at_utc,
+        snapshot_stats.bookmakers_csv,
+
+        COALESCE(refresh_stats.refresh_log_count, 0) AS refresh_log_count,
+        refresh_stats.last_refresh_log_at_utc,
+        refresh_stats.refresh_summary
+
+      FROM odds.provider_event_map pem
+
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) AS snapshot_count,
+          MAX(os.captured_at_utc) AS last_captured_at_utc,
+          (
+            SELECT STRING_AGG(bookmaker, ',' ORDER BY bookmaker)
+            FROM (
+              SELECT DISTINCT os2.bookmaker
+              FROM odds.odds_snapshots_1x2 os2
+              WHERE os2.event_id = pem.canonical_event_id
+                AND os2.bookmaker LIKE 'oddspapi:%%'
+            ) distinct_bookmakers
+          ) AS bookmakers_csv
+        FROM odds.odds_snapshots_1x2 os
+        WHERE os.event_id = pem.canonical_event_id
+          AND os.bookmaker LIKE 'oddspapi:%%'
+      ) snapshot_stats ON true
+
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) AS refresh_log_count,
+          MAX(rl.updated_at_utc) AS last_refresh_log_at_utc,
+          STRING_AGG(
+            rl.policy_bucket || ':' || rl.status,
+            ', ' ORDER BY rl.updated_at_utc DESC
+          ) AS refresh_summary
+        FROM odds.provider_event_refresh_log rl
+        WHERE rl.provider = pem.provider
+          AND rl.core_fixture_id = pem.core_fixture_id
+      ) refresh_stats ON true
+
+      WHERE {where_sql}
+      ORDER BY pem.updated_at_utc DESC
+      LIMIT %(limit)s
+    """
+
+    items: List[Dict[str, Any]] = []
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+
+        usage = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=load_settings().oddspapi_monthly_hard_cap,
+            reserve=load_settings().oddspapi_monthly_reserve,
+        )
+
+    for row in rows:
+        bookmakers_csv = row[12] or ""
+        bookmakers = [
+            item.strip()
+            for item in str(bookmakers_csv).split(",")
+            if item.strip()
+        ]
+
+        items.append(
+            {
+                "provider": row[0],
+                "provider_event_id": row[1],
+                "canonical_event_id": row[2],
+                "core_fixture_id": int(row[3]) if row[3] is not None else None,
+                "sport_key": row[4],
+                "confidence": float(row[5]) if row[5] is not None else None,
+                "match_reason": row[6],
+                "active": bool(row[7]),
+                "created_at_utc": row[8].isoformat() if row[8] else None,
+                "updated_at_utc": row[9].isoformat() if row[9] else None,
+                "snapshots_1x2": {
+                    "count": int(row[10] or 0),
+                    "last_captured_at_utc": row[11].isoformat() if row[11] else None,
+                    "bookmakers": bookmakers,
+                },
+                "refresh": {
+                    "log_count": int(row[13] or 0),
+                    "last_refresh_log_at_utc": row[14].isoformat() if row[14] else None,
+                    "summary": row[15],
+                },
+            }
+        )
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "events_status",
+        "request_count_consumed": 0,
+        "count": len(items),
+        "filters": {
+            "core_fixture_id": int(core_fixture_id) if core_fixture_id else None,
+            "canonical_event_id": safe_canonical_event_id or None,
+            "limit": int(limit),
+        },
+        "usage": usage,
+        "items": items,
+        "policy": {
+            "calls_oddspapi": False,
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "writes_snapshots": False,
+            "writes_mapping": False,
+        },
+    }
