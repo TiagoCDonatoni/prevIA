@@ -2970,3 +2970,318 @@ def oddspapi_auto_match_diagnostic(
             "auto_confirms_mapping": False,
         },
     }
+
+def oddspapi_auto_confirm_mappings(
+    *,
+    window_hours: int = 72,
+    max_events: int = 10,
+    max_candidates_per_event: int = 3,
+    min_score: float = 0.90,
+    min_score_gap: float = 0.15,
+    max_confirmations: int = 10,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """
+    Auto-confirma mappings OddsPapi para eventos canônicos ainda não mapeados.
+
+    Atenção:
+    - Consome 1 request real quando há eventos unmapped.
+    - Chama /fixtures uma única vez para a janela inteira.
+    - Grava apenas odds.provider_event_map quando dry_run=false.
+    - Não grava snapshots.
+    - Não chama /odds.
+    - Não entra no run_all.
+    """
+
+    settings = load_settings()
+
+    if not settings.oddspapi_enrichment_enabled:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "oddspapi_enrichment_disabled",
+            "request_count_consumed": 0,
+        }
+
+    if not settings.oddspapi_api_key:
+        return {
+            "ok": False,
+            "provider": PROVIDER_ODDSPAPI,
+            "reason": "missing_oddspapi_api_key",
+            "request_count_consumed": 0,
+        }
+
+    window_hours = max(1, min(int(window_hours or 72), 72))
+    max_events = max(1, min(int(max_events or 10), 100))
+    max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
+    min_score = max(0.0, min(float(min_score or 0.90), 1.0))
+    min_score_gap = max(0.0, min(float(min_score_gap or 0.15), 1.0))
+    max_confirmations = max(1, min(int(max_confirmations or 10), 50))
+
+    query_from = datetime.now(timezone.utc).replace(microsecond=0)
+    query_to = query_from + timedelta(hours=window_hours)
+
+    query_from_iso = query_from.isoformat().replace("+00:00", "Z")
+    query_to_iso = query_to.isoformat().replace("+00:00", "Z")
+
+    client = OddspapiClient.from_settings(settings)
+
+    with pg_conn() as conn:
+        core_events = _select_unmapped_core_events_for_oddspapi_auto_match(
+            conn,
+            window_hours=window_hours,
+            limit=max_events,
+        )
+
+        if not core_events:
+            usage = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+
+            return {
+                "ok": True,
+                "provider": PROVIDER_ODDSPAPI,
+                "mode": "auto_confirm_mappings",
+                "dry_run": bool(dry_run),
+                "request_count_consumed": 0,
+                "reason": "no_unmapped_core_events",
+                "usage": usage,
+                "count": 0,
+                "items": [],
+            }
+
+        try:
+            response = client.get_fixtures(
+                params={
+                    "sportId": 10,
+                    "from": query_from_iso,
+                    "to": query_to_iso,
+                    "statusId": 0,
+                    "hasOdds": "true",
+                    "language": "en",
+                },
+                usage_conn=conn,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+        except OddspapiUsageCapReached as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "provider_monthly_operational_cap_reached",
+                "message": str(exc),
+                "request_count_consumed": 0,
+                "usage": status,
+            }
+        except OddspapiClientError as exc:
+            status = get_provider_usage_status(
+                conn,
+                provider=PROVIDER_ODDSPAPI,
+                endpoint_group=ENDPOINT_GROUP_REST,
+                hard_cap=settings.oddspapi_monthly_hard_cap,
+                reserve=settings.oddspapi_monthly_reserve,
+            )
+            conn.commit()
+
+            return {
+                "ok": False,
+                "provider": PROVIDER_ODDSPAPI,
+                "reason": "oddspapi_client_error",
+                "message": str(exc),
+                "endpoint": exc.endpoint,
+                "status_code": exc.status_code,
+                "payload": exc.payload,
+                "usage": status,
+            }
+
+        usage_after_request = get_provider_usage_status(
+            conn,
+            provider=PROVIDER_ODDSPAPI,
+            endpoint_group=ENDPOINT_GROUP_REST,
+            hard_cap=settings.oddspapi_monthly_hard_cap,
+            reserve=settings.oddspapi_monthly_reserve,
+        )
+        conn.commit()
+
+    fixture_items = _extract_fixture_items(response.data)
+
+    decisions: List[Dict[str, Any]] = []
+    confirmable: List[Dict[str, Any]] = []
+
+    counters = {
+        "core_event_count": len(core_events),
+        "fixtures_returned": len(fixture_items),
+        "confirmable": 0,
+        "confirmed": 0,
+        "dry_run_confirmable": 0,
+        "ambiguous": 0,
+        "below_score": 0,
+        "no_match": 0,
+        "skipped_by_max_confirmations": 0,
+    }
+
+    for core_event in core_events:
+        candidates = _score_auto_match_candidates_for_core_event(
+            core_event=core_event,
+            fixture_items=fixture_items,
+            max_candidates_per_event=max_candidates_per_event,
+        )
+
+        best = candidates[0] if candidates else None
+        second = candidates[1] if len(candidates) > 1 else None
+
+        best_score = float((best or {}).get("scores", {}).get("final_score") or 0)
+        second_score = float((second or {}).get("scores", {}).get("final_score") or 0)
+        score_gap = best_score - second_score if best else 0.0
+
+        decision = "no_match"
+        reason = "no_candidate"
+
+        if best:
+            if best_score < min_score:
+                decision = "below_score"
+                reason = "best_score_below_min_score"
+                counters["below_score"] += 1
+            elif second and score_gap < min_score_gap:
+                decision = "ambiguous"
+                reason = "score_gap_below_min_score_gap"
+                counters["ambiguous"] += 1
+            else:
+                decision = "confirmable"
+                reason = "safe_auto_match"
+                counters["confirmable"] += 1
+        else:
+            counters["no_match"] += 1
+
+        item = {
+            "core_event": core_event,
+            "decision": decision,
+            "reason": reason,
+            "best_score": round(best_score, 4),
+            "second_score": round(second_score, 4) if second else None,
+            "score_gap": round(score_gap, 4) if best else None,
+            "best_match": best,
+            "top_candidates": candidates,
+            "mapping": None,
+        }
+
+        if decision == "confirmable":
+            if len(confirmable) >= max_confirmations:
+                item["decision"] = "skipped_by_max_confirmations"
+                item["reason"] = "max_confirmations_reached"
+                counters["skipped_by_max_confirmations"] += 1
+            else:
+                confirmable.append(item)
+
+        decisions.append(item)
+
+    if dry_run:
+        counters["dry_run_confirmable"] = len(confirmable)
+    else:
+        with pg_conn() as conn:
+            for item in confirmable:
+                core_event = item.get("core_event") or {}
+                best_match = item.get("best_match") or {}
+                best_score = float(item.get("best_score") or 0)
+                score_gap = float(item.get("score_gap") or 0)
+
+                provider_event_id = str(best_match.get("fixture_id") or "").strip()
+                canonical_event_id = str(core_event.get("event_id") or "").strip()
+                core_fixture_id = int(core_event.get("fixture_id") or 0)
+                sport_key = str(core_event.get("sport_key") or "").strip()
+
+                if (
+                    not provider_event_id
+                    or not canonical_event_id
+                    or not core_fixture_id
+                    or not sport_key
+                ):
+                    item["decision"] = "failed_invalid_mapping_payload"
+                    item["reason"] = "invalid_mapping_payload"
+                    continue
+
+                mapping = upsert_provider_event_map(
+                    conn,
+                    provider=PROVIDER_ODDSPAPI,
+                    provider_event_id=provider_event_id,
+                    canonical_event_id=canonical_event_id,
+                    core_fixture_id=core_fixture_id,
+                    sport_key=sport_key,
+                    confidence=best_score,
+                    match_reason=(
+                        f"auto_confirmed_score_{best_score:.4f}_gap_{score_gap:.4f}"
+                    )[:255],
+                    raw_json={
+                        "source": "auto_confirm_endpoint",
+                        "core_event": core_event,
+                        "best_match": best_match,
+                        "top_candidates": item.get("top_candidates"),
+                        "criteria": {
+                            "min_score": min_score,
+                            "min_score_gap": min_score_gap,
+                            "score_gap": score_gap,
+                        },
+                    },
+                    active=True,
+                )
+
+                item["mapping"] = mapping
+                item["decision"] = "confirmed"
+                item["reason"] = "mapping_written"
+                counters["confirmed"] += 1
+
+            conn.commit()
+
+    return {
+        "ok": True,
+        "provider": PROVIDER_ODDSPAPI,
+        "mode": "auto_confirm_mappings",
+        "dry_run": bool(dry_run),
+        "request_count_consumed": 1,
+        "endpoint": response.endpoint,
+        "request_url_redacted": response.request_url_redacted,
+        "status_code": response.status_code,
+        "usage_claim": response.usage_claim,
+        "usage": usage_after_request,
+        "oddspapi_query": {
+            "sportId": 10,
+            "from": query_from_iso,
+            "to": query_to_iso,
+            "statusId": 0,
+            "hasOdds": True,
+            "language": "en",
+        },
+        "params": {
+            "window_hours": int(window_hours),
+            "max_events": int(max_events),
+            "max_candidates_per_event": int(max_candidates_per_event),
+            "min_score": float(min_score),
+            "min_score_gap": float(min_score_gap),
+            "max_confirmations": int(max_confirmations),
+        },
+        "counters": counters,
+        "items": decisions,
+        "policy": {
+            "calls_oddspapi": True,
+            "runs_inside_pipeline_run_all": False,
+            "runs_in_realtime_product": False,
+            "creates_events": False,
+            "updates_event_metadata": False,
+            "writes_mapping": not bool(dry_run),
+            "writes_snapshots": False,
+            "auto_confirms_mapping": not bool(dry_run),
+        },
+    }
