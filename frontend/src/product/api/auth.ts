@@ -45,6 +45,35 @@ export type AuthAccessResponse = {
   product_internal_access: boolean;
   allow_plan_override: boolean;
   product_plan_code: Exclude<PlanId, "FREE_ANON"> | null;
+
+  base_plan_code?: Exclude<PlanId, "FREE_ANON"> | null;
+  effective_plan_code?: Exclude<PlanId, "FREE_ANON"> | null;
+  effective_source?: "subscription" | "grant" | "free" | string | null;
+
+  active_grant?: {
+    grant_id: number;
+    campaign_id: number | null;
+    campaign_slug?: string | null;
+    campaign_label?: string | null;
+    grant_category: string;
+    plan_code: Exclude<PlanId, "FREE_ANON">;
+    starts_at_utc: string | null;
+    ends_at_utc: string | null;
+    source_type: string;
+  } | null;
+
+  discount_eligibility?: {
+    eligibility_id: number;
+    campaign_id: number | null;
+    offer_id: number | null;
+    eligible_plan_codes: string[];
+    eligible_billing_cycles: string[];
+    starts_at_utc: string | null;
+    ends_at_utc: string | null;
+    stripe_coupon_id?: string | null;
+    stripe_promotion_code_id?: string | null;
+  } | null;
+
   domain_rule?: {
     domain?: string | null;
     source?: string | null;

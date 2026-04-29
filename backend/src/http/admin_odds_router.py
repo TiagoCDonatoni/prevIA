@@ -452,9 +452,9 @@ def _audit_insert_prediction(
 
 
 @router.get("/sports")
-def admin_odds_list_sports() -> List[Dict[str, Any]]:
+def admin_odds_list_sports(all_sports: bool = False) -> List[Dict[str, Any]]:
     try:
-        rows = _client().list_sports()
+        rows = _client().list_sports(all_sports=all_sports)
         out: List[Dict[str, Any]] = []
         for x in rows:
             out.append(

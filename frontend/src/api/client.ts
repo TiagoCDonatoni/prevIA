@@ -36,6 +36,9 @@ import type {
   AdminOpsPipelineHealthResponse,
   AdminOpsRunsRecentResponse,
   AdminOpsRunEventsResponse,
+  AdminAccessCampaignDetailResponse,
+  AdminAccessCampaignsListResponse,
+  AdminAccessCampaignUpsertPayload,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -774,6 +777,7 @@ export async function adminOpsAutoResolveLeagues(params?: {
 export async function adminOpsDiscoverLeagueCandidates(params?: {
   default_enabled?: boolean;
   auto_resolve?: boolean;
+  all_sports?: boolean;
 }): Promise<{
   ok: boolean;
   steps: {
@@ -814,6 +818,7 @@ export async function adminOpsDiscoverLeagueCandidates(params?: {
   summary: {
     catalog_upserted: number;
     sports_seen: number;
+    all_sports?: boolean;
     inserted: number;
     inserted_pending: number;
     inserted_ignored: number;
@@ -826,6 +831,7 @@ export async function adminOpsDiscoverLeagueCandidates(params?: {
   const url = new URL("/admin/ops/odds/league_map/discover_candidates", API_BASE_URL);
   url.searchParams.set("default_enabled", String(params?.default_enabled ?? false));
   url.searchParams.set("auto_resolve", String(params?.auto_resolve ?? true));
+  url.searchParams.set("all_sports", String(params?.all_sports ?? true));
 
   return fetchJson(url.toString(), {
     method: "POST",
@@ -1028,5 +1034,179 @@ export async function adminGrantUserCredits(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+  });
+}
+
+export async function adminOddspapiStatus(): Promise<AdminOddspapiStatusResponse> {
+  const url = new URL(
+    "/admin/ops/odds/enrichment/oddspapi/status",
+    API_BASE_URL
+  );
+
+  return fetchJson<AdminOddspapiStatusResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOddspapiEventsStatus(params?: {
+  limit?: number;
+  core_fixture_id?: number | null;
+  canonical_event_id?: string | null;
+}): Promise<AdminOddspapiEventsStatusResponse> {
+  const url = new URL(
+    "/admin/ops/odds/enrichment/oddspapi/events/status",
+    API_BASE_URL
+  );
+
+  if (params?.limit != null) {
+    url.searchParams.set("limit", String(params.limit));
+  }
+
+  if (params?.core_fixture_id != null) {
+    url.searchParams.set("core_fixture_id", String(params.core_fixture_id));
+  }
+
+  if (params?.canonical_event_id) {
+    url.searchParams.set("canonical_event_id", params.canonical_event_id);
+  }
+
+  return fetchJson<AdminOddspapiEventsStatusResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminOddspapiRun(params?: {
+  window_hours?: number;
+  max_events?: number;
+  max_external_requests?: number;
+  max_candidates_per_event?: number;
+  min_score?: number;
+  min_score_gap?: number;
+  max_confirmations?: number;
+  allowed_bookmakers?: string | null;
+  max_bookmakers_per_event?: number;
+  dry_run?: boolean;
+  force?: boolean;
+  verbosity?: number;
+  allow_root_bookmaker_match?: boolean;
+  include_inactive_markets?: boolean;
+}): Promise<AdminOddspapiRunResponse> {
+  const url = new URL(
+    "/admin/ops/odds/enrichment/oddspapi/run",
+    API_BASE_URL
+  );
+
+  url.searchParams.set("window_hours", String(params?.window_hours ?? 72));
+  url.searchParams.set("max_events", String(params?.max_events ?? 20));
+  url.searchParams.set(
+    "max_external_requests",
+    String(params?.max_external_requests ?? 5)
+  );
+  url.searchParams.set(
+    "max_candidates_per_event",
+    String(params?.max_candidates_per_event ?? 3)
+  );
+  url.searchParams.set("min_score", String(params?.min_score ?? 0.9));
+  url.searchParams.set("min_score_gap", String(params?.min_score_gap ?? 0.15));
+  url.searchParams.set(
+    "max_confirmations",
+    String(params?.max_confirmations ?? 10)
+  );
+  url.searchParams.set(
+    "max_bookmakers_per_event",
+    String(params?.max_bookmakers_per_event ?? 8)
+  );
+  url.searchParams.set("dry_run", String(params?.dry_run ?? true));
+  url.searchParams.set("force", String(params?.force ?? false));
+  url.searchParams.set("verbosity", String(params?.verbosity ?? 2));
+  url.searchParams.set(
+    "allow_root_bookmaker_match",
+    String(params?.allow_root_bookmaker_match ?? false)
+  );
+  url.searchParams.set(
+    "include_inactive_markets",
+    String(params?.include_inactive_markets ?? false)
+  );
+
+  if (params?.allowed_bookmakers) {
+    url.searchParams.set("allowed_bookmakers", params.allowed_bookmakers);
+  }
+
+  return fetchJson<AdminOddspapiRunResponse>(url.toString(), {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+function adminJsonHeaders(): HeadersInit {
+  return {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...buildProductRuntimeHeaders(),
+  };
+}
+
+export async function adminListAccessCampaigns(
+  limit = 50
+): Promise<AdminAccessCampaignsListResponse> {
+  const url = new URL("/admin/access-campaigns", API_BASE_URL);
+  url.searchParams.set("limit", String(limit));
+
+  return fetchJson<AdminAccessCampaignsListResponse>(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+  });
+}
+
+export async function adminGetAccessCampaign(
+  campaignId: number
+): Promise<AdminAccessCampaignDetailResponse> {
+  const url = new URL(`/admin/access-campaigns/${campaignId}`, API_BASE_URL);
+
+  return fetchJson<AdminAccessCampaignDetailResponse>(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+  });
+}
+
+export async function adminCreateAccessCampaign(
+  payload: AdminAccessCampaignUpsertPayload
+): Promise<AdminAccessCampaignDetailResponse> {
+  const url = new URL("/admin/access-campaigns", API_BASE_URL);
+
+  return fetchJson<AdminAccessCampaignDetailResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function adminUpdateAccessCampaign(
+  campaignId: number,
+  payload: AdminAccessCampaignUpsertPayload
+): Promise<AdminAccessCampaignDetailResponse> {
+  const url = new URL(`/admin/access-campaigns/${campaignId}`, API_BASE_URL);
+
+  return fetchJson<AdminAccessCampaignDetailResponse>(url.toString(), {
+    method: "PUT",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function adminPatchAccessCampaignStatus(
+  campaignId: number,
+  status: string
+): Promise<AdminAccessCampaignDetailResponse> {
+  const url = new URL(`/admin/access-campaigns/${campaignId}/status`, API_BASE_URL);
+
+  return fetchJson<AdminAccessCampaignDetailResponse>(url.toString(), {
+    method: "PATCH",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify({ status }),
   });
 }

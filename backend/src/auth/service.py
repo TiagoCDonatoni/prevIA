@@ -17,6 +17,7 @@ from src.auth.email_templates import (
     build_password_reset_email,
 )
 from src.auth.passwords import hash_password, validate_password_policy, verify_password
+from src.access.campaigns import resolve_effective_access_for_user
 from src.auth.sessions import (
     build_request_fingerprints,
     build_session_expires_at,
@@ -915,11 +916,17 @@ def _build_authenticated_payload(
         }
     else:
         subscription = _get_or_create_active_subscription(cur, user_id=user_id)
-    product_plan_code = _resolve_effective_product_plan_code(
+    base_product_plan_code = _resolve_effective_product_plan_code(
         subscription_plan_code=subscription["plan_code"],
         access_context=access_context,
         request=request,
     )
+    access_grant_context = resolve_effective_access_for_user(
+        cur,
+        user_id=user_id,
+        base_plan_code=base_product_plan_code,
+    )
+    product_plan_code = access_grant_context["effective_plan_code"]
 
     entitlements = _get_or_refresh_entitlements(
         cur,
@@ -966,6 +973,11 @@ def _build_authenticated_payload(
         },
         "access": {
             **access_context,
+            "base_plan_code": access_grant_context["base_plan_code"],
+            "effective_plan_code": access_grant_context["effective_plan_code"],
+            "effective_source": access_grant_context["effective_source"],
+            "active_grant": access_grant_context["active_grant"],
+            "discount_eligibility": access_grant_context["discount_eligibility"],
             "product_plan_code": product_plan_code,
         },
         "meta": {
@@ -1309,11 +1321,22 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
             "account_preferences": account_preferences,
         }
 
-        dev_plan_code = resolve_runtime_product_plan_code(
+        dev_base_plan_code = resolve_runtime_product_plan_code(
             request=request,
             access_context=dev_access_context,
             fallback_plan_code=actor["plan_code"],
         )
+
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                dev_access_grant_context = resolve_effective_access_for_user(
+                    cur,
+                    user_id=int(actor["user_id"]),
+                    base_plan_code=dev_base_plan_code,
+                )
+            conn.commit()
+
+        dev_plan_code = dev_access_grant_context["effective_plan_code"]
 
         return {
             "ok": True,
@@ -1339,6 +1362,11 @@ def get_auth_me_payload(request: Request) -> Dict[str, Any]:
             },
             "access": {
                 **dev_access_context,
+                "base_plan_code": dev_access_grant_context["base_plan_code"],
+                "effective_plan_code": dev_access_grant_context["effective_plan_code"],
+                "effective_source": dev_access_grant_context["effective_source"],
+                "active_grant": dev_access_grant_context["active_grant"],
+                "discount_eligibility": dev_access_grant_context["discount_eligibility"],
                 "product_plan_code": dev_plan_code,
             },
             "meta": {

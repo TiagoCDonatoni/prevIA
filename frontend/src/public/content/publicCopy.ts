@@ -1,5 +1,14 @@
 import type { Lang } from "../../i18n";
 
+type PublicLeagueCoverageGroupKey =
+  | "southAmerica"
+  | "northAmerica"
+  | "europe"
+  | "asiaOceania"
+  | "africa"
+  | "international"
+  | "other";
+
 type PublicCopy = {
   nav: {
     home: string;
@@ -27,6 +36,19 @@ type PublicCopy = {
       sidePoints: string[];
     };
     trustBar: string[];
+    leagueCoverage: {
+      kicker: string;
+      countLabel: string;
+      summary: string;
+      button: string;
+      modalTitle: string;
+      modalBody: string;
+      modalCloseLabel: string;
+      loading: string;
+      error: string;
+      empty: string;
+      groupLabels: Record<PublicLeagueCoverageGroupKey, string>;
+    };
     audience: {
       eyebrow: string;
       title: string;
@@ -138,6 +160,29 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         "Sem login para começar",
         "Leitura clara em pt, en e es",
       ],
+
+      leagueCoverage: {
+        kicker: "Cobertura",
+        countLabel: "{count} ligas disponíveis",
+        summary: "Brasileirão, Premier League, La Liga, Champions League, Libertadores e muito mais.",
+        button: "Ver todas as ligas",
+        modalTitle: "Competições cobertas pelo prevIA",
+        modalBody:
+          "Hoje o prevIA acompanha ligas nacionais, copas continentais e competições internacionais, com expansão contínua da cobertura.",
+        modalCloseLabel: "Fechar lista de ligas",
+        loading: "Carregando ligas disponíveis...",
+        error: "Não foi possível carregar a lista agora. Tente novamente em instantes.",
+        empty: "Nenhuma liga disponível foi encontrada no momento.",
+        groupLabels: {
+          southAmerica: "América do Sul",
+          northAmerica: "América do Norte",
+          europe: "Europa",
+          asiaOceania: "Ásia/Oceania",
+          africa: "África",
+          international: "Internacional",
+          other: "Outras regiões",
+        },
+      },
       audience: {
         eyebrow: "Para quem é",
         title: "Mais clareza para o público certo.",
@@ -345,6 +390,28 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         "No login to get started",
         "Clear reading in pt, en, and es",
       ],
+      leagueCoverage: {
+        kicker: "Coverage",
+        countLabel: "{count} available leagues",
+        summary: "Brasileirão, Premier League, La Liga, Champions League, Libertadores, and much more.",
+        button: "See all leagues",
+        modalTitle: "Competitions covered by prevIA",
+        modalBody:
+          "prevIA currently covers domestic leagues, continental cups, and international competitions, with coverage expanding over time.",
+        modalCloseLabel: "Close league list",
+        loading: "Loading available leagues...",
+        error: "We could not load the list right now. Please try again shortly.",
+        empty: "No available leagues were found at the moment.",
+        groupLabels: {
+          southAmerica: "South America",
+          northAmerica: "North America",
+          europe: "Europe",
+          asiaOceania: "Asia/Oceania",
+          africa: "Africa",
+          international: "International",
+          other: "Other regions",
+        },
+      },
       audience: {
         eyebrow: "Who it is for",
         title: "More clarity for the right audience.",
@@ -552,6 +619,28 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         "Sin login para empezar",
         "Lectura clara en pt, en y es",
       ],
+      leagueCoverage: {
+        kicker: "Cobertura",
+        countLabel: "{count} ligas disponibles",
+        summary: "Brasileirão, Premier League, La Liga, Champions League, Libertadores y mucho más.",
+        button: "Ver todas las ligas",
+        modalTitle: "Competiciones cubiertas por prevIA",
+        modalBody:
+          "Hoy prevIA cubre ligas nacionales, copas continentales y competiciones internacionales, con expansión continua de la cobertura.",
+        modalCloseLabel: "Cerrar lista de ligas",
+        loading: "Cargando ligas disponibles...",
+        error: "No fue posible cargar la lista ahora. Inténtalo de nuevo en unos instantes.",
+        empty: "No se encontraron ligas disponibles en este momento.",
+        groupLabels: {
+          southAmerica: "Sudamérica",
+          northAmerica: "Norteamérica",
+          europe: "Europa",
+          asiaOceania: "Asia/Oceanía",
+          africa: "África",
+          international: "Internacional",
+          other: "Otras regiones",
+        },
+      },
       audience: {
         eyebrow: "Para quién es",
         title: "Más claridad para el público correcto.",

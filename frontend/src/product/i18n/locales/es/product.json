@@ -60,5 +60,93 @@
   "noCountryResults": "No se encontraron países",
   "noLeagueResults": "No se encontraron ligas",
   "noBookResults": "No se encontraron casas",
-  "noTeamResults": "No se encontraron equipos"
+  "noTeamResults": "No se encontraron equipos",
+
+  "manualAnalysis": {
+    "title": "Evaluación manual de cuotas",
+    "subtitle": "Arma un matchup manual, ingresa las cuotas de tu casa favorita y compáralas con el modelo de prevIA.",
+    "lockedTitle": "Disponible en Light y Pro",
+    "lockedBody": "Esta pantalla fue pensada para matchups manuales con lectura personalizada de cuotas y está disponible desde Light.",
+    "lockedCta": "Ver planes",
+
+    "loadingLeagues": "Cargando ligas…",
+    "loadingTeams": "Cargando equipos…",
+
+    "leagueLabel": "Liga",
+    "leaguePlaceholder": "Selecciona una liga",
+    "leagueSearchPlaceholder": "Escribe una liga",
+    "leagueEmpty": "No se encontraron ligas",
+
+    "homeTeamLabel": "Local",
+    "homeTeamPlaceholder": "Selecciona el equipo local",
+    "awayTeamLabel": "Visitante",
+    "awayTeamPlaceholder": "Selecciona el equipo visitante",
+    "teamSearchPlaceholder": "Escribe un equipo",
+    "teamEmpty": "No se encontraron equipos",
+
+    "bookmakerLabel": "Casa de apuestas (opcional)",
+    "bookmakerPlaceholder": "Ej.: Betano, Bet365, Superbet",
+
+    "matchupPreviewLabel": "Matchup",
+    "matchupPreviewEmpty": "Elige local y visitante para armar el matchup.",
+    "matchupHint": "Este análisis se arma manualmente y no depende de un partido ya listado en el producto.",
+    "sameTeamWarning": "Local y visitante deben ser equipos diferentes.",
+
+    "market1x2": "Resultado 1X2",
+    "marketTotals": "Over/Under goles",
+    "marketBtts": "Ambos marcan",
+    "totalsLineLabel": "Línea de goles",
+
+    "homeLabel": "Cuota local",
+    "drawLabel": "Cuota empate",
+    "awayLabel": "Cuota visitante",
+    "overLabel": "Cuota Over {line}",
+    "underLabel": "Cuota Under {line}",
+    "yesLabel": "Cuota Sí",
+    "noLabel": "Cuota No",
+
+    "creditHint": "Cada nuevo análisis manual consume 1 crédito y queda guardado en tu historial.",
+    "submit": "Revisar análisis (1 crédito)",
+    "submitBusy": "Analizando…",
+    "genericError": "No fue posible generar el análisis ahora.",
+
+    "resultTitle": "Resultado",
+    "resultEmpty": "Arma un matchup manual, ingresa las cuotas que quieras y genera tu análisis.",
+    "resultModelProb": "Prob. modelo",
+    "resultFairOdd": "Fair odd",
+    "resultInterestingOdd": "Rango interesante",
+    "resultManualOdd": "Cuota ingresada",
+
+    "badgeGood": "Por encima del modelo",
+    "badgeAligned": "Alineada",
+    "badgeBad": "Por debajo del modelo",
+
+    "historyTitle": "Mis análisis manuales",
+    "historyLoading": "Cargando historial…",
+    "historyEmpty": "Aún no generaste análisis manuales.",
+    "historyOpen": "Abrir",
+
+    "confirmTitle": "Confirmar análisis manual",
+    "confirmBody": "¿Seguro que deseas generar este análisis manual? Esto consumirá 1 crédito.",
+    "confirmCreditHint": "El análisis quedará guardado en tu historial para futuras consultas sin nuevo consumo.",
+    "confirmCancel": "Cancelar",
+    "confirmSubmit": "Confirmar y analizar",
+
+    "subtitle": "Arma un matchup manual libre, ingresa las cuotas de tu casa favorita y compáralas con el modelo de prevIA.",
+    "leagueLabel": "Liga de referencia",
+    "leaguePlaceholder": "Automático por el equipo local",
+    "referenceLeagueLabel": "Liga de referencia (opcional)",
+    "referenceAuto": "Automático por el equipo local",
+    "teamSearchPlaceholder": "Escribe un equipo, país o liga",
+    "matchupHint": "Este análisis se arma manualmente y permite cruzar equipos de diferentes ligas/países.",
+
+    "summary": {
+      "league": "Referencia",
+      "match": "Matchup",
+      "market": "Mercado",
+      "odds": "Cuotas",
+      "bookmaker": "Casa",
+      "noOdds": "Sin cuotas cargadas"
+    }
+  }
 }

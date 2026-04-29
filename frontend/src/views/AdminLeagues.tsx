@@ -244,6 +244,7 @@ export default function AdminLeagues() {
       const out = await adminOpsDiscoverLeagueCandidates({
         default_enabled: false,
         auto_resolve: true,
+        all_sports: true,
       });
 
       setDiscoverMessage(

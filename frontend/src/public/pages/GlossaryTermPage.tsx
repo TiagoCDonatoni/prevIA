@@ -12,21 +12,42 @@ import {
 const COPY = {
   pt: {
     back: "Voltar ao glossário",
+    definition: "O que é",
     example: "Exemplo",
+    productNote: "Como o prevIA usa esse conceito",
+    faq: "Perguntas frequentes",
     related: "Termos relacionados",
     readTerm: "Ler termo",
+    ctaTitle: "Quer ver esse conceito aplicado em jogos reais?",
+    ctaBody:
+      "O prevIA organiza odds, probabilidade estimada, preço justo e leitura de valor para apoiar sua própria análise.",
+    ctaButton: "Conhecer o prevIA",
   },
   en: {
     back: "Back to glossary",
+    definition: "What it means",
     example: "Example",
+    productNote: "How prevIA uses this concept",
+    faq: "Frequently asked questions",
     related: "Related terms",
     readTerm: "Read term",
+    ctaTitle: "Want to see this concept applied to real matches?",
+    ctaBody:
+      "prevIA organizes odds, estimated probability, fair price, and value reading to support your own analysis.",
+    ctaButton: "Explore prevIA",
   },
   es: {
     back: "Volver al glosario",
+    definition: "Qué significa",
     example: "Ejemplo",
+    productNote: "Cómo prevIA usa este concepto",
+    faq: "Preguntas frecuentes",
     related: "Términos relacionados",
     readTerm: "Leer término",
+    ctaTitle: "¿Quieres ver este concepto aplicado a partidos reales?",
+    ctaBody:
+      "prevIA organiza cuotas, probabilidad estimada, precio justo y lectura de valor para apoyar tu propio análisis.",
+    ctaButton: "Conocer prevIA",
   },
 } as const;
 
@@ -40,18 +61,20 @@ export function GlossaryTermPage() {
   usePublicSeo({
     lang: currentLang,
     path: term ? `/${currentLang}/glossary/${term.slug}` : `/${currentLang}/glossary`,
-    title: term
-      ? currentLang === "pt"
-        ? `${term.term} | Glossário prevIA`
-        : currentLang === "en"
-          ? `${term.term} | prevIA Glossary`
-          : `${term.term} | Glosario prevIA`
-      : currentLang === "pt"
-        ? "Glossário prevIA"
-        : currentLang === "en"
-          ? "prevIA Glossary"
-          : "Glosario prevIA",
-    description: term?.shortDef ?? "",
+    title:
+      term?.seoTitle ??
+      (term
+        ? currentLang === "pt"
+          ? `${term.term} | Glossário prevIA`
+          : currentLang === "en"
+            ? `${term.term} | prevIA Glossary`
+            : `${term.term} | Glosario prevIA`
+        : currentLang === "pt"
+          ? "Glossário prevIA"
+          : currentLang === "en"
+            ? "prevIA Glossary"
+            : "Glosario prevIA"),
+    description: term?.seoDescription ?? term?.shortDef ?? "",
   });
 
   if (!term) {
@@ -59,6 +82,8 @@ export function GlossaryTermPage() {
   }
 
   const labels = GLOSSARY_CATEGORY_LABELS[currentLang];
+  const sections = term.sections ?? [];
+  const faq = term.faq ?? [];
   const related = (term.relatedIds ?? [])
     .map((id) => getGlossaryTermById(currentLang, id))
     .filter(Boolean);
@@ -76,10 +101,23 @@ export function GlossaryTermPage() {
       </header>
 
       <section className="glossary-term-section">
+        <h2 className="glossary-term-section-title">{copy.definition}</h2>
         <div className="glossary-term-richtext">
           <p>{term.fullDef}</p>
+          {term.intro ? <p>{term.intro}</p> : null}
         </div>
       </section>
+
+      {sections.map((section) => (
+        <section key={section.title} className="glossary-term-section">
+          <h2 className="glossary-term-section-title">{section.title}</h2>
+          <div className="glossary-term-richtext">
+            {section.body.map((paragraph, index) => (
+              <p key={`${section.title}-${index}`}>{paragraph}</p>
+            ))}
+          </div>
+        </section>
+      ))}
 
       {term.example ? (
         <section className="glossary-term-section">
@@ -88,15 +126,52 @@ export function GlossaryTermPage() {
         </section>
       ) : null}
 
-      {related.length ? (
+      {term.productNote ? (
         <section className="glossary-term-section">
-          <h2 className="glossary-term-section-title">{copy.related}</h2>
-          <div className="glossary-grid">
+          <h2 className="glossary-term-section-title">{copy.productNote}</h2>
+          <div className="glossary-product-note">
+            <p>{term.productNote}</p>
+          </div>
+        </section>
+      ) : null}
+
+      {faq.length ? (
+        <section className="glossary-term-section">
+          <h2 className="glossary-term-section-title">{copy.faq}</h2>
+          <div className="glossary-faq-list">
+            {faq.map((item) => (
+              <div key={item.question} className="glossary-faq-item">
+                <h3 className="glossary-faq-question">{item.question}</h3>
+                <p className="glossary-faq-answer">{item.answer}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="glossary-term-cta">
+        <div>
+          <h2 className="glossary-term-cta-title">{copy.ctaTitle}</h2>
+          <p className="glossary-term-cta-body">{copy.ctaBody}</p>
+        </div>
+
+        <Link to={`/${currentLang}`} className="public-btn public-btn-primary">
+          {copy.ctaButton}
+        </Link>
+      </section>
+
+      {related.length ? (
+        <section className="glossary-term-section glossary-related-section">
+          <div className="glossary-related-heading">
+            <h2 className="glossary-term-section-title">{copy.related}</h2>
+          </div>
+
+          <div className="glossary-grid glossary-related-grid">
             {related.map((item) => (
               <Link
                 key={item!.id}
                 to={`/${currentLang}/glossary/${item!.slug}`}
-                className="glossary-card glossary-card-linkbox"
+                className="glossary-card glossary-card-linkbox glossary-related-card"
                 aria-label={`${copy.readTerm}: ${item!.term}`}
               >
                 <div className="glossary-card-top">

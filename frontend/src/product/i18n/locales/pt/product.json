@@ -60,6 +60,93 @@
   "noCountryResults": "Nenhum país encontrado",
   "noLeagueResults": "Nenhuma liga encontrada",
   "noBookResults": "Nenhuma casa encontrada",
-  "noTeamResults": "Nenhum time encontrado"
-}
+  "noTeamResults": "Nenhum time encontrado",
 
+  "manualAnalysis": {
+    "title": "Avaliação manual de odds",
+    "subtitle": "Monte um confronto manual, informe as odds da sua casa preferida e compare com o modelo do prevIA.",
+    "lockedTitle": "Disponível no Light e Pro",
+    "lockedBody": "Essa tela foi pensada para matchup manual com leitura personalizada de odds e fica disponível a partir do Light.",
+    "lockedCta": "Ver planos",
+
+    "loadingLeagues": "Carregando ligas…",
+    "loadingTeams": "Carregando times…",
+
+    "leagueLabel": "Liga",
+    "leaguePlaceholder": "Selecione uma liga",
+    "leagueSearchPlaceholder": "Digite a liga",
+    "leagueEmpty": "Nenhuma liga encontrada",
+
+    "homeTeamLabel": "Mandante",
+    "homeTeamPlaceholder": "Selecione o time mandante",
+    "awayTeamLabel": "Visitante",
+    "awayTeamPlaceholder": "Selecione o time visitante",
+    "teamSearchPlaceholder": "Digite um time",
+    "teamEmpty": "Nenhum time encontrado",
+
+    "bookmakerLabel": "Casa de aposta (opcional)",
+    "bookmakerPlaceholder": "Ex.: Betano, Bet365, Superbet",
+
+    "matchupPreviewLabel": "Confronto",
+    "matchupPreviewEmpty": "Escolha mandante e visitante para montar o matchup.",
+    "matchupHint": "Essa análise é montada manualmente, sem depender de um jogo já listado no produto.",
+    "sameTeamWarning": "Mandante e visitante precisam ser times diferentes.",
+
+    "market1x2": "Resultado 1X2",
+    "marketTotals": "Over/Under gols",
+    "marketBtts": "Ambas marcam",
+    "totalsLineLabel": "Linha de gols",
+
+    "homeLabel": "Odd mandante",
+    "drawLabel": "Odd empate",
+    "awayLabel": "Odd visitante",
+    "overLabel": "Odd Over {line}",
+    "underLabel": "Odd Under {line}",
+    "yesLabel": "Odd Sim",
+    "noLabel": "Odd Não",
+
+    "creditHint": "Cada análise manual nova consome 1 crédito e fica salva no seu histórico.",
+    "submit": "Revisar análise (1 crédito)",
+    "submitBusy": "Analisando…",
+    "genericError": "Não foi possível gerar a análise agora.",
+
+    "resultTitle": "Resultado",
+    "resultEmpty": "Monte um confronto manual, informe as odds que quiser e gere a sua análise.",
+    "resultModelProb": "Prob. modelo",
+    "resultFairOdd": "Fair odd",
+    "resultInterestingOdd": "Faixa interessante",
+    "resultManualOdd": "Odd digitada",
+
+    "badgeGood": "Acima do modelo",
+    "badgeAligned": "Alinhada",
+    "badgeBad": "Abaixo do modelo",
+
+    "historyTitle": "Minhas análises manuais",
+    "historyLoading": "Carregando histórico…",
+    "historyEmpty": "Você ainda não gerou análises manuais.",
+    "historyOpen": "Abrir",
+
+    "confirmTitle": "Confirmar análise manual",
+    "confirmBody": "Tem certeza que deseja gerar esta análise manual? Isso consumirá 1 crédito.",
+    "confirmCreditHint": "A análise será salva no seu histórico para consulta futura sem novo consumo.",
+    "confirmCancel": "Cancelar",
+    "confirmSubmit": "Confirmar e analisar",
+
+    "subtitle": "Monte um confronto manual livre, informe as odds da sua casa preferida e compare com o modelo do prevIA.",
+    "leagueLabel": "Liga de referência",
+    "leaguePlaceholder": "Automático pela equipe mandante",
+    "referenceLeagueLabel": "Liga de referência (opcional)",
+    "referenceAuto": "Automático pela equipe mandante",
+    "teamSearchPlaceholder": "Digite um time, país ou liga",
+    "matchupHint": "Essa análise é montada manualmente e permite cruzar times de ligas/países diferentes.",
+
+    "summary": {
+      "league": "Referência",
+      "match": "Confronto",
+      "market": "Mercado",
+      "odds": "Odds",
+      "bookmaker": "Casa",
+      "noOdds": "Sem odds preenchidas"
+    }
+  }
+}

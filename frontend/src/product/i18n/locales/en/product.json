@@ -60,6 +60,93 @@
   "noCountryResults": "No countries found",
   "noLeagueResults": "No leagues found",
   "noBookResults": "No books found",
-  "noTeamResults": "No teams found"
-}
+  "noTeamResults": "No teams found",
 
+  "manualAnalysis": {
+    "title": "Manual odds evaluation",
+    "subtitle": "Build a manual matchup, enter the odds from your preferred bookmaker and compare them with the prevIA model.",
+    "lockedTitle": "Available on Light and Pro",
+    "lockedBody": "This page was built for manual matchups with personalized odds reading and is available from Light onwards.",
+    "lockedCta": "View plans",
+
+    "loadingLeagues": "Loading leagues…",
+    "loadingTeams": "Loading teams…",
+
+    "leagueLabel": "League",
+    "leaguePlaceholder": "Select a league",
+    "leagueSearchPlaceholder": "Type a league",
+    "leagueEmpty": "No leagues found",
+
+    "homeTeamLabel": "Home team",
+    "homeTeamPlaceholder": "Select the home team",
+    "awayTeamLabel": "Away team",
+    "awayTeamPlaceholder": "Select the away team",
+    "teamSearchPlaceholder": "Type a team",
+    "teamEmpty": "No teams found",
+
+    "bookmakerLabel": "Bookmaker (optional)",
+    "bookmakerPlaceholder": "Ex.: Betano, Bet365, Superbet",
+
+    "matchupPreviewLabel": "Matchup",
+    "matchupPreviewEmpty": "Choose home and away teams to build the matchup.",
+    "matchupHint": "This analysis is built manually and does not depend on a match already listed in the product.",
+    "sameTeamWarning": "Home and away teams must be different.",
+
+    "market1x2": "1X2 result",
+    "marketTotals": "Goals over/under",
+    "marketBtts": "Both teams to score",
+    "totalsLineLabel": "Goals line",
+
+    "homeLabel": "Home odd",
+    "drawLabel": "Draw odd",
+    "awayLabel": "Away odd",
+    "overLabel": "Over odd {line}",
+    "underLabel": "Under odd {line}",
+    "yesLabel": "Yes odd",
+    "noLabel": "No odd",
+
+    "creditHint": "Each new manual analysis costs 1 credit and is saved in your history.",
+    "submit": "Review analysis (1 credit)",
+    "submitBusy": "Analyzing…",
+    "genericError": "Could not generate the analysis right now.",
+
+    "resultTitle": "Result",
+    "resultEmpty": "Build a manual matchup, enter any odds you want and generate your analysis.",
+    "resultModelProb": "Model prob.",
+    "resultFairOdd": "Fair odd",
+    "resultInterestingOdd": "Interesting range",
+    "resultManualOdd": "Entered odd",
+
+    "badgeGood": "Above model",
+    "badgeAligned": "Aligned",
+    "badgeBad": "Below model",
+
+    "historyTitle": "My manual analyses",
+    "historyLoading": "Loading history…",
+    "historyEmpty": "You have not generated manual analyses yet.",
+    "historyOpen": "Open",
+
+    "confirmTitle": "Confirm manual analysis",
+    "confirmBody": "Are you sure you want to generate this manual analysis? This will consume 1 credit.",
+    "confirmCreditHint": "The analysis will be saved in your history for future consultation without a new charge.",
+    "confirmCancel": "Cancel",
+    "confirmSubmit": "Confirm and analyze",
+
+    "subtitle": "Build a fully manual matchup, enter your bookmaker odds and compare them with the prevIA model.",
+    "leagueLabel": "Reference league",
+    "leaguePlaceholder": "Automatic from home team",
+    "referenceLeagueLabel": "Reference league (optional)",
+    "referenceAuto": "Automatic from home team",
+    "teamSearchPlaceholder": "Type a team, country or league",
+    "matchupHint": "This analysis is built manually and allows teams from different leagues/countries.",
+
+    "summary": {
+      "league": "Reference",
+      "match": "Matchup",
+      "market": "Market",
+      "odds": "Odds",
+      "bookmaker": "Bookmaker",
+      "noOdds": "No odds entered"
+    }
+  }
+}

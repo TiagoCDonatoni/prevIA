@@ -10,6 +10,9 @@ import previewMainImg from "../assets/previews/landing-main.png";
 import previewMarketImg from "../assets/previews/landing-market.png";
 import previewAnalyticsImg from "../assets/previews/landing-analytics.png";
 import { PublicFreeAnonEmbed } from "../../product/components/PublicFreeAnonEmbed";
+import { productListLeagues } from "../../api/client";
+import type { ProductLeagueItem } from "../../api/contracts";
+
 import {
   ENABLE_PUBLIC_FREE_ANON_EMBED,
   ENABLE_PUBLIC_PRODUCT_LAYER,
@@ -33,6 +36,183 @@ const PREVIEW_IMAGES = [
 type LandingLang = "pt" | "en" | "es";
 
 const PUBLIC_LANDING_FREE_PLAN_ID: PlanId = "FREE";
+
+type LandingLeagueCoverageGroupKey =
+  | "southAmerica"
+  | "northAmerica"
+  | "europe"
+  | "asiaOceania"
+  | "africa"
+  | "international"
+  | "other";
+
+type LandingLeagueCoverageGroupLabels = Record<LandingLeagueCoverageGroupKey, string>;
+
+type LandingLeagueCoverageDisplayItem = {
+  key: string;
+  name: string;
+  country: string;
+};
+
+type LandingLeagueCoverageGroup = {
+  key: LandingLeagueCoverageGroupKey;
+  label: string;
+  items: LandingLeagueCoverageDisplayItem[];
+};
+
+const LANDING_LEAGUE_COVERAGE_FALLBACK_COUNT = 50;
+
+const LANDING_LEAGUE_GROUP_ORDER: LandingLeagueCoverageGroupKey[] = [
+  "southAmerica",
+  "northAmerica",
+  "europe",
+  "asiaOceania",
+  "africa",
+  "international",
+  "other",
+];
+
+const LANDING_LEAGUE_GROUP_BY_COUNTRY_CODE: Record<string, LandingLeagueCoverageGroupKey> = {
+  AR: "southAmerica",
+  BO: "southAmerica",
+  BR: "southAmerica",
+  CL: "southAmerica",
+  CO: "southAmerica",
+  EC: "southAmerica",
+  PY: "southAmerica",
+  PE: "southAmerica",
+  UY: "southAmerica",
+  VE: "southAmerica",
+  CONMEBOL: "southAmerica",
+
+  CA: "northAmerica",
+  MX: "northAmerica",
+  US: "northAmerica",
+  CONCACAF: "northAmerica",
+
+  AT: "europe",
+  BE: "europe",
+  BG: "europe",
+  CH: "europe",
+  CZ: "europe",
+  DE: "europe",
+  DK: "europe",
+  EE: "europe",
+  EN: "europe",
+  ES: "europe",
+  FI: "europe",
+  FR: "europe",
+  GB: "europe",
+  "GB-ENG": "europe",
+  "GB-SCT": "europe",
+  GR: "europe",
+  HR: "europe",
+  HU: "europe",
+  IE: "europe",
+  IS: "europe",
+  IT: "europe",
+  NL: "europe",
+  NO: "europe",
+  PL: "europe",
+  PT: "europe",
+  RO: "europe",
+  RS: "europe",
+  RU: "europe",
+  SE: "europe",
+  SK: "europe",
+  SI: "europe",
+  TR: "europe",
+  UA: "europe",
+  UEFA: "europe",
+
+  AU: "asiaOceania",
+  CN: "asiaOceania",
+  IL: "asiaOceania",
+  IN: "asiaOceania",
+  JP: "asiaOceania",
+  KR: "asiaOceania",
+  NZ: "asiaOceania",
+  SA: "asiaOceania",
+  AFC: "asiaOceania",
+
+  EG: "africa",
+  CAF: "africa",
+
+  FIFA: "international",
+};
+
+function normalizeLandingLeagueCountryCode(value: string | null | undefined): string {
+  return String(value || "").trim().toUpperCase();
+}
+
+function getLandingLeagueCoverageGroupKey(item: ProductLeagueItem): LandingLeagueCoverageGroupKey {
+  const sportKey = String(item.sport_key || "").toLowerCase();
+  const countryCode = normalizeLandingLeagueCountryCode(item.official_country_code);
+
+  if (
+    countryCode === "FIFA" ||
+    sportKey.includes("fifa_world_cup") ||
+    sportKey.includes("club_world_cup")
+  ) {
+    return "international";
+  }
+
+  return LANDING_LEAGUE_GROUP_BY_COUNTRY_CODE[countryCode] ?? "other";
+}
+
+function getLandingLeagueDisplayName(item: ProductLeagueItem): string {
+  return String(item.official_name || item.sport_title || item.sport_key || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getLandingLeagueCountryName(item: ProductLeagueItem): string {
+  const countryName = String(item.country_name || "").trim();
+  if (countryName) return countryName;
+
+  const countryCode = normalizeLandingLeagueCountryCode(item.official_country_code);
+  return countryCode;
+}
+
+function buildLandingLeagueCoverageGroups(
+  items: ProductLeagueItem[],
+  labels: LandingLeagueCoverageGroupLabels,
+): LandingLeagueCoverageGroup[] {
+  const buckets = new Map<LandingLeagueCoverageGroupKey, LandingLeagueCoverageDisplayItem[]>();
+
+  for (const key of LANDING_LEAGUE_GROUP_ORDER) {
+    buckets.set(key, []);
+  }
+
+  for (const item of items) {
+    const name = getLandingLeagueDisplayName(item);
+    if (!name) continue;
+
+    const groupKey = getLandingLeagueCoverageGroupKey(item);
+    const country = getLandingLeagueCountryName(item);
+
+    buckets.get(groupKey)?.push({
+      key: item.sport_key,
+      name,
+      country,
+    });
+  }
+
+  return LANDING_LEAGUE_GROUP_ORDER.map((key) => {
+    const groupItems = [...(buckets.get(key) ?? [])].sort((a, b) => {
+      const byCountry = a.country.localeCompare(b.country, undefined, { sensitivity: "base" });
+      if (byCountry !== 0) return byCountry;
+
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+
+    return {
+      key,
+      label: labels[key],
+      items: groupItems,
+    };
+  }).filter((group) => group.items.length > 0);
+}
 
 function getUnifiedFreePlanMeta(lang: LandingLang) {
   return {
@@ -310,12 +490,79 @@ export function PublicHomePage() {
     DEFAULT_CURRENCY_BY_LANG[landingLang],
   );
   const [billingCycle, setBillingCycle] = React.useState<BillingCycle>("annual");
+  const [isLeagueCoverageModalOpen, setIsLeagueCoverageModalOpen] = React.useState(false);
+  const [leagueCoverageItems, setLeagueCoverageItems] = React.useState<ProductLeagueItem[]>([]);
+  const [leagueCoverageCount, setLeagueCoverageCount] = React.useState<number | null>(null);
+  const [leagueCoverageLoading, setLeagueCoverageLoading] = React.useState(false);
+  const [leagueCoverageError, setLeagueCoverageError] = React.useState("");
 
   React.useEffect(() => {
-    setDisplayCurrency(DEFAULT_CURRENCY_BY_LANG[landingLang]);
-  }, [landingLang]);
+    let isMounted = true;
+
+    setLeagueCoverageLoading(true);
+    setLeagueCoverageError("");
+
+    productListLeagues()
+      .then((response) => {
+        if (!isMounted) return;
+
+        const items = Array.isArray(response.items) ? response.items : [];
+        const count =
+          typeof response.count === "number" && Number.isFinite(response.count)
+            ? response.count
+            : items.length;
+
+        setLeagueCoverageItems(items);
+        setLeagueCoverageCount(count);
+      })
+      .catch((error) => {
+        if (!isMounted) return;
+
+        setLeagueCoverageError(error instanceof Error ? error.message : "Failed to load leagues");
+      })
+      .finally(() => {
+        if (!isMounted) return;
+
+        setLeagueCoverageLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!isLeagueCoverageModalOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLeagueCoverageModalOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLeagueCoverageModalOpen]);
 
   const pricingCopy = getLandingPricingCopy(landingLang);
+
+  const leagueCoverageCopy = copy.home.leagueCoverage;
+  const leagueCoverageDisplayCount =
+    leagueCoverageCount ??
+    (leagueCoverageItems.length > 0 ? leagueCoverageItems.length : LANDING_LEAGUE_COVERAGE_FALLBACK_COUNT);
+
+  const leagueCoverageTitle = leagueCoverageCopy.countLabel.replace(
+    "{count}",
+    String(leagueCoverageDisplayCount),
+  );
+
+  const leagueCoverageGroups = React.useMemo(
+    () => buildLandingLeagueCoverageGroups(leagueCoverageItems, leagueCoverageCopy.groupLabels),
+    [leagueCoverageItems, leagueCoverageCopy.groupLabels],
+  );
 
   const selectedPlanCard =
     landingPlans.find((item) => normalizePlanId(item.planId) === selectedLandingPlan) ??
@@ -380,6 +627,24 @@ export function PublicHomePage() {
                   {item}
                 </span>
               ))}
+            </div>
+
+            <div className="landing-league-coverage-card">
+              <div className="landing-league-coverage-copy">
+                <span className="landing-league-coverage-kicker">
+                  {leagueCoverageCopy.kicker}
+                </span>
+                <strong>{leagueCoverageTitle}</strong>
+                <p>{leagueCoverageCopy.summary}</p>
+              </div>
+
+              <button
+                type="button"
+                className="landing-league-coverage-link"
+                onClick={() => setIsLeagueCoverageModalOpen(true)}
+              >
+                {leagueCoverageCopy.button}
+              </button>
             </div>
 
             <div className="public-actions">
@@ -760,6 +1025,81 @@ export function PublicHomePage() {
           </aside>
         </div>
       </section>
+
+      {isLeagueCoverageModalOpen ? (
+        <div
+          className="landing-league-modal-backdrop"
+          role="presentation"
+          onMouseDown={() => setIsLeagueCoverageModalOpen(false)}
+        >
+          <div
+            className="um-modal landing-league-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="landing-league-modal-title"
+            aria-describedby="landing-league-modal-body"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="product-modal-head">
+              <div className="product-modal-head-copy">
+                <span className="product-modal-kicker">{leagueCoverageCopy.kicker}</span>
+                <div id="landing-league-modal-title" className="product-modal-title">
+                  {leagueCoverageCopy.modalTitle}
+                </div>
+                <div id="landing-league-modal-body" className="product-modal-subtitle">
+                  {leagueCoverageCopy.modalBody}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="product-modal-close"
+                aria-label={leagueCoverageCopy.modalCloseLabel}
+                onClick={() => setIsLeagueCoverageModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="product-modal-body">
+              {leagueCoverageLoading && leagueCoverageItems.length === 0 ? (
+                <p className="landing-league-modal-status">{leagueCoverageCopy.loading}</p>
+              ) : null}
+
+              {leagueCoverageError && leagueCoverageItems.length === 0 ? (
+                <p className="landing-league-modal-status landing-league-modal-status-error">
+                  {leagueCoverageCopy.error}
+                </p>
+              ) : null}
+
+              {!leagueCoverageLoading &&
+              !leagueCoverageError &&
+              leagueCoverageItems.length === 0 ? (
+                <p className="landing-league-modal-status">{leagueCoverageCopy.empty}</p>
+              ) : null}
+
+              {leagueCoverageGroups.length > 0 ? (
+                <div className="landing-league-modal-groups">
+                  {leagueCoverageGroups.map((group) => (
+                    <section key={group.key} className="landing-league-modal-group">
+                      <h3>{group.label}</h3>
+
+                      <div className="landing-league-modal-list">
+                        {group.items.map((item) => (
+                          <div key={`${group.key}-${item.key}`} className="landing-league-modal-item">
+                            <span>{item.name}</span>
+                            {item.country ? <small>{item.country}</small> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

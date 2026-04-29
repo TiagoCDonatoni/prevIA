@@ -14,6 +14,7 @@ import type { Lang } from "../../i18n";
 import { publicCopy } from "../content/publicCopy";
 import { coercePublicLang, isPublicLang, replaceUrlLang } from "../lib/publicLang";
 import "../public.css";
+import "../glossary.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { ProductAuthModal, type AuthSuccessMeta } from "../../product/auth/ProductAuthModal";

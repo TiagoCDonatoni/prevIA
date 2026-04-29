@@ -998,3 +998,233 @@ export type AdminUserDetailResponse = {
     created_at_utc: string | null;
   }>;
 };
+
+// -------------------------
+// Admin — OddsPapi enrichment
+// -------------------------
+
+export type AdminOddspapiUsageStatus = {
+  month_start_utc: string | null;
+  request_count: number;
+  hard_cap: number;
+  reserve: number;
+  operational_cap: number;
+  remaining_operational: number;
+  is_capped: boolean;
+  last_endpoint?: string | null;
+  last_request_at_utc?: string | null;
+  last_status?: string | null;
+  last_error?: string | null;
+  updated_at_utc?: string | null;
+};
+
+export type AdminOddspapiStatusResponse = {
+  ok: boolean;
+  provider: "oddspapi" | string;
+  mode: string;
+  source_of_truth: string;
+  enabled: boolean;
+  api_key_set: boolean;
+  base_url: string;
+  usage: AdminOddspapiUsageStatus;
+  bookmakers: {
+    primary: string[];
+    secondary: string[];
+  };
+  last_request: {
+    endpoint: string | null;
+    at_utc: string | null;
+    status: string | null;
+    error: string | null;
+  };
+  policy: Record<string, any>;
+};
+
+export type AdminOddspapiEventStatusItem = {
+  provider: string;
+  provider_event_id: string;
+  canonical_event_id: string;
+  core_fixture_id: number | null;
+  sport_key: string | null;
+  confidence: number | null;
+  match_reason: string | null;
+  active: boolean;
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+  snapshots_1x2: {
+    count: number;
+    last_captured_at_utc: string | null;
+    bookmakers: string[];
+  };
+  refresh: {
+    log_count: number;
+    last_refresh_log_at_utc: string | null;
+    summary: string | null;
+  };
+};
+
+export type AdminOddspapiEventsStatusResponse = {
+  ok: boolean;
+  provider: "oddspapi" | string;
+  mode: string;
+  request_count_consumed: number;
+  count: number;
+  filters: {
+    core_fixture_id: number | null;
+    canonical_event_id: string | null;
+    limit: number;
+  };
+  usage: AdminOddspapiUsageStatus;
+  items: AdminOddspapiEventStatusItem[];
+  policy: Record<string, any>;
+};
+
+export type AdminOddspapiRunResponse = {
+  ok: boolean;
+  provider: "oddspapi" | string;
+  mode: string;
+  dry_run: boolean;
+  request_count_consumed: number;
+  request_budget_remaining?: number;
+  usage_before?: AdminOddspapiUsageStatus;
+  usage_after?: AdminOddspapiUsageStatus;
+  params?: Record<string, any>;
+  phases?: Record<string, any>;
+  counters?: Record<string, any>;
+  policy?: Record<string, any>;
+  reason?: string | null;
+};
+
+export type AdminAccessCampaign = {
+  campaign_id: number;
+  slug: string;
+  label: string;
+  kind: string;
+  status: string;
+
+  trial_enabled: boolean;
+  trial_plan_code: string | null;
+  trial_duration_days: number | null;
+  trial_grant_category: string;
+
+  allow_existing_users: boolean;
+  allow_previous_trial_users: boolean;
+  allow_paid_upgrade_trial: boolean;
+  requires_approval: boolean;
+
+  starts_at_utc: string | null;
+  expires_at_utc: string | null;
+  max_redemptions: number | null;
+  redeemed_count: number;
+
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+  metadata_json: Record<string, any>;
+
+  active_grants_count?: number;
+  redeemed_rows_count?: number;
+  public_url_path?: string;
+};
+
+export type AdminAccessCampaignOffer = {
+  offer_id: number;
+  campaign_id: number;
+  status: string;
+
+  discount_type: string;
+  discount_percent: number | null;
+  discount_amount_cents: number | null;
+  currency: string | null;
+
+  discount_duration: string;
+  discount_duration_months: number | null;
+
+  eligible_plan_codes: string[];
+  eligible_billing_cycles: string[];
+
+  offer_valid_until_utc: string | null;
+  offer_valid_days_after_grant_end: number | null;
+
+  stripe_coupon_id: string | null;
+  stripe_promotion_code_id: string | null;
+
+  max_redemptions: number | null;
+  redeemed_count: number;
+
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+  metadata_json: Record<string, any>;
+};
+
+export type AdminAccessCampaignRedemption = {
+  redemption_id: number;
+  status: string;
+  failure_reason: string | null;
+  redeemed_at_utc: string | null;
+  email_normalized: string;
+  email: string | null;
+  full_name: string | null;
+  grant: null | {
+    grant_id: number;
+    grant_category: string;
+    plan_code: string;
+    starts_at_utc: string | null;
+    ends_at_utc: string | null;
+    status: string;
+  };
+};
+
+export type AdminAccessCampaignsListResponse = {
+  ok: true;
+  campaigns: AdminAccessCampaign[];
+};
+
+export type AdminAccessCampaignDetailResponse = {
+  ok: true;
+  campaign: AdminAccessCampaign;
+  offer: AdminAccessCampaignOffer | null;
+  redemptions: AdminAccessCampaignRedemption[];
+};
+
+export type AdminAccessCampaignOfferPayload = {
+  enabled: boolean;
+  status?: string;
+  discount_type: "percent" | "amount";
+  discount_percent?: number | null;
+  discount_amount_cents?: number | null;
+  currency?: string | null;
+  discount_duration: "once" | "repeating" | "forever";
+  discount_duration_months?: number | null;
+  eligible_plan_codes: string[];
+  eligible_billing_cycles: string[];
+  offer_valid_until_utc?: string | null;
+  offer_valid_days_after_grant_end?: number | null;
+  stripe_coupon_id?: string | null;
+  stripe_promotion_code_id?: string | null;
+  max_redemptions?: number | null;
+  metadata_json?: Record<string, any>;
+};
+
+export type AdminAccessCampaignUpsertPayload = {
+  slug: string;
+  label: string;
+  kind: string;
+  status: string;
+
+  trial_enabled: boolean;
+  trial_plan_code: string | null;
+  trial_duration_days: number | null;
+  trial_grant_category: string;
+
+  allow_existing_users: boolean;
+  allow_previous_trial_users: boolean;
+  allow_paid_upgrade_trial: boolean;
+  requires_approval: boolean;
+
+  starts_at_utc: string | null;
+  expires_at_utc: string | null;
+  max_redemptions: number | null;
+
+  metadata_json: Record<string, any>;
+  offer?: AdminAccessCampaignOfferPayload;
+};

@@ -16,6 +16,7 @@ import OddsMarketBtts from "./views/OddsMarketBtts";
 import OddsAudit from "./views/OddsAudit";
 import AdminLeagues from "./views/AdminLeagues";
 import AdminUsers from "./views/AdminUsers";
+import AdminAccessCampaigns from "./views/AdminAccessCampaigns";
 
 type Page =
   | "dashboard"
@@ -31,6 +32,7 @@ type Page =
   | "odds_btts"
   | "odds_audit"
   | "users"
+  | "access_campaigns"
   | "leagues";
 
 type MacroAreaKey = "overview" | "ops" | "product" | "backoffice";
@@ -75,7 +77,10 @@ const NAV_SECTIONS: NavSection[] = [
   {
     key: "backoffice",
     label: "Backoffice",
-    items: [{ key: "users", label: "Users" }],
+    items: [
+      { key: "users", label: "Users" },
+      { key: "access_campaigns", label: "Campanhas" },
+    ],
   },
 ];
 
@@ -155,6 +160,7 @@ export default function App() {
           {page === "odds_btts" && <OddsMarketBtts />}
           {page === "odds_audit" && <OddsAudit />}
           {page === "users" && <AdminUsers />}
+          {page === "access_campaigns" && <AdminAccessCampaigns />}
           {page === "leagues" && <AdminLeagues />}
         </div>
       </div>

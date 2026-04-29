@@ -12,6 +12,7 @@ from src.http.admin_odds_router import router as legacy_admin_odds_router
 from src.http.admin_matchup_router import router as admin_matchup_router
 from src.http.admin_catalog_router import router as admin_catalog_router
 from src.http.product_leagues_router import router as product_leagues_router
+from src.http.product_manual_analysis_router import router as product_manual_analysis_router
 from src.http.product_index_router import router as product_index_router
 from src.http.auth_router import router as auth_router
 from src.http.access_router import router as access_router
@@ -19,6 +20,7 @@ from src.http.admin_ops_router import router as admin_ops_router
 from src.http.internal_ops_router import router as internal_ops_router
 from src.http.admin_users_router import router as admin_users_router
 from src.http.billing_router import router as billing_router
+from src.http.admin_access_campaigns_router import router as admin_access_campaigns_router
 
 
 def create_app() -> FastAPI:
@@ -59,12 +61,14 @@ def create_app() -> FastAPI:
 
     api.include_router(admin_catalog_router)
     api.include_router(product_leagues_router)
+    api.include_router(product_manual_analysis_router)
     api.include_router(product_index_router)
     api.include_router(auth_router)
     api.include_router(billing_router)
     api.include_router(admin_ops_router)
     api.include_router(internal_ops_router)
     api.include_router(admin_users_router)
+    api.include_router(admin_access_campaigns_router)
 
     @api.get("/", response_class=HTMLResponse)
     def index():

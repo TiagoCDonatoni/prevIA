@@ -209,6 +209,68 @@ const INTERNAL_NARRATIVE_VIEW_OPTIONS: Array<{
   { id: "CREATOR", label: "Criador / Tipster" },
 ];
 
+function mapHeaderPlanLabel(raw: string | null | undefined) {
+  const plan = String(raw || "").trim().toUpperCase();
+  return PLAN_LABELS.find((item) => item.id === plan)?.label ?? plan;
+}
+
+function getDaysRemainingFromIso(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const diffMs = date.getTime() - Date.now();
+
+  if (diffMs <= 0) return 0;
+
+  return Math.ceil(diffMs / 86_400_000);
+}
+
+function formatHeaderDate(lang: Lang, raw: string | null | undefined): string {
+  if (!raw) return "—";
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return new Intl.DateTimeFormat(
+    lang === "pt" ? "pt-BR" : lang === "es" ? "es-ES" : "en-US",
+    {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }
+  ).format(date);
+}
+
+function mapGrantKindLabel(lang: Lang, raw: string | null | undefined) {
+  const value = String(raw || "").trim().toLowerCase();
+
+  if (value === "beta") {
+    return lang === "pt" ? "Beta" : lang === "es" ? "Beta" : "Beta";
+  }
+
+  if (value === "paid_upgrade_trial") {
+    return lang === "pt" ? "Trial" : lang === "es" ? "Trial" : "Trial";
+  }
+
+  return lang === "pt" ? "Trial" : lang === "es" ? "Trial" : "Trial";
+}
+
+function formatTrialDaysLabel(lang: Lang, days: number | null) {
+  if (days == null) {
+    return lang === "pt" ? "temporário" : lang === "es" ? "temporal" : "temporary";
+  }
+
+  if (days <= 0) {
+    return lang === "pt" ? "termina hoje" : lang === "es" ? "termina hoy" : "ends today";
+  }
+
+  if (lang === "pt") return `${days} dia${days === 1 ? "" : "s"}`;
+  if (lang === "es") return `${days} día${days === 1 ? "" : "s"}`;
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
 export function ProductLayout() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
@@ -612,6 +674,44 @@ if (shouldShowBlockingAuthSplash) {
     <div className="pl-credits">{t(lang, "credits.counter", { remaining, limit })}</div>
   );
 
+  const activeGrant = store.accessContext?.active_grant ?? null;
+  const hasTemporaryAccess =
+    Boolean(activeGrant) && String(store.accessContext?.effective_source || "") === "grant";
+
+  const temporaryPlanLabel = mapHeaderPlanLabel(
+    store.accessContext?.effective_plan_code ?? activeGrant?.plan_code ?? plan
+  );
+  const temporaryBasePlanLabel = mapHeaderPlanLabel(
+    store.accessContext?.base_plan_code ??
+      store.accountSnapshot?.subscription?.plan_code ??
+      store.state.plan
+  );
+  const temporaryGrantKindLabel = mapGrantKindLabel(lang, activeGrant?.grant_category);
+  const temporaryDaysRemaining = getDaysRemainingFromIso(activeGrant?.ends_at_utc);
+  const temporaryEndsAtLabel = formatHeaderDate(lang, activeGrant?.ends_at_utc);
+  const temporaryDaysLabel = formatTrialDaysLabel(lang, temporaryDaysRemaining);
+
+  const temporaryAccessTitle =
+    lang === "pt"
+      ? `Você está testando o ${temporaryPlanLabel}. Plano base: ${temporaryBasePlanLabel}. Termina em ${temporaryEndsAtLabel}.`
+      : lang === "es"
+      ? `Estás probando ${temporaryPlanLabel}. Plan base: ${temporaryBasePlanLabel}. Termina el ${temporaryEndsAtLabel}.`
+      : `You are testing ${temporaryPlanLabel}. Base plan: ${temporaryBasePlanLabel}. Ends on ${temporaryEndsAtLabel}.`;
+
+  const temporaryAccessBadge = hasTemporaryAccess ? (
+    <Link
+      to="account"
+      className="product-trial-badge"
+      title={temporaryAccessTitle}
+      aria-label={temporaryAccessTitle}
+    >
+      <span className="product-trial-badge-plan">{temporaryPlanLabel}</span>
+      <span className="product-trial-badge-kind">{temporaryGrantKindLabel}</span>
+      <span className="product-trial-badge-dot" aria-hidden="true">·</span>
+      <span className="product-trial-badge-days">{temporaryDaysLabel}</span>
+    </Link>
+  ) : null;
+
   const renderHeaderActions = (onAfterClick?: () => void) => {
     if (authBootstrapPending) {
       return null;
@@ -675,6 +775,18 @@ const accountMenuDropdown = isAccountMenuOpen ? (
     aria-label={t(lang, "auth.account")}
   >
     <Link
+      to="manual-analysis"
+      role="menuitem"
+      className="product-account-menu-item"
+      onClick={() => {
+        setIsAccountMenuOpen(false);
+        setIsMobileHeaderMenuOpen(false);
+      }}
+    >
+      {t(lang, "nav.manualAnalysis")}
+    </Link>
+
+    <Link
       to="account"
       role="menuitem"
       className="product-account-menu-item"
@@ -692,6 +804,8 @@ const accountMenuDropdown = isAccountMenuOpen ? (
         role="menuitem"
         className="product-account-menu-item"
         onClick={() => {
+          setIsAccountMenuOpen(false);
+          setIsMobileHeaderMenuOpen(false);
           void handleLogout();
         }}
       >
@@ -854,6 +968,7 @@ const mobileHeaderMenuContent = (
             </div>
 
             <div className="pl-credits-wrap">
+              {temporaryAccessBadge}
               {creditsBadge}
               {renderHeaderActions()}
             </div>
@@ -879,6 +994,7 @@ const mobileHeaderMenuContent = (
           </div>
 
           <div className="product-header-right product-header-right-mobile">
+            {temporaryAccessBadge}
             {creditsBadge}
 
             <button

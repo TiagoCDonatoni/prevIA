@@ -8,7 +8,7 @@ from src.db.pg import pg_conn
 from src.odds.jobs.odds_refresh_resolve_job import _client
 
 
-def sync_odds_sport_catalog() -> Dict[str, Any]:
+def sync_odds_sport_catalog(*, all_sports: bool = False) -> Dict[str, Any]:
     """
     Sync automático do catálogo de esportes/ligas disponíveis na Odds API.
     Persiste em odds.odds_sport_catalog.
@@ -18,7 +18,7 @@ def sync_odds_sport_catalog() -> Dict[str, Any]:
       - Retorna counters
       - Idempotente via UPSERT
     """
-    sports: List[Dict[str, Any]] = _client().list_sports()
+    sports: List[Dict[str, Any]] = _client().list_sports(all_sports=all_sports)
     now = datetime.now(timezone.utc)
 
     upserted = 0
@@ -66,6 +66,7 @@ def sync_odds_sport_catalog() -> Dict[str, Any]:
     return {
         "sports_seen": len(sports),
         "catalog_upserted": upserted,
+        "all_sports": bool(all_sports),
         "skipped": skipped,
         "captured_at_utc": now.isoformat(),
     }

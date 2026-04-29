@@ -130,6 +130,57 @@ function formatDateTime(lang: Lang, raw: string | null | undefined) {
   }
 }
 
+function getDaysRemainingFromIso(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const diffMs = date.getTime() - Date.now();
+
+  if (diffMs <= 0) return 0;
+
+  return Math.ceil(diffMs / 86_400_000);
+}
+
+function formatTemporaryDays(lang: Lang, days: number | null) {
+  if (days == null) {
+    return lang === "pt" ? "temporário" : lang === "es" ? "temporal" : "temporary";
+  }
+
+  if (days <= 0) {
+    return lang === "pt" ? "termina hoje" : lang === "es" ? "termina hoy" : "ends today";
+  }
+
+  if (lang === "pt") return `${days} dia${days === 1 ? "" : "s"}`;
+  if (lang === "es") return `${days} día${days === 1 ? "" : "s"}`;
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function mapTemporaryGrantKind(lang: Lang, raw: string | null | undefined) {
+  const value = String(raw || "").trim().toLowerCase();
+
+  if (value === "beta") {
+    return lang === "pt" ? "Beta" : lang === "es" ? "Beta" : "Beta";
+  }
+
+  if (value === "paid_upgrade_trial") {
+    return lang === "pt" ? "Trial de upgrade" : lang === "es" ? "Trial de upgrade" : "Upgrade trial";
+  }
+
+  return lang === "pt" ? "Trial" : lang === "es" ? "Trial" : "Trial";
+}
+
+function toPaidPlanTarget(raw: string | null | undefined): Exclude<PlanId, "FREE" | "FREE_ANON"> | null {
+  const plan = normalizeBackendPlanCode(raw);
+
+  if (plan === "BASIC" || plan === "LIGHT" || plan === "PRO") {
+    return plan;
+  }
+
+  return null;
+}
+
 function mapBillingCycleLabel(
   uiLang: Lang,
   raw: "monthly" | "quarterly" | "semiannual" | "annual" | null | undefined
@@ -275,6 +326,51 @@ export default function ProductAccountPage() {
       ? snapshotPlan
       : store.state.plan;
   const planCatalog = PLAN_CATALOG[plan];
+
+  const activeGrant = store.accessContext?.active_grant ?? null;
+  const discountEligibility = store.accessContext?.discount_eligibility ?? null;
+  const hasTemporaryAccess =
+    Boolean(activeGrant) && String(store.accessContext?.effective_source || "") === "grant";
+
+  const temporaryBasePlan = normalizeBackendPlanCode(
+    store.accessContext?.base_plan_code ?? account.subscription.plan_code ?? plan
+  );
+  const temporaryEffectivePlan = normalizeBackendPlanCode(
+    store.accessContext?.effective_plan_code ?? activeGrant?.plan_code ?? plan
+  );
+  const temporaryTargetPlan = toPaidPlanTarget(temporaryEffectivePlan);
+
+  const temporaryBasePlanLabel = mapPlanLabel(temporaryBasePlan);
+  const temporaryEffectivePlanLabel = mapPlanLabel(temporaryEffectivePlan);
+  const temporaryGrantKindLabel = mapTemporaryGrantKind(lang, activeGrant?.grant_category);
+  const temporaryEndsAtLabel = formatDateTime(lang, activeGrant?.ends_at_utc);
+  const temporaryStartsAtLabel = formatDateTime(lang, activeGrant?.starts_at_utc);
+  const temporaryDaysLabel = formatTemporaryDays(
+    lang,
+    getDaysRemainingFromIso(activeGrant?.ends_at_utc)
+  );
+  const temporaryCampaignLabel =
+    activeGrant?.campaign_label ||
+    activeGrant?.campaign_slug ||
+    (lang === "pt" ? "Campanha de acesso" : lang === "es" ? "Campaña de acceso" : "Access campaign");
+
+  const discountEndsAtLabel = formatDateTime(lang, discountEligibility?.ends_at_utc);
+  const discountEligiblePlansLabel =
+    discountEligibility?.eligible_plan_codes?.length
+      ? discountEligibility.eligible_plan_codes.map(mapPlanLabel).join(", ")
+      : temporaryEffectivePlanLabel;
+
+  const discountEligibleCyclesLabel =
+    discountEligibility?.eligible_billing_cycles?.length
+      ? discountEligibility.eligible_billing_cycles
+          .map((cycle) =>
+            mapBillingCycleLabel(
+              lang,
+              cycle as "monthly" | "quarterly" | "semiannual" | "annual"
+            )
+          )
+          .join(", ")
+      : null;
 
   const dailyLimit = store.backendUsage.is_ready
     ? (store.backendUsage.daily_limit ?? store.entitlements.credits.daily_limit)
@@ -1065,6 +1161,21 @@ export default function ProductAccountPage() {
     }
   }
 
+  function handleOpenTemporaryAccessOffer() {
+    if (temporaryTargetPlan) {
+      setBillingChangePlan(temporaryTargetPlan);
+      setBillingChangePreview(null);
+      setBillingChangeError(null);
+      setBillingChangeResultMessage(null);
+    }
+
+    window.setTimeout(() => {
+      document
+        .getElementById("account-billing-section")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+
   async function handleSaveProfile() {
     const nextName = profileName.trim();
 
@@ -1309,7 +1420,166 @@ export default function ProductAccountPage() {
           </dl>
         </article>
 
-        <article className="account-card">
+        {hasTemporaryAccess ? (
+          <article className="account-card account-temporary-access-card">
+            <div className="account-card-head">
+              <h2>
+                {lang === "pt"
+                  ? "Acesso temporário ativo"
+                  : lang === "es"
+                  ? "Acceso temporal activo"
+                  : "Active temporary access"}
+              </h2>
+              <p>
+                {lang === "pt"
+                  ? `Você está testando o ${temporaryEffectivePlanLabel} por tempo limitado. Seu plano base continua sendo ${temporaryBasePlanLabel}.`
+                  : lang === "es"
+                  ? `Estás probando ${temporaryEffectivePlanLabel} por tiempo limitado. Tu plan base sigue siendo ${temporaryBasePlanLabel}.`
+                  : `You are testing ${temporaryEffectivePlanLabel} for a limited time. Your base plan remains ${temporaryBasePlanLabel}.`}
+              </p>
+            </div>
+
+            <dl className="account-meta">
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Plano base"
+                    : lang === "es"
+                    ? "Plan base"
+                    : "Base plan"}
+                </dt>
+                <dd>{temporaryBasePlanLabel}</dd>
+              </div>
+
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Acesso atual"
+                    : lang === "es"
+                    ? "Acceso actual"
+                    : "Current access"}
+                </dt>
+                <dd>
+                  {temporaryEffectivePlanLabel} · {temporaryGrantKindLabel}
+                </dd>
+              </div>
+
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Tempo restante"
+                    : lang === "es"
+                    ? "Tiempo restante"
+                    : "Time remaining"}
+                </dt>
+                <dd>{temporaryDaysLabel}</dd>
+              </div>
+
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Início"
+                    : lang === "es"
+                    ? "Inicio"
+                    : "Started"}
+                </dt>
+                <dd>{temporaryStartsAtLabel ?? "—"}</dd>
+              </div>
+
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Término"
+                    : lang === "es"
+                    ? "Finalización"
+                    : "Ends"}
+                </dt>
+                <dd>{temporaryEndsAtLabel ?? "—"}</dd>
+              </div>
+
+              <div>
+                <dt>
+                  {lang === "pt"
+                    ? "Origem"
+                    : lang === "es"
+                    ? "Origen"
+                    : "Source"}
+                </dt>
+                <dd>{temporaryCampaignLabel}</dd>
+              </div>
+            </dl>
+
+            <div className="account-note account-temporary-access-note">
+              {lang === "pt"
+                ? `Quando o período terminar, sua conta volta automaticamente para ${temporaryBasePlanLabel}.`
+                : lang === "es"
+                ? `Cuando el período termine, tu cuenta volverá automáticamente a ${temporaryBasePlanLabel}.`
+                : `When the period ends, your account automatically returns to ${temporaryBasePlanLabel}.`}
+            </div>
+
+            {discountEligibility ? (
+              <div className="account-temporary-offer">
+                <strong>
+                  {lang === "pt"
+                    ? "Oferta especial disponível"
+                    : lang === "es"
+                    ? "Oferta especial disponible"
+                    : "Special offer available"}
+                </strong>
+
+                <p>
+                  {lang === "pt"
+                    ? `Você tem uma oferta ativa para continuar no ${discountEligiblePlansLabel}.`
+                    : lang === "es"
+                    ? `Tienes una oferta activa para continuar en ${discountEligiblePlansLabel}.`
+                    : `You have an active offer to continue on ${discountEligiblePlansLabel}.`}
+                </p>
+
+                <dl className="account-temporary-offer-meta">
+                  <div>
+                    <dt>
+                      {lang === "pt"
+                        ? "Válida até"
+                        : lang === "es"
+                        ? "Válida hasta"
+                        : "Valid until"}
+                    </dt>
+                    <dd>{discountEndsAtLabel ?? "—"}</dd>
+                  </div>
+
+                  {discountEligibleCyclesLabel ? (
+                    <div>
+                      <dt>
+                        {lang === "pt"
+                          ? "Ciclos elegíveis"
+                          : lang === "es"
+                          ? "Ciclos elegibles"
+                          : "Eligible cycles"}
+                      </dt>
+                      <dd>{discountEligibleCyclesLabel}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+            ) : null}
+
+            <div className="account-actions-list">
+              <button
+                type="button"
+                className="product-primary"
+                onClick={handleOpenTemporaryAccessOffer}
+              >
+                {lang === "pt"
+                  ? `Ver opções para continuar no ${temporaryEffectivePlanLabel}`
+                  : lang === "es"
+                  ? `Ver opciones para continuar en ${temporaryEffectivePlanLabel}`
+                  : `See options to continue on ${temporaryEffectivePlanLabel}`}
+              </button>
+            </div>
+          </article>
+        ) : null}
+
+        <article id="account-billing-section" className="account-card">
           <div className="account-card-head">
             <h2>{t(lang, "auth.billingSectionTitle")}</h2>
             <p>{t(lang, "auth.billingSectionSubtitle")}</p>

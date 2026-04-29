@@ -12,6 +12,7 @@ import { GlossaryTermPage } from "./public/pages/GlossaryTermPage";
 import { PublicAboutPage } from "./public/pages/PublicAboutPage";
 import { PublicContactPage } from "./public/pages/PublicContactPage";
 import { PublicAnalyticsTracker } from "./public/PublicAnalyticsTracker";
+import { PublicBetaCampaignPage } from "./public/pages/PublicBetaCampaignPage";
 
 import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP } from "./config";
 
@@ -32,6 +33,8 @@ export function AppRoutes() {
           <Route path="glossary/:slug" element={<GlossaryTermPage />} />
           <Route path="about" element={<PublicAboutPage />} />
           <Route path="contact" element={<PublicContactPage />} />
+          <Route path="beta/:slug" element={<PublicBetaCampaignPage />} />
+          <Route path="campanha/:slug" element={<PublicBetaCampaignPage />} />
         </Route>
 
         {/* Produto guardado por flag */}

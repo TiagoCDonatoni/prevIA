@@ -37,9 +37,13 @@ class TheOddsClient:
         # The Odds API responde JSON (list/dict)
         return r.json()
 
-    def list_sports(self) -> List[Dict[str, Any]]:
+    def list_sports(self, *, all_sports: bool = False) -> List[Dict[str, Any]]:
         # GET /v4/sports
-        return self._get("/sports", params={})
+        # all=true returns the complete sports catalog, including inactive/out-of-season leagues.
+        params: Dict[str, Any] = {}
+        if all_sports:
+            params["all"] = "true"
+        return self._get("/sports", params=params)
 
     def get_odds_h2h(
         self,
