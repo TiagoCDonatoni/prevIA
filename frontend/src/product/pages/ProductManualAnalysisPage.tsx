@@ -10,6 +10,8 @@ import {
   fetchManualAnalysisHistory,
   postManualAnalysisEvaluate,
   type ManualAnalysisEvaluateRequest,
+  type ManualAnalysisMarketKey,
+  type ManualAnalysisMarketSnapshot,
   type ManualAnalysisResponse,
 } from "../api/manualAnalysis";
 import { useProductStore } from "../state/productStore";
@@ -17,7 +19,7 @@ import { useProductStore } from "../state/productStore";
 const ALLOWED_PLANS: PlanId[] = ["LIGHT", "PRO"];
 const TOTALS_LINE_OPTIONS = [1.5, 2.5, 3.5, 4.5] as const;
 
-type MarketKey = "1X2" | "TOTALS" | "BTTS";
+type MarketSectionKey = "one_x_two" | "totals" | "btts";
 function sanitizeOddInput(raw: string) {
   const normalized = raw.replace(/,/g, ".").replace(/[^0-9.]/g, "");
   let output = "";
@@ -55,7 +57,7 @@ function fmtOdd(value: number | null | undefined) {
 
 function getSelectionLabel(
   lang: Lang,
-  marketKey: MarketKey,
+  marketKey: ManualAnalysisMarketKey,
   selectionKey: string,
   event?: ManualAnalysisResponse["event"]
 ) {
@@ -86,30 +88,93 @@ function getSelectionLabel(
   return lang === "pt" ? "BTTS Não" : lang === "es" ? "BTTS No" : "BTTS No";
 }
 
+function getMarketSectionTitle(
+  tr: (key: string, vars?: Record<string, unknown>) => string,
+  sectionKey: MarketSectionKey,
+  market?: ManualAnalysisMarketSnapshot
+) {
+  if (sectionKey === "one_x_two") return tr("market1x2");
+  if (sectionKey === "totals") {
+    const line = market?.market?.line ?? 2.5;
+    return `${tr("marketTotals")} ${Number(line).toFixed(1)}`;
+  }
+  return tr("marketBtts");
+}
+
+function getAnalysisMarketSections(
+  analysis: ManualAnalysisResponse | null
+): Array<{ key: MarketSectionKey; market: ManualAnalysisMarketSnapshot }> {
+  if (!analysis) return [];
+
+  const sections: Array<{ key: MarketSectionKey; market: ManualAnalysisMarketSnapshot }> = [];
+
+  if (analysis.markets?.one_x_two) {
+    sections.push({ key: "one_x_two", market: analysis.markets.one_x_two });
+  }
+
+  if (analysis.markets?.totals) {
+    sections.push({ key: "totals", market: analysis.markets.totals });
+  }
+
+  if (analysis.markets?.btts) {
+    sections.push({ key: "btts", market: analysis.markets.btts });
+  }
+
+  // Compatibilidade com históricos antigos, que possuem apenas um mercado no topo.
+  if (!sections.length && analysis.market?.market_key && analysis.market.market_key !== "FULL" && analysis.model) {
+    sections.push({
+      key:
+        analysis.market.market_key === "TOTALS"
+          ? "totals"
+          : analysis.market.market_key === "BTTS"
+          ? "btts"
+          : "one_x_two",
+      market: {
+        market: {
+          market_key: analysis.market.market_key,
+          line: analysis.market.line ?? null,
+        },
+        model: analysis.model,
+        manual_input: analysis.manual_input,
+        evaluation: analysis.evaluation as ManualAnalysisMarketSnapshot["evaluation"],
+      },
+    });
+  }
+
+  return sections;
+}
+
 function buildNarrative(lang: Lang, plan: PlanId, analysis: ManualAnalysisResponse | null) {
-  if (!analysis?.event || !analysis.market || !analysis.model) return [] as string[];
+  if (!analysis?.event) return [] as string[];
 
-  const marketKey = analysis.market.market_key;
-  const selections = analysis.model.selections ?? {};
-  const comparisons = analysis.evaluation?.comparisons ?? {};
-  const comparisonEntries = Object.entries(comparisons).filter(([, value]) => Boolean(value));
+  const sections = getAnalysisMarketSections(analysis);
+  const oneXTwo = sections.find((section) => section.key === "one_x_two")?.market;
+  const primarySelections = oneXTwo?.model?.selections ?? {};
 
-  const modelEntries = Object.entries(selections)
+  const modelEntries = Object.entries(primarySelections)
     .map(([key, value]) => ({ key, ...(value ?? {}) }))
     .filter((item) => typeof item.model_prob === "number")
     .sort((a, b) => Number(b.model_prob ?? 0) - Number(a.model_prob ?? 0));
+
+  const allComparisons = sections.flatMap((section) =>
+    Object.entries(section.market.evaluation?.comparisons ?? {}).map(([selectionKey, comparison]) => ({
+      section,
+      selectionKey,
+      comparison,
+    }))
+  );
 
   const lines: string[] = [];
   const top = modelEntries[0];
 
   if (top) {
-    const label = getSelectionLabel(lang, marketKey, top.key, analysis.event);
+    const label = getSelectionLabel(lang, "1X2", top.key, analysis.event);
     const fairOdd = fmtOdd(top.fair_odd ?? null);
     const interesting = fmtOdd(top.interesting_above ?? null);
 
     if (lang === "pt") {
       lines.push(
-        `${label} aparece como o lado mais forte do modelo, com probabilidade estimada de ${fmtPct(
+        `${label} aparece como o lado mais forte no 1X2, com probabilidade estimada de ${fmtPct(
           top.model_prob ?? null
         )}.`
       );
@@ -118,7 +183,7 @@ function buildNarrative(lang: Lang, plan: PlanId, analysis: ManualAnalysisRespon
       );
     } else if (lang === "es") {
       lines.push(
-        `${label} aparece como el lado más fuerte del modelo, con probabilidad estimada de ${fmtPct(
+        `${label} aparece como el lado más fuerte en 1X2, con probabilidad estimada de ${fmtPct(
           top.model_prob ?? null
         )}.`
       );
@@ -127,7 +192,7 @@ function buildNarrative(lang: Lang, plan: PlanId, analysis: ManualAnalysisRespon
       );
     } else {
       lines.push(
-        `${label} is the strongest side in the model, with an estimated probability of ${fmtPct(
+        `${label} is the strongest side in 1X2, with an estimated probability of ${fmtPct(
           top.model_prob ?? null
         )}.`
       );
@@ -137,63 +202,75 @@ function buildNarrative(lang: Lang, plan: PlanId, analysis: ManualAnalysisRespon
     }
   }
 
-  if (comparisonEntries.length) {
-    const good = comparisonEntries
-      .filter(([, value]) => value?.classification === "GOOD")
-      .sort((a, b) => Number(b[1]?.edge ?? 0) - Number(a[1]?.edge ?? 0))[0];
+  const good = allComparisons
+    .filter((item) => item.comparison?.classification === "GOOD")
+    .sort((a, b) => Number(b.comparison?.edge ?? 0) - Number(a.comparison?.edge ?? 0))[0];
 
-    const bad = comparisonEntries
-      .filter(([, value]) => value?.classification === "BAD")
-      .sort((a, b) => Number(a[1]?.edge ?? 0) - Number(b[1]?.edge ?? 0))[0];
+  const bad = allComparisons
+    .filter((item) => item.comparison?.classification === "BAD")
+    .sort((a, b) => Number(a.comparison?.edge ?? 0) - Number(b.comparison?.edge ?? 0))[0];
 
-    if (good) {
-      const [selectionKey, value] = good;
-      const label = getSelectionLabel(lang, marketKey, selectionKey, analysis.event);
+  if (good) {
+    const label = getSelectionLabel(
+      lang,
+      good.section.market.market.market_key,
+      good.selectionKey,
+      analysis.event
+    );
+    const marketTitle =
+      good.section.key === "totals"
+        ? `Over/Under ${good.section.market.market.line ?? 2.5}`
+        : good.section.key === "btts"
+        ? "BTTS"
+        : "1X2";
 
-      if (lang === "pt") {
-        lines.push(
-          `Para ${label}, a odd informada em ${fmtOdd(
-            value?.odd ?? null
-          )} está acima do que o modelo considera justo.`
-        );
-      } else if (lang === "es") {
-        lines.push(
-          `Para ${label}, la cuota informada de ${fmtOdd(
-            value?.odd ?? null
-          )} está por encima de lo que el modelo considera justo.`
-        );
-      } else {
-        lines.push(
-          `For ${label}, the entered odd at ${fmtOdd(
-            value?.odd ?? null
-          )} is above what the model considers fair.`
-        );
-      }
+    if (lang === "pt") {
+      lines.push(
+        `Melhor valor detectado: ${label} em ${marketTitle}, com odd digitada em ${fmtOdd(
+          good.comparison?.odd ?? null
+        )} acima do preço justo do modelo.`
+      );
+    } else if (lang === "es") {
+      lines.push(
+        `Mejor valor detectado: ${label} en ${marketTitle}, con cuota ingresada de ${fmtOdd(
+          good.comparison?.odd ?? null
+        )} por encima del precio justo del modelo.`
+      );
+    } else {
+      lines.push(
+        `Best value detected: ${label} in ${marketTitle}, with entered odd at ${fmtOdd(
+          good.comparison?.odd ?? null
+        )} above the model fair price.`
+      );
     }
+  }
 
-    if (plan === "PRO" && bad) {
-      const [selectionKey, value] = bad;
-      const label = getSelectionLabel(lang, marketKey, selectionKey, analysis.event);
+  if (plan === "PRO" && bad) {
+    const label = getSelectionLabel(
+      lang,
+      bad.section.market.market.market_key,
+      bad.selectionKey,
+      analysis.event
+    );
 
-      if (lang === "pt") {
-        lines.push(
-          `No lado ${label}, o preço inserido ficou curto para o modelo. Fair odd em ${fmtOdd(
-            value?.fair_odd ?? null
-          )} vs odd digitada em ${fmtOdd(value?.odd ?? null)}.`
-        );
-      } else if (lang === "es") {
-        lines.push(
-          `En el lado ${label}, el precio ingresado quedó corto para el modelo. Fair odd en ${fmtOdd(
-            value?.fair_odd ?? null
-          )} frente a la cuota de ${fmtOdd(value?.odd ?? null)}.`
-        );
-      } else {
-        lines.push(
-          `On ${label}, the entered price looks short versus the model. Fair odd is ${fmtOdd(
-            value?.fair_odd ?? null
-          )} versus ${fmtOdd(value?.odd ?? null)} entered.`
-        );
-      }
+    if (lang === "pt") {
+      lines.push(
+        `Atenção em ${label}: a odd digitada ficou curta para o modelo. Fair odd em ${fmtOdd(
+          bad.comparison?.fair_odd ?? null
+        )} vs odd digitada em ${fmtOdd(bad.comparison?.odd ?? null)}.`
+      );
+    } else if (lang === "es") {
+      lines.push(
+        `Atención en ${label}: la cuota ingresada quedó corta para el modelo. Fair odd en ${fmtOdd(
+          bad.comparison?.fair_odd ?? null
+        )} frente a la cuota de ${fmtOdd(bad.comparison?.odd ?? null)}.`
+      );
+    } else {
+      lines.push(
+        `Watch ${label}: the entered price looks short versus the model. Fair odd is ${fmtOdd(
+          bad.comparison?.fair_odd ?? null
+        )} versus ${fmtOdd(bad.comparison?.odd ?? null)} entered.`
+      );
     }
   }
 
@@ -215,7 +292,6 @@ export default function ProductManualAnalysisPage() {
   const [selectedHomeTeamId, setSelectedHomeTeamId] = useState("");
   const [selectedAwayTeamId, setSelectedAwayTeamId] = useState("");
 
-  const [marketKey, setMarketKey] = useState<MarketKey>("1X2");
   const [totalsLine, setTotalsLine] = useState<number>(2.5);
   const [bookmakerName, setBookmakerName] = useState("");
 
@@ -358,35 +434,29 @@ export default function ProductManualAnalysisPage() {
       });
     }
 
-    if (marketKey === "1X2") {
-      const value = [oddH ? `H ${oddH}` : null, oddD ? `D ${oddD}` : null, oddA ? `A ${oddA}` : null]
-        .filter(Boolean)
-        .join(" · ");
-      rows.push({ label: tr("summary.market"), value: tr("market1x2") });
-      rows.push({ label: tr("summary.odds"), value: value || tr("summary.noOdds") });
-    }
+    rows.push({ label: tr("summary.market"), value: tr("summary.completeAnalysis") });
 
-    if (marketKey === "TOTALS") {
-      const value = [oddOver ? `Over ${oddOver}` : null, oddUnder ? `Under ${oddUnder}` : null]
-        .filter(Boolean)
-        .join(" · ");
-      rows.push({
-        label: tr("summary.market"),
-        value: `${tr("marketTotals")} ${totalsLine}`,
-      });
-      rows.push({ label: tr("summary.odds"), value: value || tr("summary.noOdds") });
-    }
+    const odds1x2 = [oddH ? `H ${oddH}` : null, oddD ? `D ${oddD}` : null, oddA ? `A ${oddA}` : null]
+      .filter(Boolean)
+      .join(" · ");
 
-    if (marketKey === "BTTS") {
-      const value = [
-        oddYes ? `${tr("yesLabel")} ${oddYes}` : null,
-        oddNo ? `${tr("noLabel")} ${oddNo}` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      rows.push({ label: tr("summary.market"), value: tr("marketBtts") });
-      rows.push({ label: tr("summary.odds"), value: value || tr("summary.noOdds") });
-    }
+    const oddsTotals = [oddOver ? `Over ${oddOver}` : null, oddUnder ? `Under ${oddUnder}` : null]
+      .filter(Boolean)
+      .join(" · ");
+
+    const oddsBtts = [
+      oddYes ? `${tr("yesLabel")} ${oddYes}` : null,
+      oddNo ? `${tr("noLabel")} ${oddNo}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    rows.push({
+      label: tr("summary.odds"),
+      value:
+        [odds1x2, oddsTotals, oddsBtts].filter(Boolean).join(" | ") ||
+        tr("summary.noOdds"),
+    });
 
     if (bookmakerName.trim()) {
       rows.push({ label: tr("summary.bookmaker"), value: bookmakerName.trim() });
@@ -396,7 +466,6 @@ export default function ProductManualAnalysisPage() {
   }, [
     selectedHomeTeam,
     selectedAwayTeam,
-    marketKey,
     bookmakerName,
     oddH,
     oddD,
@@ -425,32 +494,23 @@ export default function ProductManualAnalysisPage() {
 
       home_team_id: selectedHomeTeam.team_id,
       away_team_id: selectedAwayTeam.team_id,
-      market_key: marketKey,
+      market_key: "FULL",
+      totals_line: totalsLine,
       bookmaker_name: bookmakerName.trim() || null,
-    };
-
-    if (marketKey === "1X2") {
-      payload.odds_1x2 = {
+      odds_1x2: {
         H: oddToNumber(oddH),
         D: oddToNumber(oddD),
         A: oddToNumber(oddA),
-      };
-    }
-
-    if (marketKey === "TOTALS") {
-      payload.totals_line = totalsLine;
-      payload.odds_totals = {
+      },
+      odds_totals: {
         over: oddToNumber(oddOver),
         under: oddToNumber(oddUnder),
-      };
-    }
-
-    if (marketKey === "BTTS") {
-      payload.odds_btts = {
+      },
+      odds_btts: {
         yes: oddToNumber(oddYes),
         no: oddToNumber(oddNo),
-      };
-    }
+      },
+    };
 
     try {
       const response = await postManualAnalysisEvaluate(payload);
@@ -501,7 +561,7 @@ export default function ProductManualAnalysisPage() {
       </div>
 
       <div className="manual-analysis-shell">
-        <div className="manual-analysis-card">
+        <div className="manual-analysis-card manual-analysis-card--history">
           <div className="manual-analysis-selection-grid">
             {/*
               Liga de referência removida da UI final.
@@ -574,132 +634,121 @@ export default function ProductManualAnalysisPage() {
             <div className="manual-analysis-inline-note">{tr("matchupHint")}</div>
           )}
 
-          <div className="manual-analysis-market-row">
-            <button
-              type="button"
-              className={`manual-analysis-market-btn ${marketKey === "1X2" ? "is-active" : ""}`}
-              onClick={() => setMarketKey("1X2")}
-            >
-              {tr("market1x2")}
-            </button>
+          <div className="manual-analysis-market-stack">
+            <div className="manual-analysis-market-section">
+              <div className="manual-analysis-market-section-head">
+                <h3>{tr("market1x2")}</h3>
+                <span>{tr("optionalOddsHint")}</span>
+              </div>
 
-            <button
-              type="button"
-              className={`manual-analysis-market-btn ${marketKey === "TOTALS" ? "is-active" : ""}`}
-              onClick={() => setMarketKey("TOTALS")}
-            >
-              {tr("marketTotals")}
-            </button>
+              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--three">
+                <div className="manual-analysis-field">
+                  <label>{tr("homeLabel")}</label>
+                  <input
+                    value={oddH}
+                    onChange={(event) => setOddH(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
 
-            <button
-              type="button"
-              className={`manual-analysis-market-btn ${marketKey === "BTTS" ? "is-active" : ""}`}
-              onClick={() => setMarketKey("BTTS")}
-            >
-              {tr("marketBtts")}
-            </button>
+                <div className="manual-analysis-field">
+                  <label>{tr("drawLabel")}</label>
+                  <input
+                    value={oddD}
+                    onChange={(event) => setOddD(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+
+                <div className="manual-analysis-field">
+                  <label>{tr("awayLabel")}</label>
+                  <input
+                    value={oddA}
+                    onChange={(event) => setOddA(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="manual-analysis-market-section">
+              <div className="manual-analysis-market-section-head">
+                <h3>{tr("marketTotals")}</h3>
+                <span>{tr("optionalOddsHint")}</span>
+              </div>
+
+              <div className="manual-analysis-market-tools">
+                <div className="manual-analysis-field">
+                  <label>{tr("totalsLineLabel")}</label>
+                  <select
+                    className="manual-analysis-line-select"
+                    value={String(totalsLine)}
+                    onChange={(event) => setTotalsLine(Number(event.target.value))}
+                  >
+                    {TOTALS_LINE_OPTIONS.map((line) => (
+                      <option key={line} value={line}>
+                        {line.toFixed(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
+                <div className="manual-analysis-field">
+                  <label>{tr("overLabel", { line: totalsLine.toFixed(1) })}</label>
+                  <input
+                    value={oddOver}
+                    onChange={(event) => setOddOver(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+
+                <div className="manual-analysis-field">
+                  <label>{tr("underLabel", { line: totalsLine.toFixed(1) })}</label>
+                  <input
+                    value={oddUnder}
+                    onChange={(event) => setOddUnder(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="manual-analysis-market-section">
+              <div className="manual-analysis-market-section-head">
+                <h3>{tr("marketBtts")}</h3>
+                <span>{tr("optionalOddsHint")}</span>
+              </div>
+
+              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
+                <div className="manual-analysis-field">
+                  <label>{tr("yesLabel")}</label>
+                  <input
+                    value={oddYes}
+                    onChange={(event) => setOddYes(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+
+                <div className="manual-analysis-field">
+                  <label>{tr("noLabel")}</label>
+                  <input
+                    value={oddNo}
+                    onChange={(event) => setOddNo(sanitizeOddInput(event.target.value))}
+                    placeholder="0000.00"
+                    inputMode="decimal"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
-
-          {marketKey === "TOTALS" ? (
-            <div className="manual-analysis-market-tools">
-              <div className="manual-analysis-field">
-                <label>{tr("totalsLineLabel")}</label>
-                <select
-                  className="manual-analysis-line-select"
-                  value={String(totalsLine)}
-                  onChange={(event) => setTotalsLine(Number(event.target.value))}
-                >
-                  {TOTALS_LINE_OPTIONS.map((line) => (
-                    <option key={line} value={line}>
-                      {line.toFixed(1)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          ) : null}
-
-          {marketKey === "1X2" ? (
-            <div className="manual-analysis-odds-grid manual-analysis-odds-grid--three">
-              <div className="manual-analysis-field">
-                <label>{tr("homeLabel")}</label>
-                <input
-                  value={oddH}
-                  onChange={(event) => setOddH(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="manual-analysis-field">
-                <label>{tr("drawLabel")}</label>
-                <input
-                  value={oddD}
-                  onChange={(event) => setOddD(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="manual-analysis-field">
-                <label>{tr("awayLabel")}</label>
-                <input
-                  value={oddA}
-                  onChange={(event) => setOddA(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-            </div>
-          ) : null}
-
-          {marketKey === "TOTALS" ? (
-            <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
-              <div className="manual-analysis-field">
-                <label>{tr("overLabel", { line: totalsLine.toFixed(1) })}</label>
-                <input
-                  value={oddOver}
-                  onChange={(event) => setOddOver(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="manual-analysis-field">
-                <label>{tr("underLabel", { line: totalsLine.toFixed(1) })}</label>
-                <input
-                  value={oddUnder}
-                  onChange={(event) => setOddUnder(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-            </div>
-          ) : null}
-
-          {marketKey === "BTTS" ? (
-            <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
-              <div className="manual-analysis-field">
-                <label>{tr("yesLabel")}</label>
-                <input
-                  value={oddYes}
-                  onChange={(event) => setOddYes(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-
-              <div className="manual-analysis-field">
-                <label>{tr("noLabel")}</label>
-                <input
-                  value={oddNo}
-                  onChange={(event) => setOddNo(sanitizeOddInput(event.target.value))}
-                  placeholder="0000.00"
-                  inputMode="decimal"
-                />
-              </div>
-            </div>
-          ) : null}
 
           <div className="manual-analysis-note">{tr("creditHint")}</div>
 
@@ -745,57 +794,67 @@ export default function ProductManualAnalysisPage() {
                 ))}
               </div>
 
-              <div className="manual-analysis-comparison-grid">
-                {Object.entries(currentAnalysis.model?.selections ?? {}).map(([selectionKey, selectionValue]) => {
-                  const comparison = currentAnalysis.evaluation?.comparisons?.[selectionKey] ?? null;
-
-                  return (
-                    <div key={selectionKey} className="manual-analysis-comparison-card">
-                      <div className="manual-analysis-comparison-label">
-                        {getSelectionLabel(
-                          lang,
-                          currentAnalysis.market?.market_key ?? "1X2",
-                          selectionKey,
-                          currentAnalysis.event
-                        )}
-                      </div>
-
-                      <div className="manual-analysis-comparison-row">
-                        <span>{tr("resultModelProb")}</span>
-                        <strong>{fmtPct(selectionValue?.model_prob ?? null)}</strong>
-                      </div>
-
-                      <div className="manual-analysis-comparison-row">
-                        <span>{tr("resultFairOdd")}</span>
-                        <strong>{fmtOdd(selectionValue?.fair_odd ?? null)}</strong>
-                      </div>
-
-                      <div className="manual-analysis-comparison-row">
-                        <span>{tr("resultInterestingOdd")}</span>
-                        <strong>{fmtOdd(selectionValue?.interesting_above ?? null)}</strong>
-                      </div>
-
-                      <div className="manual-analysis-comparison-row">
-                        <span>{tr("resultManualOdd")}</span>
-                        <strong>{fmtOdd(comparison?.odd ?? null)}</strong>
-                      </div>
-
-                      {comparison ? (
-                        <div
-                          className={`manual-analysis-badge manual-analysis-badge--${String(
-                            comparison.classification || "ALIGNED"
-                          ).toLowerCase()}`}
-                        >
-                          {comparison.classification === "GOOD"
-                            ? tr("badgeGood")
-                            : comparison.classification === "BAD"
-                            ? tr("badgeBad")
-                            : tr("badgeAligned")}
-                        </div>
-                      ) : null}
+              <div className="manual-analysis-result-markets">
+                {getAnalysisMarketSections(currentAnalysis).map(({ key: sectionKey, market }) => (
+                  <div key={sectionKey} className="manual-analysis-result-market-section">
+                    <div className="manual-analysis-result-market-title">
+                      {getMarketSectionTitle(tr, sectionKey, market)}
                     </div>
-                  );
-                })}
+
+                    <div className="manual-analysis-comparison-grid">
+                      {Object.entries(market.model?.selections ?? {}).map(([selectionKey, selectionValue]) => {
+                        const comparison = market.evaluation?.comparisons?.[selectionKey] ?? null;
+
+                        return (
+                          <div key={`${sectionKey}-${selectionKey}`} className="manual-analysis-comparison-card">
+                            <div className="manual-analysis-comparison-label">
+                              {getSelectionLabel(
+                                lang,
+                                market.market?.market_key ?? "1X2",
+                                selectionKey,
+                                currentAnalysis.event
+                              )}
+                            </div>
+
+                            <div className="manual-analysis-comparison-row">
+                              <span>{tr("resultModelProb")}</span>
+                              <strong>{fmtPct(selectionValue?.model_prob ?? null)}</strong>
+                            </div>
+
+                            <div className="manual-analysis-comparison-row">
+                              <span>{tr("resultFairOdd")}</span>
+                              <strong>{fmtOdd(selectionValue?.fair_odd ?? null)}</strong>
+                            </div>
+
+                            <div className="manual-analysis-comparison-row">
+                              <span>{tr("resultInterestingOdd")}</span>
+                              <strong>{fmtOdd(selectionValue?.interesting_above ?? null)}</strong>
+                            </div>
+
+                            <div className="manual-analysis-comparison-row">
+                              <span>{tr("resultManualOdd")}</span>
+                              <strong>{fmtOdd(comparison?.odd ?? null)}</strong>
+                            </div>
+
+                            {comparison ? (
+                              <div
+                                className={`manual-analysis-badge manual-analysis-badge--${String(
+                                  comparison.classification || "ALIGNED"
+                                ).toLowerCase()}`}
+                              >
+                                {comparison.classification === "GOOD"
+                                  ? tr("badgeGood")
+                                  : comparison.classification === "BAD"
+                                  ? tr("badgeBad")
+                                  : tr("badgeAligned")}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           ) : (
@@ -804,7 +863,7 @@ export default function ProductManualAnalysisPage() {
         </div>
       </div>
 
-      <div className="manual-analysis-card">
+      <div className="manual-analysis-card manual-analysis-card--form">
         <div className="manual-analysis-result-head">
           <h2>{tr("historyTitle")}</h2>
         </div>
@@ -830,7 +889,9 @@ export default function ProductManualAnalysisPage() {
                   </div>
 
                   <div className="manual-analysis-history-meta">
-                    {item.market?.market_key === "1X2"
+                    {item.market?.market_key === "FULL"
+                      ? tr("historyCompleteAnalysis")
+                      : item.market?.market_key === "1X2"
                       ? tr("market1x2")
                       : item.market?.market_key === "TOTALS"
                       ? `${tr("marketTotals")} ${item.market?.line ?? ""}`

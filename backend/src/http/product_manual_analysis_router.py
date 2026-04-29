@@ -35,7 +35,8 @@ class ManualAnalysisEvaluateRequest(BaseModel):
     home_team_id: int
     away_team_id: int
 
-    market_key: str  # 1X2 | TOTALS | BTTS
+    # Mantido por compatibilidade, mas a análise manual v2 sempre gera todos os mercados.
+    market_key: str | None = "FULL"  # FULL | 1X2 | TOTALS | BTTS
     totals_line: float | None = None
 
     bookmaker_name: str | None = None
@@ -45,7 +46,9 @@ class ManualAnalysisEvaluateRequest(BaseModel):
 
 
 def _normalize_market_key(raw: Any) -> str:
-    value = str(raw or "").strip().upper()
+    value = str(raw or "FULL").strip().upper()
+    if value in {"FULL", "COMPLETE"}:
+        return "FULL"
     if value in {"1X2", "TOTALS", "BTTS"}:
         return value
     raise HTTPException(
@@ -136,6 +139,43 @@ def _compare_price(prob: Optional[float], odd: Optional[float]) -> Optional[Dict
         "interesting_above": interesting,
         "edge": edge,
         "classification": classification,
+    }
+
+def _build_market_snapshot(
+    *,
+    market_key: str,
+    line: Optional[float],
+    selections: Dict[str, Dict[str, Any]],
+    provided: Dict[str, Any],
+    selection_order: List[str],
+    bookmaker_name: Optional[str],
+    confidence: Dict[str, Any],
+    inputs: Dict[str, Any],
+) -> Dict[str, Any]:
+    comparisons = {
+        key: _compare_price(selections[key]["model_prob"], provided.get(key))
+        for key in selection_order
+    }
+    manual_odds = {key: _safe_float(provided.get(key)) for key in selection_order}
+
+    return {
+        "market": {
+            "market_key": market_key,
+            "line": line,
+        },
+        "model": {
+            "selections": selections,
+            "confidence": confidence,
+            "inputs": inputs,
+        },
+        "manual_input": {
+            "bookmaker_name": (bookmaker_name or "").strip() or None,
+            "selections": manual_odds,
+        },
+        "evaluation": {
+            "provided_count": sum(1 for value in manual_odds.values() if value is not None),
+            "comparisons": comparisons,
+        },
     }
 
 
@@ -479,93 +519,108 @@ def _build_whatif_analysis_payload(conn, req: ManualAnalysisEvaluateRequest) -> 
         "artifact_filename": str(artifact_filename) if artifact_filename else None,
     }
 
-    if market_key == "1X2":
-        selections = {
-            "H": _build_selection(float(probs_1x2["H"])),
-            "D": _build_selection(float(probs_1x2["D"])),
-            "A": _build_selection(float(probs_1x2["A"])),
-        }
-        provided = req.odds_1x2 or {}
-        comparisons = {
-            key: _compare_price(selections[key]["model_prob"], provided.get(key))
-            for key in ["H", "D", "A"]
-        }
-        manual_odds = {key: _safe_float(provided.get(key)) for key in ["H", "D", "A"]}
+    selections_1x2 = {
+        "H": _build_selection(float(probs_1x2["H"])),
+        "D": _build_selection(float(probs_1x2["D"])),
+        "A": _build_selection(float(probs_1x2["A"])),
+    }
 
-        return {
-            "event": event_block,
-            "market": {"market_key": market_key, "line": None},
-            "model": {
-                "selections": selections,
-                "confidence": confidence,
-                "inputs": inputs,
-            },
-            "manual_input": {
-                "bookmaker_name": (req.bookmaker_name or "").strip() or None,
-                "selections": manual_odds,
-            },
-            "evaluation": {
-                "provided_count": sum(1 for value in manual_odds.values() if value is not None),
-                "comparisons": comparisons,
-            },
-        }
+    selections_totals = {
+        "over": _build_selection(float(probs_totals["over"])),
+        "under": _build_selection(float(probs_totals["under"])),
+    }
 
-    if market_key == "TOTALS":
-        selections = {
-            "over": _build_selection(float(probs_totals["over"])),
-            "under": _build_selection(float(probs_totals["under"])),
-        }
-        provided = req.odds_totals or {}
-        comparisons = {
-            key: _compare_price(selections[key]["model_prob"], provided.get(key))
-            for key in ["over", "under"]
-        }
-        manual_odds = {key: _safe_float(provided.get(key)) for key in ["over", "under"]}
-
-        return {
-            "event": event_block,
-            "market": {"market_key": market_key, "line": float(totals_line)},
-            "model": {
-                "selections": selections,
-                "confidence": confidence,
-                "inputs": inputs,
-            },
-            "manual_input": {
-                "bookmaker_name": (req.bookmaker_name or "").strip() or None,
-                "selections": manual_odds,
-            },
-            "evaluation": {
-                "provided_count": sum(1 for value in manual_odds.values() if value is not None),
-                "comparisons": comparisons,
-            },
-        }
-
-    selections = {
+    selections_btts = {
         "yes": _build_selection(float(probs_btts["yes"])),
         "no": _build_selection(float(probs_btts["no"])),
     }
-    provided = req.odds_btts or {}
-    comparisons = {
-        key: _compare_price(selections[key]["model_prob"], provided.get(key))
-        for key in ["yes", "no"]
+
+    bookmaker_name = (req.bookmaker_name or "").strip() or None
+
+    market_1x2 = _build_market_snapshot(
+        market_key="1X2",
+        line=None,
+        selections=selections_1x2,
+        provided=req.odds_1x2 or {},
+        selection_order=["H", "D", "A"],
+        bookmaker_name=bookmaker_name,
+        confidence=confidence,
+        inputs=inputs,
+    )
+
+    market_totals = _build_market_snapshot(
+        market_key="TOTALS",
+        line=float(totals_line),
+        selections=selections_totals,
+        provided=req.odds_totals or {},
+        selection_order=["over", "under"],
+        bookmaker_name=bookmaker_name,
+        confidence=confidence,
+        inputs=inputs,
+    )
+
+    market_btts = _build_market_snapshot(
+        market_key="BTTS",
+        line=None,
+        selections=selections_btts,
+        provided=req.odds_btts or {},
+        selection_order=["yes", "no"],
+        bookmaker_name=bookmaker_name,
+        confidence=confidence,
+        inputs=inputs,
+    )
+
+    markets = {
+        "one_x_two": market_1x2,
+        "totals": market_totals,
+        "btts": market_btts,
     }
-    manual_odds = {key: _safe_float(provided.get(key)) for key in ["yes", "no"]}
+
+    total_provided_count = sum(
+        int((market.get("evaluation") or {}).get("provided_count") or 0)
+        for market in markets.values()
+    )
+
+    all_comparisons = {
+        "one_x_two": market_1x2["evaluation"]["comparisons"],
+        "totals": market_totals["evaluation"]["comparisons"],
+        "btts": market_btts["evaluation"]["comparisons"],
+    }
 
     return {
         "event": event_block,
-        "market": {"market_key": market_key, "line": None},
+
+        # A partir da análise manual v2, o registro principal representa
+        # uma análise completa do confronto, não um mercado isolado.
+        "market": {
+            "market_key": "FULL",
+            "line": None,
+        },
+
+        "markets": markets,
+
+        # Campos legados preservados para compatibilidade com históricos/telas antigas.
+        # O frontend novo deve preferir "markets".
         "model": {
-            "selections": selections,
+            "selections": selections_1x2,
             "confidence": confidence,
             "inputs": inputs,
         },
         "manual_input": {
-            "bookmaker_name": (req.bookmaker_name or "").strip() or None,
-            "selections": manual_odds,
+            "bookmaker_name": bookmaker_name,
+            "selections": {
+                "H": _safe_float((req.odds_1x2 or {}).get("H")),
+                "D": _safe_float((req.odds_1x2 or {}).get("D")),
+                "A": _safe_float((req.odds_1x2 or {}).get("A")),
+                "over": _safe_float((req.odds_totals or {}).get("over")),
+                "under": _safe_float((req.odds_totals or {}).get("under")),
+                "yes": _safe_float((req.odds_btts or {}).get("yes")),
+                "no": _safe_float((req.odds_btts or {}).get("no")),
+            },
         },
         "evaluation": {
-            "provided_count": sum(1 for value in manual_odds.values() if value is not None),
-            "comparisons": comparisons,
+            "provided_count": total_provided_count,
+            "comparisons": all_comparisons,
         },
     }
 

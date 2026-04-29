@@ -3,6 +3,53 @@ import { buildProductRuntimeHeaders } from "./auth";
 
 export type ManualAnalysisSelectionsMap = Record<string, number | null>;
 
+export type ManualAnalysisMarketKey = "1X2" | "TOTALS" | "BTTS";
+export type ManualAnalysisStoredMarketKey = ManualAnalysisMarketKey | "FULL";
+
+export type ManualAnalysisSelectionModel = {
+  model_prob: number | null;
+  fair_odd: number | null;
+  interesting_above: number | null;
+};
+
+export type ManualAnalysisComparison = {
+  odd: number | null;
+  implied_prob: number | null;
+  model_prob: number | null;
+  fair_odd: number | null;
+  interesting_above: number | null;
+  edge: number | null;
+  classification: "GOOD" | "ALIGNED" | "BAD";
+};
+
+export type ManualAnalysisMarketSnapshot = {
+  market: {
+    market_key: ManualAnalysisMarketKey;
+    line: number | null;
+  };
+  model: {
+    selections: Record<string, ManualAnalysisSelectionModel>;
+    confidence?: {
+      overall?: number | null;
+      level?: string | null;
+      source?: string | null;
+    };
+    inputs?: ManualAnalysisResponse["model"] extends infer M
+      ? M extends { inputs?: infer I }
+        ? I
+        : Record<string, unknown>
+      : Record<string, unknown>;
+  };
+  manual_input?: {
+    bookmaker_name?: string | null;
+    selections: ManualAnalysisSelectionsMap;
+  };
+  evaluation?: {
+    provided_count: number;
+    comparisons: Record<string, ManualAnalysisComparison | null>;
+  };
+};
+
 export type ManualAnalysisResponse = {
   ok: boolean;
   analysis_id?: number;
@@ -29,18 +76,16 @@ export type ManualAnalysisResponse = {
     away_name: string;
   };
   market?: {
-    market_key: "1X2" | "TOTALS" | "BTTS";
+    market_key: ManualAnalysisStoredMarketKey;
     line: number | null;
   };
+  markets?: {
+    one_x_two?: ManualAnalysisMarketSnapshot;
+    totals?: ManualAnalysisMarketSnapshot;
+    btts?: ManualAnalysisMarketSnapshot;
+  };
   model?: {
-    selections: Record<
-      string,
-      {
-        model_prob: number | null;
-        fair_odd: number | null;
-        interesting_above: number | null;
-      }
-    >;
+    selections: Record<string, ManualAnalysisSelectionModel>;
     confidence?: {
       overall?: number | null;
       level?: string | null;
@@ -66,19 +111,7 @@ export type ManualAnalysisResponse = {
   };
   evaluation?: {
     provided_count: number;
-    comparisons: Record<
-      string,
-      | {
-          odd: number | null;
-          implied_prob: number | null;
-          model_prob: number | null;
-          fair_odd: number | null;
-          interesting_above: number | null;
-          edge: number | null;
-          classification: "GOOD" | "ALIGNED" | "BAD";
-        }
-      | null
-    >;
+    comparisons: Record<string, ManualAnalysisComparison | null> | Record<string, Record<string, ManualAnalysisComparison | null>>;
   };
 };
 
@@ -95,7 +128,7 @@ export type ManualAnalysisEvaluateRequest = {
   artifact_filename?: string | null;
   home_team_id: number;
   away_team_id: number;
-  market_key: "1X2" | "TOTALS" | "BTTS";
+  market_key?: ManualAnalysisStoredMarketKey;
   totals_line?: number | null;
   bookmaker_name?: string | null;
   odds_1x2?: ManualAnalysisSelectionsMap;
