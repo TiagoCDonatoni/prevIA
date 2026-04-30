@@ -4,5 +4,7 @@
   "about": "About",
   "language": "Language",
   "plan": "Plan",
-  "manualAnalysis": "Evaluate odds"
+  "analyses": "Analyses",
+  "manualAnalysis": "Build a bet",
+  "productNavigation": "Product navigation"
 }

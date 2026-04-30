@@ -24,6 +24,8 @@ router = APIRouter(prefix="/product/manual-analysis", tags=["product-manual-anal
 MANUAL_ANALYSIS_ALLOWED_PLANS = {"LIGHT", "PRO"}
 INTERESTING_ODD_PREMIUM = 0.03
 ALIGNED_ODD_DISCOUNT = 0.02
+MANUAL_ANALYSIS_HISTORY_PAGE_SIZE = 5
+MANUAL_ANALYSIS_HISTORY_MAX_SAVED = 20
 
 
 class ManualAnalysisEvaluateRequest(BaseModel):
@@ -71,6 +73,32 @@ def _ensure_manual_analysis_access(actor: Dict[str, Any]) -> str:
             "ok": False,
             "code": "FEATURE_LOCKED",
             "message": "manual analysis requires Light or Pro",
+        },
+    )
+
+def _prune_manual_analysis_history(cur, *, user_id: int) -> None:
+    """
+    Mantém apenas as últimas 20 análises manuais por usuário.
+
+    A análise manual pode ser hipotética e não depende de fixture real.
+    Por isso, a retenção aqui é por volume recente, não por data/hora de jogo.
+    """
+
+    cur.execute(
+        """
+        DELETE FROM access.user_manual_analyses
+        WHERE user_id = %(user_id)s
+          AND analysis_id NOT IN (
+            SELECT analysis_id
+            FROM access.user_manual_analyses
+            WHERE user_id = %(user_id)s
+            ORDER BY created_at_utc DESC, analysis_id DESC
+            LIMIT %(max_saved)s
+          )
+        """,
+        {
+            "user_id": int(user_id),
+            "max_saved": int(MANUAL_ANALYSIS_HISTORY_MAX_SAVED),
         },
     )
 
@@ -681,6 +709,7 @@ def _consume_credit_for_manual_analysis(cur, *, user_id: int, date_key, base_dai
         """
         UPDATE access.user_daily_usage
         SET credits_used = credits_used + 1,
+            revealed_count = revealed_count + 1,
             updated_at_utc = NOW()
         WHERE user_id = %(user_id)s
           AND date_key = %(date_key)s
@@ -735,6 +764,7 @@ def product_manual_analysis_evaluate(request: Request, payload: ManualAnalysisEv
                     "ok": False,
                     "code": "NO_CREDITS",
                     "message": "daily credit limit reached",
+                    "date_key": str(date_key),
                     "usage": credit_result.get("usage"),
                 }
 
@@ -790,6 +820,9 @@ def product_manual_analysis_evaluate(request: Request, payload: ManualAnalysisEv
                 },
             )
             saved = cur.fetchone()
+
+            _prune_manual_analysis_history(cur, user_id=int(user_id))
+
             conn.commit()
 
     return {
@@ -797,16 +830,24 @@ def product_manual_analysis_evaluate(request: Request, payload: ManualAnalysisEv
         "analysis_id": int(saved[0]),
         "saved_at_utc": saved[1].isoformat().replace("+00:00", "Z") if saved and saved[1] else None,
         "consumed_credit": True,
+        "date_key": str(date_key),
         "usage": credit_result.get("usage"),
         **analysis_payload,
     }
 
 
 @router.get("/history")
-def product_manual_analysis_history(request: Request, limit: int = Query(20, ge=1, le=100)):
+def product_manual_analysis_history(
+    request: Request,
+    limit: int = Query(MANUAL_ANALYSIS_HISTORY_PAGE_SIZE, ge=1, le=MANUAL_ANALYSIS_HISTORY_MAX_SAVED),
+    offset: int = Query(0, ge=0, le=MANUAL_ANALYSIS_HISTORY_MAX_SAVED),
+):
     actor = _resolve_current_actor(request)
     _ensure_manual_analysis_access(actor)
     user_id = int(actor["user"]["user_id"])
+
+    safe_limit = max(1, min(int(limit or MANUAL_ANALYSIS_HISTORY_PAGE_SIZE), MANUAL_ANALYSIS_HISTORY_MAX_SAVED))
+    safe_offset = max(0, min(int(offset or 0), MANUAL_ANALYSIS_HISTORY_MAX_SAVED))
 
     items: List[Dict[str, Any]] = []
 
@@ -819,12 +860,20 @@ def product_manual_analysis_history(request: Request, limit: int = Query(20, ge=
                 WHERE user_id = %(user_id)s
                 ORDER BY created_at_utc DESC, analysis_id DESC
                 LIMIT %(limit)s
+                OFFSET %(offset)s
                 """,
-                {"user_id": user_id, "limit": int(limit)},
+                {
+                    "user_id": user_id,
+                    "limit": int(safe_limit + 1),
+                    "offset": int(safe_offset),
+                },
             )
             rows = cur.fetchall()
 
-    for analysis_id, created_at_utc, result_payload in rows:
+    has_more = len(rows) > safe_limit
+    visible_rows = rows[:safe_limit]
+
+    for analysis_id, created_at_utc, result_payload in visible_rows:
         payload = result_payload
         if isinstance(payload, str):
             try:
@@ -842,4 +891,15 @@ def product_manual_analysis_history(request: Request, limit: int = Query(20, ge=
             }
         )
 
-    return {"ok": True, "items": items, "count": len(items)}
+    next_offset = safe_offset + len(items) if has_more else None
+
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "next_offset": next_offset,
+        "has_more": has_more,
+        "max_saved": MANUAL_ANALYSIS_HISTORY_MAX_SAVED,
+    }

@@ -4,5 +4,7 @@
   "about": "Acerca de",
   "language": "Idioma",
   "plan": "Plan",
-  "manualAnalysis": "Evaluar cuotas"
+  "analyses": "Análisis",
+  "manualAnalysis": "Armar apuesta",
+  "productNavigation": "Navegación del producto"
 }

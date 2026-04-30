@@ -56,6 +56,7 @@ export type ManualAnalysisResponse = {
   created_at_utc?: string | null;
   saved_at_utc?: string | null;
   consumed_credit?: boolean;
+  date_key?: string | null;
   code?: string;
   message?: string;
   usage?: {
@@ -63,6 +64,7 @@ export type ManualAnalysisResponse = {
     revealed_count: number;
     daily_limit: number;
     remaining: number;
+    revealed_fixture_keys?: string[];
   };
   event?: {
     event_id: string;
@@ -119,6 +121,11 @@ export type ManualAnalysisHistoryResponse = {
   ok: boolean;
   items: ManualAnalysisResponse[];
   count: number;
+  limit?: number;
+  offset?: number;
+  next_offset?: number | null;
+  has_more?: boolean;
+  max_saved?: number;
 };
 
 export type ManualAnalysisEvaluateRequest = {
@@ -157,10 +164,16 @@ export async function postManualAnalysisEvaluate(
 }
 
 export async function fetchManualAnalysisHistory(
-  limit = 20
+  limit = 5,
+  offset = 0
 ): Promise<ManualAnalysisHistoryResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+
   const res = await fetch(
-    `${API_BASE_URL}/product/manual-analysis/history?limit=${limit}`,
+    `${API_BASE_URL}/product/manual-analysis/history?${params.toString()}`,
     {
       credentials: "include",
       headers: {

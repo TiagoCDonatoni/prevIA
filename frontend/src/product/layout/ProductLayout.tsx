@@ -285,6 +285,21 @@ export function ProductLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const productNavItems = [
+    {
+      key: "analyses",
+      label: t(lang, "nav.analyses"),
+      to: "/app",
+      isActive: location.pathname === "/app" || location.pathname === "/app/",
+    },
+    {
+      key: "manual-analysis",
+      label: t(lang, "nav.manualAnalysis"),
+      to: "/app/manual-analysis",
+      isActive: location.pathname.startsWith("/app/manual-analysis"),
+    },
+  ];
+
   const [authOpen, setAuthOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<
     "signup" | "login" | "forgot" | "reset" | "changePassword" | "linkGoogle"
@@ -774,17 +789,6 @@ const accountMenuDropdown = isAccountMenuOpen ? (
     role="menu"
     aria-label={t(lang, "auth.account")}
   >
-    <Link
-      to="manual-analysis"
-      role="menuitem"
-      className="product-account-menu-item"
-      onClick={() => {
-        setIsAccountMenuOpen(false);
-        setIsMobileHeaderMenuOpen(false);
-      }}
-    >
-      {t(lang, "nav.manualAnalysis")}
-    </Link>
 
     <Link
       to="account"
@@ -817,6 +821,23 @@ const accountMenuDropdown = isAccountMenuOpen ? (
 
 const mobileHeaderMenuContent = (
   <>
+    <nav className="product-mobile-nav" aria-label={t(lang, "nav.productNavigation")}>
+      {productNavItems.map((item) => (
+        <Link
+          key={item.key}
+          to={item.to}
+          className={`product-mobile-nav-link ${item.isActive ? "is-active" : ""}`}
+          onClick={() => {
+            setIsMobileHeaderMenuOpen(false);
+            setIsAccountMenuOpen(false);
+          }}
+        >
+          {item.label}
+        </Link>
+      ))}
+    </nav>
+
+
     {allowInternalPlanOverride ? (
       <div className="product-pill">
         <span className="product-pill-label">PLAN VIEW</span>
@@ -956,6 +977,18 @@ const mobileHeaderMenuContent = (
           <Link to="/" className="product-brand product-brand-link" aria-label="Ir para a página principal">
             <BrandLogo />
           </Link>
+
+          <nav className="product-header-nav product-header-nav-desktop" aria-label={t(lang, "nav.productNavigation")}>
+            {productNavItems.map((item) => (
+              <Link
+                key={item.key}
+                to={item.to}
+                className={`product-header-nav-link ${item.isActive ? "is-active" : ""}`}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
 
           <div className="product-header-right product-header-right-desktop">
             <div className="product-pill product-pill-lang">

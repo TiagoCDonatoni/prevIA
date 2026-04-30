@@ -18,24 +18,42 @@ import { useProductStore } from "../state/productStore";
 
 const ALLOWED_PLANS: PlanId[] = ["LIGHT", "PRO"];
 const TOTALS_LINE_OPTIONS = [1.5, 2.5, 3.5, 4.5] as const;
+const MANUAL_ANALYSIS_HISTORY_PAGE_SIZE = 5;
 
 type MarketSectionKey = "one_x_two" | "totals" | "btts";
-function sanitizeOddInput(raw: string) {
-  const normalized = raw.replace(/,/g, ".").replace(/[^0-9.]/g, "");
-  let output = "";
-  let hasDot = false;
+const ODD_INPUT_PLACEHOLDER = "0000.00";
 
-  for (const char of normalized) {
-    if (char === ".") {
-      if (hasDot) continue;
-      hasDot = true;
-      output += char;
-      continue;
-    }
-    output += char;
+function sanitizeOddInput(raw: string) {
+  const digits = String(raw ?? "")
+    .replace(/\D/g, "")
+    .replace(/^0+(?=\d)/, "")
+    .slice(-6);
+
+  if (!digits) return "";
+
+  const cents = Number(digits);
+
+  if (!Number.isFinite(cents) || cents <= 0) {
+    return "";
   }
 
-  return output;
+  const integerPart = Math.floor(cents / 100);
+  const decimalPart = String(cents % 100).padStart(2, "0");
+
+  return `${integerPart}.${decimalPart}`;
+}
+
+function normalizeOddInputOnBlur(value: string) {
+  const sanitized = sanitizeOddInput(value);
+  if (!sanitized) return "";
+
+  const numericValue = Number(sanitized);
+
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return "";
+  }
+
+  return numericValue.toFixed(2);
 }
 
 function oddToNumber(raw: string) {
@@ -287,11 +305,17 @@ export default function ProductManualAnalysisPage() {
   const [teams, setTeams] = useState<TeamLite[]>([]);
   const [history, setHistory] = useState<ManualAnalysisResponse[]>([]);
 
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [nextHistoryOffset, setNextHistoryOffset] = useState(0);
+
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [selectedHomeTeamId, setSelectedHomeTeamId] = useState("");
   const [selectedAwayTeamId, setSelectedAwayTeamId] = useState("");
 
+  const [activeMarketTab, setActiveMarketTab] = useState<ManualAnalysisMarketKey>("1X2");
+  const [activeResultMarketTab, setActiveResultMarketTab] = useState<MarketSectionKey>("one_x_two");
   const [totalsLine, setTotalsLine] = useState<number>(2.5);
   const [bookmakerName, setBookmakerName] = useState("");
 
@@ -311,6 +335,26 @@ export default function ProductManualAnalysisPage() {
   const hasFeatureAccess =
     ALLOWED_PLANS.includes(plan) || Boolean(store.accessContext?.product_internal_access);
 
+  function applyManualAnalysisUsage(response: ManualAnalysisResponse) {
+    const usage = response.usage;
+    if (!usage) return;
+
+    store.applyBackendUsage({
+      date_key:
+        response.date_key ??
+        store.backendUsage.date_key ??
+        new Date().toISOString().slice(0, 10),
+      credits_used: usage.credits_used,
+      revealed_count: usage.revealed_count,
+      daily_limit: usage.daily_limit,
+      remaining: usage.remaining,
+      revealed_fixture_keys:
+        usage.revealed_fixture_keys ??
+        store.backendUsage.revealed_fixture_keys ??
+        [],
+    });
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -322,13 +366,18 @@ export default function ProductManualAnalysisPage() {
 
       try {
         setIsLoadingHistory(true);
-        const response = await fetchManualAnalysisHistory(20);
+        const response = await fetchManualAnalysisHistory(MANUAL_ANALYSIS_HISTORY_PAGE_SIZE, 0);
         if (!isMounted) return;
+
         setHistory(response.items ?? []);
+        setHasMoreHistory(Boolean(response.has_more));
+        setNextHistoryOffset(response.next_offset ?? (response.items ?? []).length);
       } catch (error) {
         console.error("manual analysis history failed", error);
         if (!isMounted) return;
         setHistory([]);
+        setHasMoreHistory(false);
+        setNextHistoryOffset(0);
       } finally {
         if (isMounted) setIsLoadingHistory(false);
       }
@@ -340,6 +389,45 @@ export default function ProductManualAnalysisPage() {
       isMounted = false;
     };
   }, [hasFeatureAccess]);
+
+  async function handleLoadMoreHistory() {
+    if (isLoadingMoreHistory || !hasMoreHistory) return;
+
+    try {
+      setIsLoadingMoreHistory(true);
+
+      const response = await fetchManualAnalysisHistory(
+        MANUAL_ANALYSIS_HISTORY_PAGE_SIZE,
+        nextHistoryOffset
+      );
+
+      setHistory((prev) => {
+        const merged = [...prev];
+
+        for (const item of response.items ?? []) {
+          const alreadyExists = merged.some(
+            (current) =>
+              current.analysis_id != null &&
+              item.analysis_id != null &&
+              current.analysis_id === item.analysis_id
+          );
+
+          if (!alreadyExists) {
+            merged.push(item);
+          }
+        }
+
+        return merged.slice(0, 20);
+      });
+
+      setHasMoreHistory(Boolean(response.has_more));
+      setNextHistoryOffset(response.next_offset ?? nextHistoryOffset + (response.items ?? []).length);
+    } catch (error) {
+      console.error("manual analysis load more history failed", error);
+    } finally {
+      setIsLoadingMoreHistory(false);
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -515,6 +603,8 @@ export default function ProductManualAnalysisPage() {
     try {
       const response = await postManualAnalysisEvaluate(payload);
 
+      applyManualAnalysisUsage(response);
+
       if (!response.ok) {
         setErrorMessage(response.message ?? tr("genericError"));
         setConfirmOpen(false);
@@ -522,9 +612,12 @@ export default function ProductManualAnalysisPage() {
       }
 
       setCurrentAnalysis(response);
+      setActiveResultMarketTab("one_x_two");
       setHistory((prev) =>
         [response, ...prev.filter((item) => item.analysis_id !== response.analysis_id)].slice(0, 20)
       );
+
+      setNextHistoryOffset((prev) => Math.min(prev + 1, 20));
       setConfirmOpen(false);
     } catch (error) {
       console.error("manual analysis evaluate failed", error);
@@ -539,7 +632,6 @@ export default function ProductManualAnalysisPage() {
     return (
       <section className="manual-analysis-page">
         <div className="manual-analysis-lock-card">
-          <div className="manual-analysis-lock-eyebrow">Light+</div>
           <h1>{tr("lockedTitle")}</h1>
           <p>{tr("lockedBody")}</p>
           <Link to="/app/account" className="manual-analysis-primary-btn">
@@ -552,38 +644,44 @@ export default function ProductManualAnalysisPage() {
 
   const narrativeLines = buildNarrative(lang, plan, currentAnalysis);
 
+  const resultMarketSections = getAnalysisMarketSections(currentAnalysis);
+  const activeResultSection =
+    resultMarketSections.find((section) => section.key === activeResultMarketTab) ??
+    resultMarketSections[0] ??
+    null;
+  const activeResultSectionKey = activeResultSection?.key ?? activeResultMarketTab;
+
   return (
     <section className="manual-analysis-page">
       <div className="manual-analysis-hero">
-        <div className="manual-analysis-eyebrow">Light+</div>
         <h1 className="manual-analysis-title">{tr("title")}</h1>
         <p className="manual-analysis-subtitle">{tr("subtitle")}</p>
       </div>
 
       <div className="manual-analysis-shell">
         <div className="manual-analysis-card manual-analysis-card--history">
-          <div className="manual-analysis-selection-grid">
-            {/*
-              Liga de referência removida da UI final.
+          {/*
+            Campo de casa de aposta ocultado temporariamente da UI final.
 
-              Se no futuro criarmos um "modo avançado", podemos reativar aqui
-              um seletor de contexto estatístico:
-              - automático
-              - liga do mandante
-              - liga do visitante
-              - liga manual
-            */}
+            Mantido para reaproveitamento futuro:
+            - state: bookmakerName
+            - i18n: bookmakerLabel/bookmakerPlaceholder
+            - payload: bookmaker_name
 
-            <div className="manual-analysis-field">
-              <label>{tr("bookmakerLabel")}</label>
-              <input
-                type="text"
-                value={bookmakerName}
-                onChange={(event) => setBookmakerName(event.target.value)}
-                placeholder={tr("bookmakerPlaceholder")}
-              />
+            Quando voltarmos a exibir o campo, basta restaurar este bloco:
+
+            <div className="manual-analysis-selection-grid">
+              <div className="manual-analysis-field">
+                <label>{tr("bookmakerLabel")}</label>
+                <input
+                  type="text"
+                  value={bookmakerName}
+                  onChange={(event) => setBookmakerName(event.target.value)}
+                  placeholder={tr("bookmakerPlaceholder")}
+                />
+              </div>
             </div>
-          </div>
+          */}
 
           <div className="manual-analysis-selection-grid manual-analysis-selection-grid--teams">
             <SearchableSingleSelect
@@ -635,118 +733,158 @@ export default function ProductManualAnalysisPage() {
           )}
 
           <div className="manual-analysis-market-stack">
-            <div className="manual-analysis-market-section">
-              <div className="manual-analysis-market-section-head">
-                <h3>{tr("market1x2")}</h3>
-                <span>{tr("optionalOddsHint")}</span>
-              </div>
+            <div className="manual-analysis-tabs" role="tablist" aria-label={tr("completeAnalysisLabel")}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeMarketTab === "1X2"}
+                className={`manual-analysis-tab-btn ${activeMarketTab === "1X2" ? "is-active" : ""}`}
+                onClick={() => setActiveMarketTab("1X2")}
+              >
+                {tr("market1x2")}
+              </button>
 
-              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--three">
-                <div className="manual-analysis-field">
-                  <label>{tr("homeLabel")}</label>
-                  <input
-                    value={oddH}
-                    onChange={(event) => setOddH(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
-                </div>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeMarketTab === "TOTALS"}
+                className={`manual-analysis-tab-btn ${activeMarketTab === "TOTALS" ? "is-active" : ""}`}
+                onClick={() => setActiveMarketTab("TOTALS")}
+              >
+                {tr("marketTotals")}
+              </button>
 
-                <div className="manual-analysis-field">
-                  <label>{tr("drawLabel")}</label>
-                  <input
-                    value={oddD}
-                    onChange={(event) => setOddD(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div className="manual-analysis-field">
-                  <label>{tr("awayLabel")}</label>
-                  <input
-                    value={oddA}
-                    onChange={(event) => setOddA(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
-                </div>
-              </div>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeMarketTab === "BTTS"}
+                className={`manual-analysis-tab-btn ${activeMarketTab === "BTTS" ? "is-active" : ""}`}
+                onClick={() => setActiveMarketTab("BTTS")}
+              >
+                {tr("marketBtts")}
+              </button>
             </div>
 
-            <div className="manual-analysis-market-section">
-              <div className="manual-analysis-market-section-head">
-                <h3>{tr("marketTotals")}</h3>
-                <span>{tr("optionalOddsHint")}</span>
-              </div>
+            <div className="manual-analysis-tab-panel">
+              {activeMarketTab === "1X2" ? (
+                <div className="manual-analysis-market-section">
+                  <div className="manual-analysis-market-section-head">
+                    <h3>{tr("market1x2")}</h3>
+                    <span>{tr("optionalOddsHint")}</span>
+                  </div>
 
-              <div className="manual-analysis-market-tools">
-                <div className="manual-analysis-field">
-                  <label>{tr("totalsLineLabel")}</label>
-                  <select
-                    className="manual-analysis-line-select"
-                    value={String(totalsLine)}
-                    onChange={(event) => setTotalsLine(Number(event.target.value))}
-                  >
-                    {TOTALS_LINE_OPTIONS.map((line) => (
-                      <option key={line} value={line}>
-                        {line.toFixed(1)}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="manual-analysis-odds-grid manual-analysis-odds-grid--three">
+                    <div className="manual-analysis-field">
+                      <label>{tr("homeLabel")}</label>
+                      <input
+                        value={oddH}
+                        onChange={(event) => setOddH(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div className="manual-analysis-field">
+                      <label>{tr("drawLabel")}</label>
+                      <input
+                        value={oddD}
+                        onChange={(event) => setOddD(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div className="manual-analysis-field">
+                      <label>{tr("awayLabel")}</label>
+                      <input
+                        value={oddA}
+                        onChange={(event) => setOddA(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
-              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
-                <div className="manual-analysis-field">
-                  <label>{tr("overLabel", { line: totalsLine.toFixed(1) })}</label>
-                  <input
-                    value={oddOver}
-                    onChange={(event) => setOddOver(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
+              {activeMarketTab === "TOTALS" ? (
+                <div className="manual-analysis-market-section">
+                  <div className="manual-analysis-market-section-head">
+                    <h3>{tr("marketTotals")}</h3>
+                    <span>{tr("optionalOddsHint")}</span>
+                  </div>
+
+                  <div className="manual-analysis-market-tools">
+                    <div className="manual-analysis-field">
+                      <label>{tr("totalsLineLabel")}</label>
+                      <select
+                        className="manual-analysis-line-select"
+                        value={String(totalsLine)}
+                        onChange={(event) => setTotalsLine(Number(event.target.value))}
+                      >
+                        {TOTALS_LINE_OPTIONS.map((line) => (
+                          <option key={line} value={line}>
+                            {line.toFixed(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
+                    <div className="manual-analysis-field">
+                      <label>{tr("overLabel", { line: totalsLine.toFixed(1) })}</label>
+                      <input
+                        value={oddOver}
+                        onChange={(event) => setOddOver(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div className="manual-analysis-field">
+                      <label>{tr("underLabel", { line: totalsLine.toFixed(1) })}</label>
+                      <input
+                        value={oddUnder}
+                        onChange={(event) => setOddUnder(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+                  </div>
                 </div>
+              ) : null}
 
-                <div className="manual-analysis-field">
-                  <label>{tr("underLabel", { line: totalsLine.toFixed(1) })}</label>
-                  <input
-                    value={oddUnder}
-                    onChange={(event) => setOddUnder(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
+              {activeMarketTab === "BTTS" ? (
+                <div className="manual-analysis-market-section">
+                  <div className="manual-analysis-market-section-head">
+                    <h3>{tr("marketBtts")}</h3>
+                    <span>{tr("optionalOddsHint")}</span>
+                  </div>
+
+                  <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
+                    <div className="manual-analysis-field">
+                      <label>{tr("yesLabel")}</label>
+                      <input
+                        value={oddYes}
+                        onChange={(event) => setOddYes(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div className="manual-analysis-field">
+                      <label>{tr("noLabel")}</label>
+                      <input
+                        value={oddNo}
+                        onChange={(event) => setOddNo(sanitizeOddInput(event.target.value))}
+                        placeholder={ODD_INPUT_PLACEHOLDER}
+                        inputMode="decimal"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="manual-analysis-market-section">
-              <div className="manual-analysis-market-section-head">
-                <h3>{tr("marketBtts")}</h3>
-                <span>{tr("optionalOddsHint")}</span>
-              </div>
-
-              <div className="manual-analysis-odds-grid manual-analysis-odds-grid--two">
-                <div className="manual-analysis-field">
-                  <label>{tr("yesLabel")}</label>
-                  <input
-                    value={oddYes}
-                    onChange={(event) => setOddYes(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div className="manual-analysis-field">
-                  <label>{tr("noLabel")}</label>
-                  <input
-                    value={oddNo}
-                    onChange={(event) => setOddNo(sanitizeOddInput(event.target.value))}
-                    placeholder="0000.00"
-                    inputMode="decimal"
-                  />
-                </div>
-              </div>
+              ) : null}
             </div>
           </div>
 
@@ -795,66 +933,97 @@ export default function ProductManualAnalysisPage() {
               </div>
 
               <div className="manual-analysis-result-markets">
-                {getAnalysisMarketSections(currentAnalysis).map(({ key: sectionKey, market }) => (
-                  <div key={sectionKey} className="manual-analysis-result-market-section">
-                    <div className="manual-analysis-result-market-title">
-                      {getMarketSectionTitle(tr, sectionKey, market)}
+                {resultMarketSections.length ? (
+                  <>
+                    <div
+                      className="manual-analysis-tabs manual-analysis-tabs--result"
+                      role="tablist"
+                      aria-label={tr("completeAnalysisLabel")}
+                    >
+                      {resultMarketSections.map(({ key: sectionKey, market }) => (
+                        <button
+                          key={sectionKey}
+                          type="button"
+                          role="tab"
+                          aria-selected={activeResultSectionKey === sectionKey}
+                          className={`manual-analysis-tab-btn ${
+                            activeResultSectionKey === sectionKey ? "is-active" : ""
+                          }`}
+                          onClick={() => setActiveResultMarketTab(sectionKey)}
+                        >
+                          {getMarketSectionTitle(tr, sectionKey, market)}
+                        </button>
+                      ))}
                     </div>
 
-                    <div className="manual-analysis-comparison-grid">
-                      {Object.entries(market.model?.selections ?? {}).map(([selectionKey, selectionValue]) => {
-                        const comparison = market.evaluation?.comparisons?.[selectionKey] ?? null;
+                    {activeResultSection ? (
+                      <div className="manual-analysis-result-market-section">
+                        <div className="manual-analysis-result-market-title">
+                          {getMarketSectionTitle(tr, activeResultSection.key, activeResultSection.market)}
+                        </div>
 
-                        return (
-                          <div key={`${sectionKey}-${selectionKey}`} className="manual-analysis-comparison-card">
-                            <div className="manual-analysis-comparison-label">
-                              {getSelectionLabel(
-                                lang,
-                                market.market?.market_key ?? "1X2",
-                                selectionKey,
-                                currentAnalysis.event
-                              )}
-                            </div>
+                        <div className="manual-analysis-comparison-grid">
+                          {Object.entries(activeResultSection.market.model?.selections ?? {}).map(
+                            ([selectionKey, selectionValue]) => {
+                              const comparison =
+                                activeResultSection.market.evaluation?.comparisons?.[selectionKey] ?? null;
 
-                            <div className="manual-analysis-comparison-row">
-                              <span>{tr("resultModelProb")}</span>
-                              <strong>{fmtPct(selectionValue?.model_prob ?? null)}</strong>
-                            </div>
+                              return (
+                                <div
+                                  key={`${activeResultSection.key}-${selectionKey}`}
+                                  className="manual-analysis-comparison-card"
+                                >
+                                  <div className="manual-analysis-comparison-label">
+                                    {getSelectionLabel(
+                                      lang,
+                                      activeResultSection.market.market?.market_key ?? "1X2",
+                                      selectionKey,
+                                      currentAnalysis.event
+                                    )}
+                                  </div>
 
-                            <div className="manual-analysis-comparison-row">
-                              <span>{tr("resultFairOdd")}</span>
-                              <strong>{fmtOdd(selectionValue?.fair_odd ?? null)}</strong>
-                            </div>
+                                  <div className="manual-analysis-comparison-row">
+                                    <span>{tr("resultModelProb")}</span>
+                                    <strong>{fmtPct(selectionValue?.model_prob ?? null)}</strong>
+                                  </div>
 
-                            <div className="manual-analysis-comparison-row">
-                              <span>{tr("resultInterestingOdd")}</span>
-                              <strong>{fmtOdd(selectionValue?.interesting_above ?? null)}</strong>
-                            </div>
+                                  <div className="manual-analysis-comparison-row">
+                                    <span>{tr("resultFairOdd")}</span>
+                                    <strong>{fmtOdd(selectionValue?.fair_odd ?? null)}</strong>
+                                  </div>
 
-                            <div className="manual-analysis-comparison-row">
-                              <span>{tr("resultManualOdd")}</span>
-                              <strong>{fmtOdd(comparison?.odd ?? null)}</strong>
-                            </div>
+                                  <div className="manual-analysis-comparison-row">
+                                    <span>{tr("resultInterestingOdd")}</span>
+                                    <strong>{fmtOdd(selectionValue?.interesting_above ?? null)}</strong>
+                                  </div>
 
-                            {comparison ? (
-                              <div
-                                className={`manual-analysis-badge manual-analysis-badge--${String(
-                                  comparison.classification || "ALIGNED"
-                                ).toLowerCase()}`}
-                              >
-                                {comparison.classification === "GOOD"
-                                  ? tr("badgeGood")
-                                  : comparison.classification === "BAD"
-                                  ? tr("badgeBad")
-                                  : tr("badgeAligned")}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                                  <div className="manual-analysis-comparison-row">
+                                    <span>{tr("resultManualOdd")}</span>
+                                    <strong>{fmtOdd(comparison?.odd ?? null)}</strong>
+                                  </div>
+
+                                  {comparison ? (
+                                    <div
+                                      className={`manual-analysis-badge manual-analysis-badge--${String(
+                                        comparison.classification || "ALIGNED"
+                                      ).toLowerCase()}`}
+                                    >
+                                      {comparison.classification === "GOOD"
+                                        ? tr("badgeGood")
+                                        : comparison.classification === "BAD"
+                                        ? tr("badgeBad")
+                                        : tr("badgeAligned")}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            }
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             </>
           ) : (
@@ -881,7 +1050,11 @@ export default function ProductManualAnalysisPage() {
                 key={item.analysis_id ?? `${item.created_at_utc}-${item.event?.event_id}`}
                 type="button"
                 className="manual-analysis-history-item"
-                onClick={() => setCurrentAnalysis(item)}
+                onClick={() => {
+                  setCurrentAnalysis(item);
+                  const firstSection = getAnalysisMarketSections(item)[0];
+                  if (firstSection) setActiveResultMarketTab(firstSection.key);
+                }}
               >
                 <div>
                   <div className="manual-analysis-history-match">
@@ -906,6 +1079,19 @@ export default function ProductManualAnalysisPage() {
             ))}
           </div>
         ) : null}
+
+        {!isLoadingHistory && hasMoreHistory ? (
+          <button
+            type="button"
+            className="manual-analysis-history-more-btn"
+            onClick={handleLoadMoreHistory}
+            disabled={isLoadingMoreHistory}
+          >
+            {isLoadingMoreHistory ? tr("historyLoadingMore") : tr("historyLoadMore")}
+          </button>
+        ) : null}
+
+
       </div>
 
       {confirmOpen ? (
@@ -916,8 +1102,10 @@ export default function ProductManualAnalysisPage() {
             aria-modal="true"
             aria-labelledby="manual-analysis-confirm-title"
           >
-            <h2 id="manual-analysis-confirm-title">{tr("confirmTitle")}</h2>
-            <p>{tr("confirmBody")}</p>
+            <div className="manual-analysis-modal-head">
+              <h2 id="manual-analysis-confirm-title">{tr("confirmTitle")}</h2>
+              <p className="manual-analysis-modal-lead">{tr("confirmBody")}</p>
+            </div>
 
             <div className="manual-analysis-summary-list">
               {summaryRows.map((row) => (
@@ -928,7 +1116,9 @@ export default function ProductManualAnalysisPage() {
               ))}
             </div>
 
-            <div className="manual-analysis-note">{tr("confirmCreditHint")}</div>
+            <div className="manual-analysis-note manual-analysis-note--modal">
+              {tr("confirmCreditHint")}
+            </div>
 
             <div className="manual-analysis-modal-actions">
               <button
