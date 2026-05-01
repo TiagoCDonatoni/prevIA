@@ -1,0 +1,1 @@
+const a="Matchups",n="History",t="About",s="Language",o="Plan",u="Analyses",c="Build a bet",l="Product navigation",i={matchups:a,history:n,about:t,language:s,plan:o,analyses:u,manualAnalysis:c,productNavigation:l};export{t as about,u as analyses,i as default,n as history,s as language,c as manualAnalysis,a as matchups,o as plan,l as productNavigation};

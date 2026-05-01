@@ -1,1 +1,0 @@
-const a="Partidos",t="Historial",o="Acerca de",s="Idioma",n="Plan",c={matchups:a,history:t,about:o,language:s,plan:n};export{o as about,c as default,t as history,s as language,a as matchups,n as plan};

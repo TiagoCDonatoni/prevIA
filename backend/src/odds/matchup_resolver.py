@@ -8,10 +8,15 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.db.pg import pg_tx
-
+from difflib import SequenceMatcher
 
 _STOPWORDS = {
-    "fc", "cf", "sc", "ac", "afc", "cfc", "the", "club", "de", "da", "do", "and", "&"
+    "fc", "cf", "sc", "ac", "afc", "cfc", "the", "club",
+    "de", "da", "do", "and", "&",
+    "al",
+    "ksa", "sau", "saudi",
+    "u19", "u20", "u21", "u23",
+    "women", "feminino", "feminina",
 }
 
 
@@ -47,24 +52,74 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return float(inter) / float(union) if union else 0.0
 
 
+def _compact_name_key(value: str) -> str:
+    n = _norm_name(value)
+    compact = re.sub(r"\s+", "", n)
+    compact = re.sub(r"(.)\1+", r"\1", compact)
+    return compact
+
+
+def _consonant_key(value: str) -> str:
+    compact = _compact_name_key(value)
+    return re.sub(r"[aeiou]", "", compact)
+
+
 def _name_similarity(raw_a: str, raw_b: str) -> float:
     """
-    Similaridade robusta e barata (MVP):
-    - 1.0: normalized igual
-    - 0.93: substring (contém)
-    - senão: jaccard tokens (capado)
+    Similaridade robusta:
+    - normalização textual;
+    - substring;
+    - comparação aproximada;
+    - chave consonantal para transliterações;
+    - jaccard por tokens.
+
+    Exemplos que devem melhorar:
+    - Al Akhdood -> Al Okhdood
+    - Al Ettifaq (KSA) -> Al-Ettifaq
+    - Man City -> Manchester City
     """
     a = _norm_name(raw_a)
     b = _norm_name(raw_b)
+
     if not a or not b:
         return 0.0
+
     if a == b:
         return 1.0
+
     if a in b or b in a:
         return 0.93
 
+    seq = SequenceMatcher(None, a, b).ratio()
+    if seq >= 0.92:
+        return 0.96
+    if seq >= 0.88:
+        return 0.93
+    if seq >= 0.84:
+        return 0.90
+
+    a_compact = _compact_name_key(raw_a)
+    b_compact = _compact_name_key(raw_b)
+
+    if a_compact and b_compact:
+        compact_seq = SequenceMatcher(None, a_compact, b_compact).ratio()
+        if compact_seq >= 0.92:
+            return 0.94
+        if compact_seq >= 0.88:
+            return 0.91
+
+    a_consonant = _consonant_key(raw_a)
+    b_consonant = _consonant_key(raw_b)
+
+    if (
+        a_consonant
+        and b_consonant
+        and len(a_consonant) >= 4
+        and a_consonant == b_consonant
+    ):
+        return 0.94
+
     ja = _jaccard(set(a.split()), set(b.split()))
-    # cap para não explodir com ruído
     return max(0.0, min(0.90, ja))
 
 
@@ -151,8 +206,13 @@ def _load_team_alias_index(conn, *, sport_key: str) -> Dict[str, int]:
     return idx
 
 
-def _load_team_candidates(conn, *, sport_key: str) -> List[Dict[str, Any]]:
-    country_hint = _sport_key_country_hint(sport_key)
+def _load_team_candidates(
+    conn,
+    *,
+    sport_key: str,
+    country_hint: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    country_hint = country_hint or _sport_key_country_hint(sport_key)
 
     sql = """
       SELECT team_id, name, country_name
@@ -217,6 +277,9 @@ def _resolve_single_team_name(
     raw_name: str,
     side: str,
     event_id: Optional[str] = None,
+    country_hint: Optional[str] = None,
+    auto_resolve_score_threshold: Optional[float] = None,
+    auto_resolve_margin_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     normalized_name = _norm_name(raw_name)
 
@@ -244,7 +307,11 @@ def _resolve_single_team_name(
             "payload": {"alias_hit": True},
         }
 
-    candidates = _load_team_candidates(conn, sport_key=sport_key)
+    candidates = _load_team_candidates(
+        conn,
+        sport_key=sport_key,
+        country_hint=country_hint,
+    )
     ranked: List[Dict[str, Any]] = []
 
     for cand in candidates:
@@ -286,7 +353,18 @@ def _resolve_single_team_name(
         "side": side,
     }
 
-    if top1_score >= AUTO_RESOLVE_SCORE_THRESHOLD and margin >= AUTO_RESOLVE_MARGIN_THRESHOLD:
+    score_threshold = (
+        float(auto_resolve_score_threshold)
+        if auto_resolve_score_threshold is not None
+        else AUTO_RESOLVE_SCORE_THRESHOLD
+    )
+    margin_threshold = (
+        float(auto_resolve_margin_threshold)
+        if auto_resolve_margin_threshold is not None
+        else AUTO_RESOLVE_MARGIN_THRESHOLD
+    )
+
+    if top1_score >= score_threshold and margin >= margin_threshold:
         return {
             "resolved_team_id": int(top1["team_id"]),
             "match_status": "auto_resolved",
@@ -569,6 +647,7 @@ def _upsert_team_alias_auto(
     normalized_name: str,
     team_id: int,
     confidence: float,
+    source: str = "auto_approved",
 ) -> None:
     sql_exists = """
       SELECT 1
@@ -595,7 +674,7 @@ def _upsert_team_alias_auto(
         %(raw_name)s,
         %(normalized_name)s,
         %(team_id)s,
-        'auto_approved',
+        %(source)s,
         %(confidence)s,
         true,
         NOW(),
@@ -622,6 +701,7 @@ def _upsert_team_alias_auto(
                 "normalized_name": str(normalized_name),
                 "team_id": int(team_id),
                 "confidence": float(confidence),
+                "source": str(source),
             },
         )
         

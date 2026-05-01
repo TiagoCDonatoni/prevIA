@@ -9,3 +9,5 @@ google-auth>=2.38
 email-validator>=2.2.0
 requests>=2.32.0
 stripe>=12.0.0
+python-multipart>=0.0.9
+Pillow>=10.0

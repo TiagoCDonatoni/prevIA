@@ -143,6 +143,109 @@ export type ManualAnalysisEvaluateRequest = {
   odds_btts?: ManualAnalysisSelectionsMap;
 };
 
+export type ManualAnalysisImageImportStatus =
+  | "READY"
+  | "NEEDS_CONFIRMATION"
+  | "UNSUPPORTED_MARKET"
+  | "LOW_CONFIDENCE"
+  | "UNREADABLE"
+  | string;
+
+export type ManualAnalysisImageImportPreviewItem = {
+  row_id: number;
+  row_index: number;
+  status: ManualAnalysisImageImportStatus;
+  raw?: {
+    home?: string | null;
+    away?: string | null;
+    league?: string | null;
+    kickoff?: string | null;
+    kickoff_iso_local?: string | null;
+    market?: string | null;
+    selection?: string | null;
+    line?: string | null;
+    odd?: string | null;
+    bookmaker?: string | null;
+    confidence?: number | null;
+    notes?: string | null;
+    selections?: Array<{
+      market?: string | null;
+      selection?: string | null;
+      line?: string | null;
+      odd?: string | null;
+      confidence?: number | null;
+      notes?: string | null;
+    }>;
+  };
+  normalized?: {
+    market_key?: string | null;
+    selection_key?: string | null;
+    line?: number | null;
+    totals_line?: number | null;
+    odds_value?: number | null;
+    line_was_defaulted?: boolean;
+    odds_1x2?: Record<string, number | null>;
+    odds_totals?: Record<string, number | null>;
+    odds_btts?: Record<string, number | null>;
+    supported_selection_count?: number;
+    unsupported_selection_count?: number;
+  };
+  resolved?: {
+    fixture_id?: number | null;
+    home_team_id?: number | null;
+    away_team_id?: number | null;
+    home_name?: string | null;
+    away_name?: string | null;
+    kickoff_utc?: string | null;
+    confidence?: number | null;
+  };
+  candidates?: Array<Record<string, unknown>>;
+  message?: string | null;
+};
+
+export type ManualAnalysisImageImportPreviewResponse = {
+  ok: boolean;
+  request_id: number;
+  image_type: string;
+  status: string;
+  summary: {
+    items_detected: number;
+    auto_resolved: number;
+    needs_confirmation: number;
+    rejected: number;
+  };
+  usage?: {
+    upload_attempts_today: number;
+    accepted_uploads_today: number;
+    rejected_uploads_today: number;
+    generated_analyses_today: number;
+    uploads_remaining_today: number;
+    blocked_until_utc?: string | null;
+    risk_score: number;
+  };
+  items: ManualAnalysisImageImportPreviewItem[];
+  code?: string;
+  message?: string;
+};
+
+export type ManualAnalysisImageBatchEvaluateResponse = {
+  ok: boolean;
+  credits_required: number;
+  credits_consumed: number;
+  remaining_credits?: number | null;
+  code?: string | null;
+  message?: string | null;
+  usage?: ManualAnalysisResponse["usage"] | null;
+  analyses: Array<{
+    row_id: number;
+    analysis_id?: number | null;
+    status: "generated" | "already_generated" | string;
+    consumed_credit?: boolean;
+    analysis?: ManualAnalysisResponse;
+  }>;
+  skipped: Array<Record<string, unknown>>;
+};
+
 export async function postManualAnalysisEvaluate(
   payload: ManualAnalysisEvaluateRequest
 ): Promise<ManualAnalysisResponse> {
@@ -160,6 +263,62 @@ export async function postManualAnalysisEvaluate(
   const data = (await res.json().catch(() => ({}))) as ManualAnalysisResponse;
   if (!res.ok && !data.ok) return data;
   if (!res.ok) throw new Error(`manual_analysis_evaluate_failed:${res.status}`);
+  return data;
+}
+
+export async function postManualAnalysisImagePreview(
+  image: File,
+  opts?: {
+    lang?: string;
+    timezone_name?: string;
+  }
+): Promise<ManualAnalysisImageImportPreviewResponse> {
+  const form = new FormData();
+  form.append("image", image);
+  form.append("lang", opts?.lang || "pt-BR");
+  form.append("timezone_name", opts?.timezone_name || "America/Sao_Paulo");
+
+  const res = await fetch(`${API_BASE_URL}/product/manual-analysis/image-import/preview`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+    body: form,
+  });
+
+  const data = (await res.json().catch(() => ({}))) as ManualAnalysisImageImportPreviewResponse;
+
+  if (!res.ok && !data.ok) return data;
+  if (!res.ok) throw new Error(`manual_analysis_image_preview_failed:${res.status}`);
+
+  return data;
+}
+
+export async function postManualAnalysisImageEvaluateBatch(
+  requestId: number,
+  rowIds: number[]
+): Promise<ManualAnalysisImageBatchEvaluateResponse> {
+  const res = await fetch(`${API_BASE_URL}/product/manual-analysis/image-import/evaluate-batch`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+    body: JSON.stringify({
+      request_id: requestId,
+      row_ids: rowIds,
+    }),
+  });
+
+  const data = (await res.json().catch(() => ({}))) as ManualAnalysisImageBatchEvaluateResponse;
+
+  if (!res.ok && !data.ok) return data;
+  if (!res.ok) throw new Error(`manual_analysis_image_batch_failed:${res.status}`);
+
   return data;
 }
 

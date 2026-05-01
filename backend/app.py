@@ -13,6 +13,7 @@ from src.http.admin_matchup_router import router as admin_matchup_router
 from src.http.admin_catalog_router import router as admin_catalog_router
 from src.http.product_leagues_router import router as product_leagues_router
 from src.http.product_manual_analysis_router import router as product_manual_analysis_router
+from src.http.product_manual_analysis_image_router import router as product_manual_analysis_image_router
 from src.http.product_index_router import router as product_index_router
 from src.http.auth_router import router as auth_router
 from src.http.access_router import router as access_router
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
     api.include_router(admin_catalog_router)
     api.include_router(product_leagues_router)
     api.include_router(product_manual_analysis_router)
+    api.include_router(product_manual_analysis_image_router)
     api.include_router(product_index_router)
     api.include_router(auth_router)
     api.include_router(billing_router)

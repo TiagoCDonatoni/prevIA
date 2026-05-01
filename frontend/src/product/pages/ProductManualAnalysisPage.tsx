@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { listTeams } from "../../api/client";
@@ -9,7 +9,11 @@ import { t, type Lang } from "../i18n";
 import {
   fetchManualAnalysisHistory,
   postManualAnalysisEvaluate,
+  postManualAnalysisImageEvaluateBatch,
+  postManualAnalysisImagePreview,
   type ManualAnalysisEvaluateRequest,
+  type ManualAnalysisImageImportPreviewItem,
+  type ManualAnalysisImageImportPreviewResponse,
   type ManualAnalysisMarketKey,
   type ManualAnalysisMarketSnapshot,
   type ManualAnalysisResponse,
@@ -295,6 +299,170 @@ function buildNarrative(lang: Lang, plan: PlanId, analysis: ManualAnalysisRespon
   return lines;
 }
 
+function getRuntimeTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+  } catch {
+    return "America/Sao_Paulo";
+  }
+}
+
+function getApiLang(lang: Lang) {
+  if (lang === "pt") return "pt-BR";
+  if (lang === "es") return "es";
+  return "en";
+}
+
+function fmtNullableOdd(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return null;
+  return value.toFixed(2);
+}
+
+function imageImportItemTitle(item: ManualAnalysisImageImportPreviewItem) {
+  const home = item.resolved?.home_name || item.raw?.home || "—";
+  const away = item.resolved?.away_name || item.raw?.away || "—";
+  return `${home} x ${away}`;
+}
+
+function imageImportItemOddsSummary(item: ManualAnalysisImageImportPreviewItem) {
+  const normalized = item.normalized || {};
+  const odds1x2 = normalized.odds_1x2 || {};
+  const oddsTotals = normalized.odds_totals || {};
+  const oddsBtts = normalized.odds_btts || {};
+  const totalsLine = normalized.totals_line ?? normalized.line ?? 2.5;
+
+  const parts = [
+    odds1x2.H != null ? `H ${fmtNullableOdd(odds1x2.H)}` : null,
+    odds1x2.D != null ? `D ${fmtNullableOdd(odds1x2.D)}` : null,
+    odds1x2.A != null ? `A ${fmtNullableOdd(odds1x2.A)}` : null,
+    oddsTotals.over != null ? `Over ${Number(totalsLine).toFixed(1)} ${fmtNullableOdd(oddsTotals.over)}` : null,
+    oddsTotals.under != null ? `Under ${Number(totalsLine).toFixed(1)} ${fmtNullableOdd(oddsTotals.under)}` : null,
+    oddsBtts.yes != null ? `BTTS Sim ${fmtNullableOdd(oddsBtts.yes)}` : null,
+    oddsBtts.no != null ? `BTTS Não ${fmtNullableOdd(oddsBtts.no)}` : null,
+  ].filter(Boolean);
+
+  return parts.join(" · ") || "—";
+}
+
+function canSelectImageImportItem(item: ManualAnalysisImageImportPreviewItem) {
+  return item.status === "READY";
+}
+
+type ManualAnalysisBatchBestEdge = {
+  label: string;
+  edge: number;
+  classification?: string | null;
+};
+
+function fmtImageImportEdge(edge: number | null | undefined) {
+  if (edge == null || !Number.isFinite(edge)) return "—";
+  const value = edge * 100;
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)} p.p.`;
+}
+
+function getBatchAnalysisTitle(analysis?: ManualAnalysisResponse | null) {
+  const home = analysis?.event?.home_name;
+  const away = analysis?.event?.away_name;
+
+  if (home && away) return `${home} x ${away}`;
+  return "Análise gerada";
+}
+
+function getBatchAnalysisSubtitle(analysis?: ManualAnalysisResponse | null) {
+  const competition = analysis?.event?.competition_name;
+  const marketLine = analysis?.markets?.totals?.market?.line;
+
+  if (competition && marketLine != null) {
+    return `${competition} · Over/Under ${marketLine}`;
+  }
+
+  if (competition) return competition;
+  if (marketLine != null) return `Over/Under ${marketLine}`;
+
+  return "Montar aposta";
+}
+
+function getBestEdgeFromAnalysis(analysis?: ManualAnalysisResponse | null): ManualAnalysisBatchBestEdge | null {
+  const comparisons = analysis?.evaluation?.comparisons as
+    | Record<string, unknown>
+    | null
+    | undefined;
+
+  if (!comparisons || typeof comparisons !== "object") return null;
+
+  const labels: Record<string, string> = {
+    H: "Mandante",
+    D: "Empate",
+    A: "Visitante",
+    over: "Over",
+    under: "Under",
+    yes: "BTTS Sim",
+    no: "BTTS Não",
+  };
+
+  const candidates: ManualAnalysisBatchBestEdge[] = [];
+
+  function collectFromGroup(group: unknown) {
+    if (!group || typeof group !== "object") return;
+
+    Object.entries(group as Record<string, unknown>).forEach(([key, value]) => {
+      if (!value || typeof value !== "object") return;
+
+      const payload = value as {
+        edge?: unknown;
+        classification?: unknown;
+      };
+
+      if (typeof payload.edge !== "number" || !Number.isFinite(payload.edge)) return;
+
+      candidates.push({
+        label: labels[key] || key,
+        edge: payload.edge,
+        classification:
+          typeof payload.classification === "string" ? payload.classification : null,
+      });
+    });
+  }
+
+  collectFromGroup(comparisons.one_x_two);
+  collectFromGroup(comparisons.totals);
+  collectFromGroup(comparisons.btts);
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => b.edge - a.edge);
+  return candidates[0];
+}
+
+function getBestEdgeFromBatch(
+  items: Array<{
+    analysis?: ManualAnalysisResponse;
+  }>
+) {
+  const candidates = items
+    .map((item) => ({
+      analysis: item.analysis,
+      best: getBestEdgeFromAnalysis(item.analysis),
+    }))
+    .filter(
+      (
+        item
+      ): item is {
+        analysis: ManualAnalysisResponse;
+        best: ManualAnalysisBatchBestEdge;
+      } => Boolean(item.analysis && item.best)
+    );
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => b.best.edge - a.best.edge);
+
+  return {
+    analysis: candidates[0].analysis,
+    best: candidates[0].best,
+  };
+}
+
 export default function ProductManualAnalysisPage() {
   const store = useProductStore();
   const lang = store.state.lang as Lang;
@@ -331,9 +499,64 @@ export default function ProductManualAnalysisPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentAnalysis, setCurrentAnalysis] = useState<ManualAnalysisResponse | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [imagePreview, setImagePreview] = useState<ManualAnalysisImageImportPreviewResponse | null>(null);
+  const [imageSelectionOpen, setImageSelectionOpen] = useState(false);
+  const [selectedImageRowIds, setSelectedImageRowIds] = useState<number[]>([]);
+  const [isImageUploading, setIsImageUploading] = useState(false);
+  const [isImageBatchSubmitting, setIsImageBatchSubmitting] = useState(false);
+  const [imageImportError, setImageImportError] = useState<string | null>(null);
+  const [imageBatchResults, setImageBatchResults] = useState<
+    Array<{
+      row_id: number;
+      analysis_id?: number | null;
+      status: string;
+      consumed_credit?: boolean;
+      analysis?: ManualAnalysisResponse;
+    }>
+  >([]);
+  const [imageBatchSkipped, setImageBatchSkipped] = useState<Array<Record<string, unknown>>>([]);
 
   const hasFeatureAccess =
     ALLOWED_PLANS.includes(plan) || Boolean(store.accessContext?.product_internal_access);
+
+  const remainingCredits = store.backendUsage.is_ready
+    ? store.backendUsage.remaining ?? store.entitlements.credits.remaining_today
+    : store.entitlements.credits.remaining_today;
+
+  const readyImageItems = useMemo(
+    () => (imagePreview?.items ?? []).filter((item) => item.status === "READY"),
+    [imagePreview]
+  );
+
+  const maxImageSelectable = Math.max(0, Math.min(readyImageItems.length, remainingCredits ?? 0));
+
+  const selectedImageItems = useMemo(
+    () => readyImageItems.filter((item) => selectedImageRowIds.includes(item.row_id)),
+    [readyImageItems, selectedImageRowIds]
+  );
+
+  const imageBatchAvailableAnalyses = useMemo(
+    () =>
+      imageBatchResults
+        .map((item) => item.analysis)
+        .filter((item): item is ManualAnalysisResponse => Boolean(item?.ok)),
+    [imageBatchResults]
+  );
+
+  const imageBatchBestOpportunity = useMemo(
+    () => getBestEdgeFromBatch(imageBatchResults),
+    [imageBatchResults]
+  );
+
+  const imageBatchGeneratedCount = imageBatchResults.filter(
+    (item) => item.status === "generated"
+  ).length;
+
+  const imageBatchReusedCount = imageBatchResults.filter(
+    (item) => item.status === "already_generated"
+  ).length;
 
   function applyManualAnalysisUsage(response: ManualAnalysisResponse) {
     const usage = response.usage;
@@ -342,6 +565,25 @@ export default function ProductManualAnalysisPage() {
     store.applyBackendUsage({
       date_key:
         response.date_key ??
+        store.backendUsage.date_key ??
+        new Date().toISOString().slice(0, 10),
+      credits_used: usage.credits_used,
+      revealed_count: usage.revealed_count,
+      daily_limit: usage.daily_limit,
+      remaining: usage.remaining,
+      revealed_fixture_keys:
+        usage.revealed_fixture_keys ??
+        store.backendUsage.revealed_fixture_keys ??
+        [],
+    });
+  }
+
+  function applyManualAnalysisBatchUsage(response: { usage?: ManualAnalysisResponse["usage"] | null }) {
+    const usage = response.usage;
+    if (!usage) return;
+
+    store.applyBackendUsage({
+      date_key:
         store.backendUsage.date_key ??
         new Date().toISOString().slice(0, 10),
       credits_used: usage.credits_used,
@@ -565,6 +807,122 @@ export default function ProductManualAnalysisPage() {
     totalsLine,
   ]);
 
+  async function handleImageImportPreview() {
+    if (!imageFile || isImageUploading) return;
+
+    setImageImportError(null);
+    setErrorMessage(null);
+    setIsImageUploading(true);
+    setImageBatchResults([]);
+    setImageBatchSkipped([]);
+
+    try {
+      const response = await postManualAnalysisImagePreview(imageFile, {
+        lang: getApiLang(lang),
+        timezone_name: getRuntimeTimezone(),
+      });
+
+      if (!response.ok) {
+        setImageImportError(response.message ?? tr("imageImportGenericError"));
+        return;
+      }
+
+      setImagePreview(response);
+
+      const readyIds = (response.items ?? [])
+        .filter((item) => item.status === "READY")
+        .map((item) => item.row_id);
+
+      const selectableCount = Math.max(0, Math.min(readyIds.length, remainingCredits ?? 0));
+      setSelectedImageRowIds(readyIds.slice(0, selectableCount));
+      setImageSelectionOpen(true);
+    } catch (error) {
+      console.error("manual analysis image preview failed", error);
+      setImageImportError(tr("imageImportGenericError"));
+    } finally {
+      setIsImageUploading(false);
+    }
+  }
+
+  function toggleImageImportRow(rowId: number) {
+    const isSelected = selectedImageRowIds.includes(rowId);
+
+    if (isSelected) {
+      setSelectedImageRowIds((prev) => prev.filter((current) => current !== rowId));
+      return;
+    }
+
+    if (selectedImageRowIds.length >= maxImageSelectable) {
+      setImageImportError(tr("imageImportCreditLimitReached"));
+      return;
+    }
+
+    setSelectedImageRowIds((prev) => [...prev, rowId]);
+  }
+
+  async function handleImageImportBatchEvaluate() {
+    if (!imagePreview || !selectedImageRowIds.length || isImageBatchSubmitting) return;
+
+    setImageImportError(null);
+    setErrorMessage(null);
+    setIsImageBatchSubmitting(true);
+
+    try {
+      const response = await postManualAnalysisImageEvaluateBatch(
+        imagePreview.request_id,
+        selectedImageRowIds
+      );
+
+      applyManualAnalysisBatchUsage(response);
+
+      if (!response.ok) {
+        setImageImportError(response.message ?? tr("imageImportGenericError"));
+        return;
+      }
+
+      setImageBatchResults(response.analyses ?? []);
+      setImageBatchSkipped(response.skipped ?? []);
+
+      const availableAnalyses = response.analyses
+        .map((item) => item.analysis)
+        .filter((item): item is ManualAnalysisResponse => Boolean(item?.ok));
+
+      if (availableAnalyses.length) {
+        const first = availableAnalyses[0];
+
+        setCurrentAnalysis(first);
+        setActiveResultMarketTab("one_x_two");
+        setHistory((prev) => {
+          const merged = [...availableAnalyses, ...prev];
+
+          const unique = merged.filter((item, index, arr) => {
+            if (item.analysis_id == null) return true;
+            return arr.findIndex((candidate) => candidate.analysis_id === item.analysis_id) === index;
+          });
+
+          return unique.slice(0, 20);
+        });
+
+        setNextHistoryOffset((prev) => Math.min(prev + availableAnalyses.length, 20));
+        setImageSelectionOpen(false);
+        return;
+      }
+
+      const alreadyGenerated = response.analyses.some((item) => item.status === "already_generated");
+      if (alreadyGenerated) {
+        setImageImportError(tr("imageImportAlreadyGenerated"));
+        return;
+      }
+
+      setImageImportError(tr("imageImportNoAnalysisGenerated"));
+    } catch (error) {
+      console.error("manual analysis image batch failed", error);
+      setImageImportError(tr("imageImportGenericError"));
+    } finally {
+      setIsImageBatchSubmitting(false);
+    }
+  }
+
   async function handleConfirmAnalyze() {
     if (!selectedHomeTeam || !selectedAwayTeam || sameTeamSelected) return;
 
@@ -682,6 +1040,189 @@ export default function ProductManualAnalysisPage() {
               </div>
             </div>
           */}
+
+          <div className="manual-analysis-image-import-card">
+            <div className="manual-analysis-image-import-top">
+              <div className="manual-analysis-image-import-icon" aria-hidden="true">
+                ✦
+              </div>
+
+              <div className="manual-analysis-image-import-copy">
+                <div className="manual-analysis-image-import-kicker">
+                  {tr("imageImportKicker")}
+                </div>
+                <strong>{tr("imageImportTitle")}</strong>
+                <span>{tr("imageImportBody")}</span>
+              </div>
+            </div>
+
+            <div className="manual-analysis-image-import-dropzone">
+              <input
+                ref={imageFileInputRef}
+                className="manual-analysis-image-import-native-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  setImageImportError(null);
+                  setImageBatchResults([]);
+                  setImageBatchSkipped([]);
+                  setImagePreview(null);
+                  setSelectedImageRowIds([]);
+                  setImageFile(event.target.files?.[0] ?? null);
+                }}
+              />
+
+              <button
+                type="button"
+                className="manual-analysis-image-import-picker"
+                onClick={() => imageFileInputRef.current?.click()}
+              >
+                {tr("imageImportPickFile")}
+              </button>
+
+              <div className="manual-analysis-image-import-file">
+                <span>{imageFile ? tr("imageImportSelectedFile") : tr("imageImportNoFile")}</span>
+                <strong>{imageFile?.name ?? tr("imageImportAcceptedFormats")}</strong>
+              </div>
+
+              <button
+                type="button"
+                className="manual-analysis-primary-btn manual-analysis-image-import-submit"
+                onClick={() => void handleImageImportPreview()}
+                disabled={!imageFile || isImageUploading}
+              >
+                {isImageUploading ? tr("imageImportUploading") : tr("imageImportSubmit")}
+              </button>
+            </div>
+
+            <div className="manual-analysis-image-import-footnote">
+              {tr("imageImportFootnote")}
+            </div>
+
+            {imageImportError ? (
+              <div className="manual-analysis-error manual-analysis-error--compact">
+                {imageImportError}
+              </div>
+            ) : null}
+          </div>
+
+          {imageBatchResults.length || imageBatchSkipped.length ? (
+            <div className="manual-analysis-image-batch-result">
+              <div className="manual-analysis-image-batch-head">
+                <div>
+                  <strong>
+                    {tr("imageImportBatchResultTitle", {
+                      count: imageBatchAvailableAnalyses.length,
+                    })}
+                  </strong>
+                  <span>
+                    {tr("imageImportBatchResultBody", {
+                      generated: imageBatchGeneratedCount,
+                      reused: imageBatchReusedCount,
+                      skipped: imageBatchSkipped.length,
+                    })}
+                  </span>
+                </div>
+
+                {imageBatchAvailableAnalyses.length ? (
+                  <button
+                    type="button"
+                    className="manual-analysis-secondary-btn"
+                    onClick={() => {
+                      setImageBatchResults([]);
+                      setImageBatchSkipped([]);
+                    }}
+                  >
+                    {tr("imageImportBatchResultClear")}
+                  </button>
+                ) : null}
+              </div>
+
+              {imageBatchBestOpportunity ? (
+                <button
+                  type="button"
+                  className="manual-analysis-image-best-card"
+                  onClick={() => {
+                    setCurrentAnalysis(imageBatchBestOpportunity.analysis);
+                    setActiveResultMarketTab("one_x_two");
+                  }}
+                >
+                  <span>{tr("imageImportBatchBest")}</span>
+                  <strong>{getBatchAnalysisTitle(imageBatchBestOpportunity.analysis)}</strong>
+                  <em>
+                    {imageBatchBestOpportunity.best.label} ·{" "}
+                    {tr("imageImportEdgeLabel")}{" "}
+                    {fmtImageImportEdge(imageBatchBestOpportunity.best.edge)}
+                  </em>
+                </button>
+              ) : null}
+
+              {imageBatchAvailableAnalyses.length ? (
+                <div className="manual-analysis-image-batch-list">
+                  {imageBatchResults.map((item) => {
+                    const analysis = item.analysis;
+                    const best = getBestEdgeFromAnalysis(analysis);
+
+                    return (
+                      <div key={`${item.row_id}-${item.analysis_id ?? item.status}`} className="manual-analysis-image-batch-item">
+                        <div className="manual-analysis-image-batch-item-copy">
+                          <strong>{getBatchAnalysisTitle(analysis)}</strong>
+                          <span>{getBatchAnalysisSubtitle(analysis)}</span>
+
+                          {best ? (
+                            <em>
+                              {best.label} · {tr("imageImportEdgeLabel")}{" "}
+                              {fmtImageImportEdge(best.edge)}
+                            </em>
+                          ) : (
+                            <em>{tr("imageImportNoClearEdge")}</em>
+                          )}
+                        </div>
+
+                        <div className="manual-analysis-image-batch-item-actions">
+                          <span
+                            className={`manual-analysis-image-batch-status ${
+                              item.status === "already_generated"
+                                ? "manual-analysis-image-batch-status--reused"
+                                : "manual-analysis-image-batch-status--generated"
+                            }`}
+                          >
+                            {item.status === "already_generated"
+                              ? tr("imageImportReused")
+                              : tr("imageImportGenerated")}
+                          </span>
+
+                          {analysis ? (
+                            <button
+                              type="button"
+                              className="manual-analysis-secondary-btn"
+                              onClick={() => {
+                                setCurrentAnalysis(analysis);
+                                setActiveResultMarketTab("one_x_two");
+                              }}
+                            >
+                              {tr("imageImportOpenAnalysis")}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {imageBatchSkipped.length ? (
+                <div className="manual-analysis-image-skipped">
+                  <strong>{tr("imageImportSkippedTitle")}</strong>
+                  <span>
+                    {tr("imageImportSkippedBody", {
+                      count: imageBatchSkipped.length,
+                    })}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="manual-analysis-selection-grid manual-analysis-selection-grid--teams">
             <SearchableSingleSelect
@@ -1093,6 +1634,136 @@ export default function ProductManualAnalysisPage() {
 
 
       </div>
+
+      {imageSelectionOpen && imagePreview ? (
+        <div className="manual-analysis-modal-backdrop" role="presentation">
+          <div
+            className="manual-analysis-modal manual-analysis-modal--image-import"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="manual-analysis-image-import-title"
+          >
+            <div className="manual-analysis-modal-head">
+              <h2 id="manual-analysis-image-import-title">{tr("imageImportModalTitle")}</h2>
+              <p className="manual-analysis-modal-lead">
+                {tr("imageImportModalBody")}
+              </p>
+            </div>
+
+            <div className="manual-analysis-image-summary">
+              <div>
+                <span>{tr("imageImportDetected")}</span>
+                <strong>{imagePreview.summary.items_detected}</strong>
+              </div>
+              <div>
+                <span>{tr("imageImportReady")}</span>
+                <strong>{imagePreview.summary.auto_resolved}</strong>
+              </div>
+              <div>
+                <span>{tr("imageImportPending")}</span>
+                <strong>{imagePreview.summary.needs_confirmation}</strong>
+              </div>
+              <div>
+                <span>{tr("imageImportRejected")}</span>
+                <strong>{imagePreview.summary.rejected}</strong>
+              </div>
+            </div>
+
+            {imagePreview.image_type === "live" ? (
+              <div className="manual-analysis-note manual-analysis-note--modal">
+                {tr("imageImportLiveWarning")}
+              </div>
+            ) : null}
+
+            {maxImageSelectable < readyImageItems.length ? (
+              <div className="manual-analysis-warning">
+                {tr("imageImportCreditLimit", {
+                  available: remainingCredits,
+                  total: readyImageItems.length,
+                })}
+              </div>
+            ) : null}
+
+            <div className="manual-analysis-image-selection-list">
+              {(imagePreview.items ?? []).map((item) => {
+                const isReady = canSelectImageImportItem(item);
+                const isSelected = selectedImageRowIds.includes(item.row_id);
+                const disabledByCredits = !isSelected && selectedImageRowIds.length >= maxImageSelectable;
+                const disabled = !isReady || disabledByCredits || isImageBatchSubmitting;
+
+                return (
+                  <label
+                    key={item.row_id}
+                    className={`manual-analysis-image-row ${
+                      isReady ? "manual-analysis-image-row--ready" : "manual-analysis-image-row--blocked"
+                    } ${isSelected ? "is-selected" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={disabled}
+                      onChange={() => toggleImageImportRow(item.row_id)}
+                    />
+
+                    <span className="manual-analysis-image-row-main">
+                      <strong>{imageImportItemTitle(item)}</strong>
+                      <span>{imageImportItemOddsSummary(item)}</span>
+
+                      {item.normalized?.line_was_defaulted ? (
+                        <em>{tr("imageImportLineDefaulted")}</em>
+                      ) : null}
+
+                      {item.message ? <em>{item.message}</em> : null}
+                    </span>
+
+                    <span className="manual-analysis-image-row-status">
+                      {item.status === "READY"
+                        ? tr("imageImportStatusReady")
+                        : item.status === "NEEDS_CONFIRMATION"
+                        ? tr("imageImportStatusNeedsConfirmation")
+                        : item.status === "UNSUPPORTED_MARKET"
+                        ? tr("imageImportStatusUnsupported")
+                        : item.status === "LOW_CONFIDENCE"
+                        ? tr("imageImportStatusLowConfidence")
+                        : tr("imageImportStatusUnreadable")}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="manual-analysis-note manual-analysis-note--modal">
+              {tr("imageImportCreditSummary", {
+                selected: selectedImageRowIds.length,
+                credits: selectedImageRowIds.length,
+                remaining: remainingCredits,
+              })}
+            </div>
+
+            <div className="manual-analysis-modal-actions">
+              <button
+                type="button"
+                className="manual-analysis-secondary-btn"
+                onClick={() => setImageSelectionOpen(false)}
+                disabled={isImageBatchSubmitting}
+              >
+                {tr("confirmCancel")}
+              </button>
+
+              <button
+                type="button"
+                className="manual-analysis-primary-btn"
+                onClick={() => void handleImageImportBatchEvaluate()}
+                disabled={!selectedImageRowIds.length || isImageBatchSubmitting}
+              >
+                {isImageBatchSubmitting
+                  ? tr("imageImportBatchBusy")
+                  : tr("imageImportBatchSubmit", { count: selectedImageRowIds.length })}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {confirmOpen ? (
         <div className="manual-analysis-modal-backdrop" role="presentation">

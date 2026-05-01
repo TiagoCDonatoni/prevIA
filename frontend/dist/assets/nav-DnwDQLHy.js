@@ -1,0 +1,1 @@
+const a="Partidos",s="Historial",n="Acerca de",t="Idioma",o="Plan",c="Análisis",i="Armar apuesta",l="Navegación del producto",u={matchups:a,history:s,about:n,language:t,plan:o,analyses:c,manualAnalysis:i,productNavigation:l};export{n as about,c as analyses,u as default,s as history,t as language,i as manualAnalysis,a as matchups,o as plan,l as productNavigation};
