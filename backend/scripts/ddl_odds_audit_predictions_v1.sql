@@ -49,8 +49,9 @@ CREATE TABLE IF NOT EXISTS odds.audit_predictions (
   created_at_utc TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at_utc TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  -- idempotência: 1 linha por (event_id, artifact) = o "estado mais atual"
-  CONSTRAINT uq_odds_audit_event_artifact UNIQUE (event_id, artifact_filename)
+  -- idempotência por snapshot: mantém histórico suficiente para selecionar
+  -- o último snapshot elegível antes do cutoff da auditoria.
+  CONSTRAINT uq_odds_audit_event_artifact_captured UNIQUE (event_id, artifact_filename, captured_at_utc)
 );
 
 CREATE INDEX IF NOT EXISTS ix_odds_audit_kickoff

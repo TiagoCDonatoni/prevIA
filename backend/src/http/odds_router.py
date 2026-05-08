@@ -279,6 +279,7 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
     btts_p = btts.get("p_model") or {}
     inputs = snapshot_payload_obj.get("inputs") or {}
     confidence = snapshot_payload_obj.get("confidence") or {}
+    guardrails = snapshot_payload_obj.get("guardrails") or {}
 
     snapshot_summary_candidate = {
         "totals": {
@@ -301,7 +302,11 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
             "overall": confidence.get("overall"),
             "level": confidence.get("level"),
             "source": confidence.get("source"),
+            "factors": confidence.get("factors") or {},
+            "coverage": confidence.get("coverage") or {},
+            "reasons": confidence.get("reasons") or [],
         },
+        "guardrails": guardrails if isinstance(guardrails, dict) and guardrails else None,
     }
 
     has_snapshot_data = any(

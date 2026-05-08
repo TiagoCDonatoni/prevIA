@@ -105,10 +105,24 @@ def internal_ops_run_job(
     correlation_id = str(body.get("correlation_id") or "").strip() or None
     idempotency_key = str(body.get("idempotency_key") or "").strip() or None
 
+    trigger_source = str(body.get("trigger_source") or "api").strip().lower()
+    if trigger_source in {"cloud_scheduler", "cloud-scheduler", "cron"}:
+        trigger_source = "scheduler"
+
+    if trigger_source not in {"api", "manual", "scheduler"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "ok": False,
+                "code": "INVALID_TRIGGER_SOURCE",
+                "message": "trigger_source must be one of: api, manual, scheduler",
+            },
+        )
+
     res = run_job(
         job_key,
         job_fn,
-        trigger_source="api",
+        trigger_source=trigger_source,
         requested_by=requested_by,
         correlation_id=correlation_id,
         idempotency_key=idempotency_key,

@@ -12,6 +12,7 @@ import {
   type AuthMeResponse,
 } from "../api/auth";
 import { t, type Lang } from "../i18n";
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
 
 type Mode = "login" | "signup" | "forgot" | "reset" | "changePassword" | "linkGoogle";
 
@@ -188,6 +189,15 @@ export function ProductAuthModal(props: {
   }
 
   function switchMode(nextMode: Mode) {
+    trackProductTelemetry("auth_mode_selected", {
+      surface: "auth",
+      actor_type: nextMode === "changePassword" || nextMode === "linkGoogle" ? "user" : "anonymous",
+      plan_code: nextMode === "changePassword" || nextMode === "linkGoogle" ? undefined : "FREE_ANON",
+      auth_mode: nextMode,
+      mode: nextMode,
+      previous_mode: mode,
+      lang,
+    });
     setMode(nextMode);
     setPassword("");
     setCurrentPassword("");
@@ -236,6 +246,15 @@ export function ProductAuthModal(props: {
 
   useEffect(() => {
     if (!open) return;
+
+    trackProductTelemetry("auth_modal_opened", {
+      surface: "auth",
+      actor_type: initialMode === "changePassword" || initialMode === "linkGoogle" ? "user" : "anonymous",
+      plan_code: initialMode === "changePassword" || initialMode === "linkGoogle" ? undefined : "FREE_ANON",
+      auth_mode: initialMode,
+      mode: initialMode,
+      lang,
+    });
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -384,6 +403,7 @@ export function ProductAuthModal(props: {
     if (mode === "linkGoogle") {
       return;
     }
+
     if (mode === "signup") {
       if (!email.trim() || !password.trim() || !fullName.trim()) return;
     } else if (mode === "login") {
@@ -403,6 +423,19 @@ export function ProductAuthModal(props: {
       return;
     }
 
+    const telemetryActorType = mode === "changePassword" ? "user" : "anonymous";
+    const telemetryPlanCode = mode === "changePassword" ? undefined : "FREE_ANON";
+
+    trackProductTelemetry("auth_submit_started", {
+      surface: "auth",
+      actor_type: telemetryActorType,
+      plan_code: telemetryPlanCode,
+      auth_mode: mode,
+      mode,
+      method: "email",
+      lang,
+    });
+
     setBusy(true);
     resetFeedback();
 
@@ -413,6 +446,17 @@ export function ProductAuthModal(props: {
           password,
           full_name: fullName.trim(),
         });
+
+        trackProductTelemetry("auth_submit_succeeded", {
+          surface: "auth",
+          actor_type: "anonymous",
+          plan_code: "FREE_ANON",
+          auth_mode: mode,
+          mode,
+          method: "email",
+          lang,
+        });
+
         await props.onAuthSuccess(authPayload, { successMode: mode });
         return;
       }
@@ -421,14 +465,35 @@ export function ProductAuthModal(props: {
         const authPayload = await postAuthLogin({
           email: email.trim(),
           password,
-        });await props.onAuthSuccess(authPayload, { successMode: mode });
-        
+        });
+
+        trackProductTelemetry("auth_submit_succeeded", {
+          surface: "auth",
+          actor_type: "anonymous",
+          plan_code: "FREE_ANON",
+          auth_mode: mode,
+          mode,
+          method: "email",
+          lang,
+        });
+
+        await props.onAuthSuccess(authPayload, { successMode: mode });
         return;
       }
 
       if (mode === "forgot") {
         const response = await postAuthForgotPassword({
           email: email.trim(),
+        });
+
+        trackProductTelemetry("auth_submit_succeeded", {
+          surface: "auth",
+          actor_type: "anonymous",
+          plan_code: "FREE_ANON",
+          auth_mode: mode,
+          mode,
+          method: "email",
+          lang,
         });
 
         if (response.debug?.reset_token) {
@@ -448,6 +513,15 @@ export function ProductAuthModal(props: {
           new_password: password,
         });
 
+        trackProductTelemetry("auth_submit_succeeded", {
+          surface: "auth",
+          actor_type: "user",
+          auth_mode: mode,
+          mode,
+          method: "email",
+          lang,
+        });
+
         setCurrentPassword("");
         setPassword("");
         setConfirmPassword("");
@@ -460,10 +534,31 @@ export function ProductAuthModal(props: {
         new_password: password,
       });
 
+      trackProductTelemetry("auth_submit_succeeded", {
+        surface: "auth",
+        actor_type: "anonymous",
+        plan_code: "FREE_ANON",
+        auth_mode: mode,
+        mode,
+        method: "email",
+        lang,
+      });
+
       setPassword("");
       setMode("login");
       setInfoText(tr("auth.resetSuccess"));
     } catch (err) {
+      trackProductTelemetry("auth_submit_failed", {
+        surface: "auth",
+        actor_type: telemetryActorType,
+        plan_code: telemetryPlanCode,
+        auth_mode: mode,
+        mode,
+        method: "email",
+        code: err instanceof AuthRequestError ? err.code ?? null : null,
+        lang,
+      });
+
       if (err instanceof AuthRequestError) {
         setErrorText(mapAuthErrorCode(tr, err.code));
       } else {
@@ -692,6 +787,15 @@ export function ProductAuthModal(props: {
                   type="button"
                   className="product-link"
                   onClick={() => {
+                    trackProductTelemetry("auth_forgot_password_clicked", {
+                      surface: "auth",
+                      actor_type: "anonymous",
+                      plan_code: "FREE_ANON",
+                      auth_mode: mode,
+                      mode,
+                      lang,
+                    });
+
                     switchMode("forgot");
                   }}
                 >

@@ -362,6 +362,8 @@ export type AdminOddsAuditEventsResponse = {
     severe_threshold: number;
     only_severe: boolean;
     limit: number;
+    offset?: number;
+    has_more?: boolean;
     start_utc: string;
     end_utc: string;
     returned: number;
@@ -558,6 +560,46 @@ export type ProductEdgeSummary = {
   market_source?: string | null;
 };
 
+export type ProductModelConfidence = {
+  overall?: number | null;
+  level?: string | null;
+  source?: string | null;
+  factors?: Record<string, unknown> | null;
+  coverage?: Record<string, unknown> | null;
+  reasons?: string[] | null;
+};
+
+export type ProductModelGuardrails = {
+  recommendation_allowed?: boolean | null;
+  blocked_reasons?: string[] | null;
+  confidence_level?: string | null;
+  confidence_overall?: number | null;
+  coverage_tier?: string | null;
+  lambda_floor_hit?: boolean | null;
+  strength_context?: Record<string, unknown> | null;
+};
+
+export type ProductSnapshotSummary = {
+  totals?: {
+    line?: number | null;
+    p_over?: number | null;
+    p_under?: number | null;
+    best_over?: number | null;
+    best_under?: number | null;
+  } | null;
+  btts?: {
+    p_yes?: number | null;
+    p_no?: number | null;
+  } | null;
+  inputs?: {
+    lambda_home?: number | null;
+    lambda_away?: number | null;
+    lambda_total?: number | null;
+  } | null;
+  confidence?: ProductModelConfidence | null;
+  guardrails?: ProductModelGuardrails | null;
+};
+
 export type ProductOddsEvent = {
   event_id: string;
   sport_key: string;
@@ -578,24 +620,7 @@ export type ProductOddsEvent = {
 
   edge_summary?: ProductEdgeSummary | null;
 
-  snapshot_summary?: {
-  totals?: {
-    line?: number | null;
-    p_over?: number | null;
-    p_under?: number | null;
-    best_over?: number | null;
-    best_under?: number | null;
-  } | null;
-  btts?: {
-    p_yes?: number | null;
-    p_no?: number | null;
-  } | null;
-  inputs?: {
-    lambda_home?: number | null;
-    lambda_away?: number | null;
-    lambda_total?: number | null;
-  } | null;
-} | null;
+  snapshot_summary?: ProductSnapshotSummary | null;
 };
 
 export type ProductOddsBook = {
@@ -685,24 +710,7 @@ export type ProductOddsQuoteResponse = {
     best_side?: "H" | "D" | "A" | null;
   } | null;
   edge_summary?: ProductEdgeSummary | null;
-  snapshot_summary?: {
-    totals?: {
-      line?: number | null;
-      p_over?: number | null;
-      p_under?: number | null;
-      best_over?: number | null;
-      best_under?: number | null;
-    } | null;
-    btts?: {
-      p_yes?: number | null;
-      p_no?: number | null;
-    } | null;
-    inputs?: {
-      lambda_home?: number | null;
-      lambda_away?: number | null;
-      lambda_total?: number | null;
-    } | null;
-  } | null;
+  snapshot_summary?: ProductSnapshotSummary | null;
 };
 
 // -------------------------
@@ -832,6 +840,7 @@ export type AdminOpsPipelineHealthResponse = {
         started_at_utc: string | null;
         finished_at_utc: string | null;
         duration_ms: number | null;
+        counters?: any | null;
         error: any | null;
       }
     | null
@@ -861,6 +870,8 @@ export type AdminOpsRunsRecentResponse = {
   ok: boolean;
   items: AdminOpsRunRow[];
   count: number;
+  has_more?: boolean;
+  next_before_run_id?: number | null;
 };
 
 export type AdminOpsRunEvent = {
@@ -912,8 +923,48 @@ export type AdminUsersListResponse = {
   ok: boolean;
   items: AdminUserSummary[];
   count: number;
+  known_count?: number;
+  count_is_exact?: boolean;
+  has_more?: boolean;
   limit: number;
   offset: number;
+  next_offset?: number | null;
+  previous_offset?: number | null;
+};
+
+export type AdminTelemetryAnonymousSummaryResponse = {
+  ok: boolean;
+  window: "today" | "7d" | "30d" | string;
+  since_utc: string;
+  metrics: {
+    events_total: number;
+    anonymous_visitors: number;
+    anonymous_sessions: number;
+    embed_viewed: number;
+    matches_selected: number;
+    reveal_started: number;
+    reveal_succeeded: number;
+    blocked_no_credits: number;
+    auth_modal_opened: number;
+    auth_submit_succeeded: number;
+    anon_promoted_to_user: number;
+    credits_consumed: number;
+    visitor_to_reveal_rate: number;
+    reveal_to_auth_modal_rate: number;
+    auth_modal_to_signup_rate: number;
+  };
+  top_leagues: Array<{
+    sport_key: string;
+    league_name: string;
+    reveal_count: number;
+  }>;
+  top_events: Array<{
+    event_id: string;
+    home_name: string;
+    away_name: string;
+    sport_key: string;
+    reveal_count: number;
+  }>;
 };
 
 export type AdminCreateUserResponse = {

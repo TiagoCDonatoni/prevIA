@@ -26,6 +26,8 @@ Write-Host "==> Enabling required Google Cloud services..."
     artifactregistry.googleapis.com `
     secretmanager.googleapis.com `
     sqladmin.googleapis.com `
+    cloudscheduler.googleapis.com `
+    iam.googleapis.com `
     --project $projectId
 
 if ($LASTEXITCODE -ne 0) {

@@ -1,14 +1,13 @@
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from src.db.pg import pg_conn
+from src.integrations.theodds.client import TheOddsApiError
 from src.odds.jobs.odds_refresh_resolve_job import (
     _client,
     _persist_odds_h2h_batch,
     _persist_odds_market_batch,
-)  # reuse interno (sem duplicar SQL)from src.integrations.theodds.client import TheOddsApiError
+)  # reuse interno (sem duplicar SQL)
 
 
 def odds_refresh(

@@ -200,7 +200,7 @@ def main():
         now(),
         now()
       )
-      ON CONFLICT (event_id, artifact_filename)
+      ON CONFLICT (event_id, artifact_filename, captured_at_utc)
       DO UPDATE SET
         sport_key = EXCLUDED.sport_key,
         kickoff_utc = EXCLUDED.kickoff_utc,

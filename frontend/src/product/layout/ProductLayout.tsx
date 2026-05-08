@@ -2,6 +2,7 @@ import React, { useCallback, useState } from "react";
 import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import {
+  ENABLE_PRODUCT_MANUAL_ANALYSIS_PAGE,
   PRODUCT_APP_REQUIRE_LOGIN,
   PRODUCT_AUTH_ENABLED,
   PRODUCT_DEV_AUTO_LOGIN_ENABLED,
@@ -31,6 +32,7 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 
 import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
 import { resolveAccountPreferences } from "../preferences/accountPreferences";
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
 
 const POST_SIGNUP_SESSION_KEY = "previa_post_signup_pending_v1";
 
@@ -292,12 +294,16 @@ export function ProductLayout() {
       to: "/app",
       isActive: location.pathname === "/app" || location.pathname === "/app/",
     },
-    {
-      key: "manual-analysis",
-      label: t(lang, "nav.manualAnalysis"),
-      to: "/app/manual-analysis",
-      isActive: location.pathname.startsWith("/app/manual-analysis"),
-    },
+    ...(ENABLE_PRODUCT_MANUAL_ANALYSIS_PAGE
+      ? [
+          {
+            key: "manual-analysis",
+            label: t(lang, "nav.manualAnalysis"),
+            to: "/app/manual-analysis",
+            isActive: location.pathname.startsWith("/app/manual-analysis"),
+          },
+        ]
+      : []),
   ];
 
   const [authOpen, setAuthOpen] = useState(false);
@@ -625,6 +631,9 @@ React.useEffect(() => {
         initialMode={authInitialMode}
         onClose={() => setAuthOpen(false)}
         onAuthSuccess={async (payload, meta: AuthSuccessMeta) => {
+          const wasAnonymousRuntime =
+            store.entitlements.plan === "FREE_ANON" && !store.state.auth.is_logged_in;
+
           let confirmed = payload;
 
           try {
@@ -636,6 +645,19 @@ React.useEffect(() => {
             }
           } catch (err) {
             console.error("post-auth confirmation failed", err);
+          }
+
+          if (wasAnonymousRuntime && confirmed.is_authenticated) {
+            trackProductTelemetry("anon_promoted_to_user", {
+              surface: "auth",
+              actor_type: "anonymous",
+              plan_code: "FREE_ANON",
+              auth_mode: meta.successMode,
+              promoted_via: meta.successMode,
+              user_id: confirmed.user?.user_id ?? null,
+              target_plan_code: confirmed.subscription?.plan_code ?? "FREE",
+              lang,
+            });
           }
 
           await syncSessionFromAuthPayload(confirmed);

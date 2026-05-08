@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { PRODUCT_AUTH_ENABLED, PRODUCT_DEV_AUTO_LOGIN_ENABLED } from "../../config";
 
@@ -330,9 +331,9 @@ useEffect(() => {
       ((checkoutSession?.plan_code as PlanId | undefined) ?? currentPlan)) as PlanId
   );
 
-  return (
+  const modalContent = (
     <div
-      className="um-overlay"
+      className="um-overlay product-plan-modal-overlay"
       role="dialog"
       aria-modal="true"
       onClick={() => {
@@ -688,4 +689,8 @@ useEffect(() => {
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") return modalContent;
+
+  return createPortal(modalContent, document.body);
 }

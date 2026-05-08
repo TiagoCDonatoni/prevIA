@@ -81,6 +81,7 @@ class Settings:
 
     product_auth_enabled: bool
     admin_auth_enabled: bool
+    product_manual_analysis_enabled: bool
     product_dev_auto_login_enabled: bool
     product_dev_auto_login_email: str
     product_dev_auto_login_plan: str
@@ -166,6 +167,7 @@ def load_settings() -> Settings:
 
     product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
+    product_manual_analysis_enabled = _env_bool("PRODUCT_MANUAL_ANALYSIS_ENABLED", default=True)
 
     product_dev_auto_login_enabled = _env_bool("PRODUCT_DEV_AUTO_LOGIN_ENABLED", default=False)
     product_dev_auto_login_email = _env_str("PRODUCT_DEV_AUTO_LOGIN_EMAIL", "dev@previa.local")
@@ -245,6 +247,7 @@ def load_settings() -> Settings:
         product_public_origin=product_public_origin,
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
+        product_manual_analysis_enabled=product_manual_analysis_enabled,
         product_dev_auto_login_enabled=product_dev_auto_login_enabled,
         product_dev_auto_login_email=product_dev_auto_login_email,
         product_dev_auto_login_plan=product_dev_auto_login_plan,

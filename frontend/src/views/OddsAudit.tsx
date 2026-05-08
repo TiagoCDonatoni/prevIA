@@ -17,6 +17,10 @@ import { Pill } from "../ui/Pill";
 import { fmtIsoToShort, fmtPct, fmtNum } from "../ui/components";
 
 type ToneKey = "green" | "yellow" | "red" | "neutral";
+type EventLimitValue = number | "ALL";
+type AuditEventFetchParams = NonNullable<Parameters<typeof getAdminOddsAuditEvents>[0]>;
+
+const AUDIT_EVENTS_FETCH_PAGE_SIZE = 1000;
 
 type ToneInfo = {
   tone: ToneKey;
@@ -76,6 +80,10 @@ function formatSignedCount(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return "—";
   const sign = value > 0 ? "+" : value < 0 ? "-" : "±";
   return `${sign}${Math.abs(Math.round(value))}`;
+}
+
+function windowLabel(days: number) {
+  return days <= 0 ? "histórico" : `${days}d`;
 }
 
 function deltaColor(value: number | null | undefined, betterWhen: "lower" | "higher") {
@@ -305,6 +313,44 @@ function buildLeagueExportRows(
   });
 }
 
+async function fetchAllAdminOddsAuditEvents(
+  params: AuditEventFetchParams
+): Promise<AdminOddsAuditEventsResponse> {
+  let offset = 0;
+  let lastResponse: AdminOddsAuditEventsResponse | null = null;
+  const rows: AdminOddsAuditEventsResponse["rows"] = [];
+
+  while (true) {
+    const page = await getAdminOddsAuditEvents({
+      ...params,
+      limit: AUDIT_EVENTS_FETCH_PAGE_SIZE,
+      offset,
+    });
+
+    lastResponse = page;
+    rows.push(...page.rows);
+
+    if (!page.meta.has_more || page.rows.length === 0) break;
+    offset += AUDIT_EVENTS_FETCH_PAGE_SIZE;
+  }
+
+  if (!lastResponse) {
+    throw new Error("audit events export failed: empty response");
+  }
+
+  return {
+    ...lastResponse,
+    meta: {
+      ...lastResponse.meta,
+      limit: rows.length,
+      offset: 0,
+      has_more: false,
+      returned: rows.length,
+    },
+    rows,
+  };
+}
+
 function buildEventsExportRows(events: AdminOddsAuditEventsResponse | null) {
   return (events?.rows ?? []).map((row) => ({
     kickoff_utc: row.kickoff_utc,
@@ -345,7 +391,8 @@ export default function OddsAudit() {
   const [minConfidence, setMinConfidence] = useState<"NONE" | "ILIKE" | "EXACT">("NONE");
   const [severeThreshold, setSevereThreshold] = useState(0.7);
   const [onlySevere, setOnlySevere] = useState(false);
-  const [eventLimit, setEventLimit] = useState(50);
+  const [eventLimit, setEventLimit] = useState<EventLimitValue>(50);
+  const [eventPage, setEventPage] = useState(0);
 
   const [summary, setSummary] = useState<AdminOddsAuditSummaryResponse | null>(null);
   const [summaryPrev, setSummaryPrev] = useState<AdminOddsAuditSummaryResponse | null>(null);
@@ -361,17 +408,24 @@ export default function OddsAudit() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const params = useMemo(
-    () => ({
-      league_id: parseOptionalInt(leagueIdText),
-      season: parseOptionalInt(seasonText),
-      artifact_filename: parseOptionalText(artifactText),
-      window_days: windowDays,
-      cutoff_hours: cutoffHours,
-      min_confidence: minConfidence,
-      severe_threshold: severeThreshold,
-      only_severe: onlySevere,
-      limit: eventLimit,
-    }),
+    () => {
+      const all_events = eventLimit === "ALL";
+      const limit = all_events ? AUDIT_EVENTS_FETCH_PAGE_SIZE : eventLimit;
+
+      return {
+        league_id: parseOptionalInt(leagueIdText),
+        season: parseOptionalInt(seasonText),
+        artifact_filename: parseOptionalText(artifactText),
+        window_days: windowDays,
+        cutoff_hours: cutoffHours,
+        min_confidence: minConfidence,
+        severe_threshold: severeThreshold,
+        only_severe: onlySevere,
+        limit,
+        offset: all_events ? 0 : eventPage * limit,
+        all_events,
+      };
+    },
     [
       leagueIdText,
       seasonText,
@@ -382,14 +436,33 @@ export default function OddsAudit() {
       severeThreshold,
       onlySevere,
       eventLimit,
+      eventPage,
     ]
   );
+
+  useEffect(() => {
+    setEventPage(0);
+  }, [leagueIdText, seasonText, artifactText, windowDays, cutoffHours, minConfidence, severeThreshold, onlySevere, eventLimit]);
 
   async function load() {
     setLoading(true);
     setErr(null);
 
     try {
+      const compareWithPrevious = params.window_days > 0;
+
+      const eventFetchParams: AuditEventFetchParams = {
+        league_id: params.league_id,
+        season: params.season,
+        artifact_filename: params.artifact_filename,
+        window_days: params.window_days,
+        cutoff_hours: params.cutoff_hours,
+        min_confidence: params.min_confidence,
+        severe_threshold: params.severe_threshold,
+        only_severe: params.only_severe,
+        offset_windows: 0,
+      };
+
       const [summaryRes, summaryPrevRes, byLeagueRes, byLeaguePrevRes, eventsRes] = await Promise.all([
         getAdminOddsAuditSummary({
           league_id: params.league_id,
@@ -401,16 +474,20 @@ export default function OddsAudit() {
           severe_threshold: params.severe_threshold,
           offset_windows: 0,
         }),
-        getAdminOddsAuditSummary({
-          league_id: params.league_id,
-          season: params.season,
-          artifact_filename: params.artifact_filename,
-          window_days: params.window_days,
-          cutoff_hours: params.cutoff_hours,
-          min_confidence: params.min_confidence,
-          severe_threshold: params.severe_threshold,
-          offset_windows: 1,
-        }),
+
+        compareWithPrevious
+          ? getAdminOddsAuditSummary({
+              league_id: params.league_id,
+              season: params.season,
+              artifact_filename: params.artifact_filename,
+              window_days: params.window_days,
+              cutoff_hours: params.cutoff_hours,
+              min_confidence: params.min_confidence,
+              severe_threshold: params.severe_threshold,
+              offset_windows: 1,
+            })
+          : Promise.resolve(null),
+
         getAdminOddsAuditByLeague({
           season: params.season,
           artifact_filename: params.artifact_filename,
@@ -420,27 +497,26 @@ export default function OddsAudit() {
           severe_threshold: params.severe_threshold,
           offset_windows: 0,
         }),
-        getAdminOddsAuditByLeague({
-          season: params.season,
-          artifact_filename: params.artifact_filename,
-          window_days: params.window_days,
-          cutoff_hours: params.cutoff_hours,
-          min_confidence: params.min_confidence,
-          severe_threshold: params.severe_threshold,
-          offset_windows: 1,
-        }),
-        getAdminOddsAuditEvents({
-          league_id: params.league_id,
-          season: params.season,
-          artifact_filename: params.artifact_filename,
-          window_days: params.window_days,
-          cutoff_hours: params.cutoff_hours,
-          min_confidence: params.min_confidence,
-          severe_threshold: params.severe_threshold,
-          only_severe: params.only_severe,
-          limit: params.limit,
-          offset_windows: 0,
-        }),
+
+        compareWithPrevious
+          ? getAdminOddsAuditByLeague({
+              season: params.season,
+              artifact_filename: params.artifact_filename,
+              window_days: params.window_days,
+              cutoff_hours: params.cutoff_hours,
+              min_confidence: params.min_confidence,
+              severe_threshold: params.severe_threshold,
+              offset_windows: 1,
+            })
+          : Promise.resolve(null),
+
+      params.all_events
+        ? fetchAllAdminOddsAuditEvents(eventFetchParams)
+        : getAdminOddsAuditEvents({
+            ...eventFetchParams,
+            limit: params.limit,
+            offset: params.offset,
+          }),
       ]);
 
       setSummary(summaryRes);
@@ -471,11 +547,11 @@ export default function OddsAudit() {
         season: params.season,
         max_rows: 5000,
         finished_before_hours: 1,
-        lookback_days: params.window_days,
+        lookback_days: params.window_days > 0 ? params.window_days : undefined,
       });
 
       setSyncMsg(
-        `Sync OK — scanned ${out.scanned}, inserted/updated ${out.inserted}, lookback ${params.window_days}d.`
+        `Sync OK — scanned ${out.scanned}, inserted/updated ${out.inserted}, lookback ${windowLabel(params.window_days)}.`
       );
       await load();
     } catch (e: any) {
@@ -536,7 +612,11 @@ export default function OddsAudit() {
     });
   }, [byLeague, byLeaguePrev]);
 
-  const titlePill = loading ? <Pill>Loading…</Pill> : <Pill>{`${windowDays}d vs prev ${windowDays}d`}</Pill>;
+  const titlePill = loading ? (
+    <Pill>Loading…</Pill>
+  ) : (
+    <Pill>{windowDays <= 0 ? "histórico completo" : `${windowDays}d vs prev ${windowDays}d`}</Pill>
+  );
 
   return (
     <>
@@ -591,7 +671,8 @@ export default function OddsAudit() {
               value={windowDays}
               onChange={(e) => setWindowDays(Number(e.target.value))}
             >
-              {[5, 7, 14, 15, 30, 60, 90, 180].map((n) => (
+              <option value={0}>all</option>
+              {[5, 7, 14, 15, 30, 60, 90, 180, 365].map((n) => (
                 <option key={n} value={n}>
                   {n}d
                 </option>
@@ -649,13 +730,17 @@ export default function OddsAudit() {
               className="select"
               style={{ width: 90, marginLeft: 6 }}
               value={eventLimit}
-              onChange={(e) => setEventLimit(Number(e.target.value))}
+              onChange={(e) => {
+                const value = e.target.value;
+                setEventLimit(value === "ALL" ? "ALL" : Number(value));
+              }}
             >
               {[25, 50, 100, 200].map((n) => (
                 <option key={n} value={n}>
                   {n}
                 </option>
               ))}
+              <option value="ALL">All</option>
             </select>
           </label>
 
@@ -846,9 +931,28 @@ export default function OddsAudit() {
       </Card>
 
       <Card title="By league">
-        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Pill>multi-league</Pill>
-          <Pill>delta vs previous window</Pill>
+        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Pill>{events?.meta.returned ?? 0} {params.all_events ? "rows carregadas" : "rows nesta página"}</Pill>
+            <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <Pill>{leagueRows.length} ligas</Pill>
+              <Pill>agrupado por liga/temporada</Pill>
+            </div>
+          <Pill>event-level drilldown</Pill>
+
+          <button
+            className="nav-btn"
+            onClick={() => setEventPage((p) => Math.max(0, p - 1))}
+            disabled={loading || params.all_events || eventPage <= 0}
+          >
+            Previous
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() => setEventPage((p) => p + 1)}
+            disabled={loading || params.all_events || !events?.meta.has_more}
+          >
+            Next
+          </button>
         </div>
         {!byLeague || leagueRows.length === 0 ? (
           <div className="note">Sem dados auditados por liga ainda.</div>
@@ -903,9 +1007,9 @@ export default function OddsAudit() {
       </Card>
 
       <Card title="Audited events">
-        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Pill>{events?.meta.returned ?? 0} rows</Pill>
-          <Pill>event-level drilldown</Pill>
+        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Pill>{leagueRows.length} ligas</Pill>
+          <Pill>agrupado por liga/temporada</Pill>
         </div>
         {!events || events.rows.length === 0 ? (
           <div className="note">Sem eventos auditados nesta janela/filtro.</div>

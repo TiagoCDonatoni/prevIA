@@ -39,6 +39,8 @@ import {
   writePersistedProductIndexFilters,
 } from "../filters/productIndexFilterSession";
 
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
+
 const UI_DEFAULTS = {
   hoursAheadFallback: 24,
   limit: 100,
@@ -57,10 +59,10 @@ type ProductIndexProps = {
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
 const UPCOMING_WINDOW_HOURS = 24;
 const UPCOMING_FALLBACK_MAX_LEAGUES = 12;
-const OPPORTUNITY_EDGE_THRESHOLD = 0.05;
-const OPPORTUNITY_EV_THRESHOLD = 0.03;
-const OPPORTUNITY_MIN_BOOKS = 4;
-const OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60;
+const OPPORTUNITY_EDGE_THRESHOLD = 0.12;
+const OPPORTUNITY_EV_THRESHOLD = 0.10;
+const OPPORTUNITY_MIN_BOOKS = 7;
+const OPPORTUNITY_MAX_FRESHNESS_SECONDS = 2 * 24 * 60 * 60;
 const POSITIVE_EDGE_THRESHOLD = 0.02;
 const NEUTRAL_EDGE_THRESHOLD = -0.02;
 
@@ -294,6 +296,154 @@ function fmtOdds(x: number | null | undefined) {
 function fmtPctNullable(x: number | null | undefined) {
   if (x == null || !Number.isFinite(x)) return "—";
   return `${(x * 100).toFixed(1)}%`;
+}
+
+function getModelConfidenceLabel(lang: Lang, level?: string | null) {
+  const normalized = String(level || "").toLowerCase();
+
+  if (normalized === "high") {
+    return lang === "en" ? "High" : lang === "es" ? "Alta" : "Alta";
+  }
+
+  if (normalized === "medium") {
+    return lang === "en" ? "Moderate" : lang === "es" ? "Moderada" : "Moderada";
+  }
+
+  if (normalized === "low") {
+    return lang === "en" ? "Low" : lang === "es" ? "Baja" : "Baixa";
+  }
+
+  return lang === "en" ? "Not available" : lang === "es" ? "No disponible" : "Não informada";
+}
+
+function getModelSourceLabel(lang: Lang, source?: string | null) {
+  const normalized = String(source || "").toLowerCase();
+
+  if (normalized === "team_season_stats_blended") {
+    return lang === "en"
+      ? "Base: team season + competition context"
+      : lang === "es"
+      ? "Base: temporada del equipo + contexto de competición"
+      : "Base: temporada do time + contexto da competição";
+  }
+
+  if (normalized === "team_season_stats") {
+    return lang === "en"
+      ? "Base: team season data"
+      : lang === "es"
+      ? "Base: datos de temporada del equipo"
+      : "Base: dados da temporada do time";
+  }
+
+  if (normalized === "recent_fixtures") {
+    return lang === "en"
+      ? "Base: recent form"
+      : lang === "es"
+      ? "Base: forma reciente"
+      : "Base: forma recente";
+  }
+
+  if (normalized === "league_prior") {
+    return lang === "en"
+      ? "Base: league average, limited team data"
+      : lang === "es"
+      ? "Base: promedio de liga, datos limitados del equipo"
+      : "Base: média da liga, dados limitados do time";
+  }
+
+  if (!normalized) return null;
+
+  return lang === "en"
+    ? "Base: model data"
+    : lang === "es"
+    ? "Base: datos del modelo"
+    : "Base: dados do modelo";
+}
+
+function getModelConfidenceNotes(
+  lang: Lang,
+  confidence?: ProductOddsEvent["snapshot_summary"] extends infer S
+    ? S extends { confidence?: infer C }
+      ? C
+      : null
+    : null,
+  guardrails?: ProductOddsEvent["snapshot_summary"] extends infer S
+    ? S extends { guardrails?: infer G }
+      ? G
+      : null
+    : null
+) {
+  const notes: string[] = [];
+  const factors = (confidence as any)?.factors || {};
+  const coverage = (confidence as any)?.coverage || {};
+  const blockedReasons = Array.isArray((guardrails as any)?.blocked_reasons)
+    ? (guardrails as any).blocked_reasons
+    : [];
+
+  const coverageTier =
+    (guardrails as any)?.coverage_tier ||
+    factors.coverage_tier ||
+    coverage.match_coverage_tier ||
+    null;
+
+  if (coverageTier) {
+    notes.push(
+      lang === "en"
+        ? `Coverage: ${coverageTier}`
+        : lang === "es"
+        ? `Cobertura: ${coverageTier}`
+        : `Cobertura: ${coverageTier}`
+    );
+  }
+
+  if (blockedReasons.includes("low_model_confidence")) {
+    notes.push(
+      lang === "en"
+        ? "Low statistical confidence."
+        : lang === "es"
+        ? "Confianza estadística baja."
+        : "Baixa confiança estatística."
+    );
+  }
+
+  if (blockedReasons.includes("insufficient_team_coverage")) {
+    notes.push(
+      lang === "en"
+        ? "Limited team coverage."
+        : lang === "es"
+        ? "Cobertura limitada de equipos."
+        : "Cobertura limitada dos times."
+    );
+  }
+
+  if (blockedReasons.includes("large_cross_league_strength_gap")) {
+    notes.push(
+      lang === "en"
+        ? "Cross-league strength adjustment applied."
+        : lang === "es"
+        ? "Ajuste de fuerza entre ligas aplicado."
+        : "Ajuste de força entre ligas aplicado."
+    );
+  }
+
+  if (factors.lambda_floor_hit) {
+    notes.push(
+      lang === "en"
+        ? "Extreme lambda guardrail triggered."
+        : lang === "es"
+        ? "Protección por lambda extremo activada."
+        : "Proteção por lambda extremo ativada."
+    );
+  }
+
+  if (!notes.length && (confidence as any)?.source) {
+    const sourceLabel = getModelSourceLabel(lang, (confidence as any).source);
+    if (sourceLabel) {
+      notes.push(sourceLabel);
+    }
+  }
+
+  return notes.slice(0, 3);
 }
 
 function probForOutcome(
@@ -649,7 +799,7 @@ function hasOpportunity(summary: ProductEdgeSummary | null | undefined) {
 
 function eventHasOpportunity(event: ProductOddsEvent | null | undefined) {
   if (!event) return false;
-  if (event.has_opportunity === true) return true;
+  if (typeof event.has_opportunity === "boolean") return event.has_opportunity;
   return hasOpportunity(event.edge_summary);
 }
 
@@ -737,7 +887,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const vis = store.entitlements.visibility;
 
   const plan = store.entitlements.plan as PlanId;
-
+  const isAnonymousTelemetryRuntime = plan === "FREE_ANON" && !store.state.auth.is_logged_in;
   const narrativeStyle = useMemo(
     () => narrativeStyleFromInternalView(store.internalNarrativeView),
     [store.internalNarrativeView]
@@ -917,8 +1067,22 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
   const [mobileAnalysisOpen, setMobileAnalysisOpen] = useState(false);
   const [booksModalEventId, setBooksModalEventId] = useState<string>("");
-
+  const hasTrackedProductIndexViewRef = useRef(false);
   const canOpenBooksModal = canOpenBooksModalForPlan(plan);
+
+  useEffect(() => {
+    if (hasTrackedProductIndexViewRef.current) return;
+    hasTrackedProductIndexViewRef.current = true;
+
+    trackProductTelemetry("product_index_viewed", {
+      surface: isPublicEmbed ? "public_embed" : "app",
+      actor_type: isAnonymousTelemetryRuntime ? "anonymous" : "user",
+      plan_code: isAnonymousTelemetryRuntime ? "FREE_ANON" : plan,
+      auth_mode: isAnonymousTelemetryRuntime ? "anonymous" : store.bootstrap.auth_mode ?? "session",
+      mode,
+      lang,
+    });
+  }, [isAnonymousTelemetryRuntime, isPublicEmbed, lang, mode, plan, store.bootstrap.auth_mode]);
 
   function handleOpenBooksModal(eventItem: ProductOddsEvent) {
     setSelectedId(String(eventItem.event_id));
@@ -1479,6 +1643,27 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     };
   }, [mobileAnalysisOpen]);
 
+  function buildEventTelemetryPayload(eventItem: ProductOddsEvent | null | undefined) {
+    const leagueItem = eventItem?.sport_key ? leaguesBySportKey.get(eventItem.sport_key) : null;
+
+    return {
+      surface: isPublicEmbed ? "public_embed" : "app",
+      actor_type: isAnonymousTelemetryRuntime ? "anonymous" : "user",
+      plan_code: isAnonymousTelemetryRuntime ? "FREE_ANON" : plan,
+      auth_mode: isAnonymousTelemetryRuntime ? "anonymous" : store.bootstrap.auth_mode ?? "session",
+      mode,
+      lang,
+      event_id: eventItem?.event_id != null ? String(eventItem.event_id) : null,
+      sport_key: eventItem?.sport_key ?? null,
+      league_name: leagueItem ? getLeagueDisplayName(leagueItem, lang) : null,
+      home_name: eventItem?.home_name ?? null,
+      away_name: eventItem?.away_name ?? null,
+      kickoff_utc: eventItem?.commence_time_utc ?? null,
+      match_status: eventItem?.match_status ?? null,
+      best_edge: eventItem?.edge_summary?.best_edge ?? null,
+    };
+  }
+
   async function runQuote(eventId: string) {
     if (!league) return;
     setQuoteLoading(true);
@@ -1517,6 +1702,13 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         ...prev,
         [eventIdStr]: res,
       }));
+
+      if (isAnonymousTelemetryRuntime && selectedEvent) {
+        trackProductTelemetry("anon_analysis_opened", {
+          ...buildEventTelemetryPayload(selectedEvent),
+          has_edge: Boolean(selectedEvent.edge_summary),
+        });
+      }
     } catch (e: any) {
       setQuoteError(e?.message ?? String(e));
     } finally {
@@ -1532,6 +1724,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   function handleSelectEvent(eventId: string) {
     const nextId = String(eventId);
     const cachedQuote = quoteCacheByEventId[nextId] ?? null;
+    const eventItem = visibleEvents.find((item) => String(item.event_id) === nextId) ?? null;
 
     if (nextId === String(selectedId)) {
       if (isMobileAnalysisView) {
@@ -1554,6 +1747,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     setQuote(cachedQuote);
     setQuoteError("");
 
+    if (isAnonymousTelemetryRuntime && eventItem) {
+      trackProductTelemetry("anon_match_selected", buildEventTelemetryPayload(eventItem));
+    }
+
     if (isMobileAnalysisView) {
       setMobileAnalysisOpen(true);
     }
@@ -1574,6 +1771,17 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     }
 
     const fixtureKey = String(selectedId);
+    const anonymousRemainingBefore = store.entitlements.credits.remaining_today;
+    const anonymousUsedBefore = store.entitlements.credits.used_today;
+
+    if (isAnonymousTelemetryRuntime) {
+      trackProductTelemetry("anon_reveal_started", {
+        ...buildEventTelemetryPayload(ev),
+        remaining_before: anonymousRemainingBefore,
+        used_today_before: anonymousUsedBefore,
+        daily_limit: store.entitlements.credits.daily_limit,
+      });
+    }
 
     setAnalysisOpening(true);
 
@@ -1606,18 +1814,27 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
         const r = await store.revealViaBackend(fixtureKey);
 
-        if (!r.ok) {
-          if (r.reason === "NO_CREDITS") {
-            setUpgradeReason("NO_CREDITS");
-            setUpgradeOpen(true);
-            return;
+      if (!r.ok) {
+        if (r.reason === "NO_CREDITS") {
+          if (isAnonymousTelemetryRuntime) {
+            trackProductTelemetry("anon_reveal_blocked_no_credits", {
+              ...buildEventTelemetryPayload(ev),
+              used_today: anonymousUsedBefore,
+              remaining: anonymousRemainingBefore,
+              daily_limit: store.entitlements.credits.daily_limit,
+            });
           }
 
-          if (r.reason !== "ALREADY_REVEALED") {
-            console.error("Reveal failed:", r.reason);
-            return;
-          }
+          setUpgradeReason("NO_CREDITS");
+          setUpgradeOpen(true);
+          return;
         }
+
+        if (r.reason !== "ALREADY_REVEALED") {
+          console.error("Reveal failed:", r.reason);
+          return;
+        }
+      }
 
         await runQuote(fixtureKey);
         return;
@@ -1632,6 +1849,15 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
       if (!r.ok) {
         if (r.reason === "NO_CREDITS") {
+          if (isAnonymousTelemetryRuntime) {
+            trackProductTelemetry("anon_reveal_blocked_no_credits", {
+              ...buildEventTelemetryPayload(ev),
+              used_today: anonymousUsedBefore,
+              remaining: anonymousRemainingBefore,
+              daily_limit: store.entitlements.credits.daily_limit,
+            });
+          }
+
           setUpgradeReason("NO_CREDITS");
           setUpgradeOpen(true);
           return;
@@ -1641,6 +1867,17 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
           console.error("Reveal failed:", r.reason);
           return;
         }
+      }
+
+      if (isAnonymousTelemetryRuntime && r.ok) {
+        trackProductTelemetry("anon_reveal_succeeded", {
+          ...buildEventTelemetryPayload(ev),
+          used_credit: true,
+          used_today_before: anonymousUsedBefore,
+          remaining_before: anonymousRemainingBefore,
+          remaining_after: Math.max(0, anonymousRemainingBefore - 1),
+          daily_limit: store.entitlements.credits.daily_limit,
+        });
       }
 
       await runQuote(fixtureKey);
@@ -1901,15 +2138,26 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const effectiveProbs = quote?.probs ?? selectedUnlockedProbs ?? null;
 
   const effectiveMatchStatus = quote?.matchup?.status ?? selected?.match_status ?? null;
-  const effectiveConfidence =
-    quote?.matchup?.confidence ??
-    (selected?.match_status === "MODEL_FOUND" ? 1 : 0);
 
   const selectedUnlockedSnapshot =
     alreadyRevealed ? (selected?.snapshot_summary ?? null) : null;
 
   const selectedSnapshot =
     quote?.snapshot_summary ?? selectedUnlockedSnapshot ?? null;
+
+  const effectiveModelConfidence = selectedSnapshot?.confidence ?? null;
+  const effectiveModelGuardrails = selectedSnapshot?.guardrails ?? null;
+  const effectiveModelConfidenceOverall =
+    typeof effectiveModelConfidence?.overall === "number" &&
+    Number.isFinite(effectiveModelConfidence.overall)
+      ? effectiveModelConfidence.overall
+      : null;
+  const effectiveModelConfidenceLevel = effectiveModelConfidence?.level ?? null;
+  const modelConfidenceNotes = getModelConfidenceNotes(
+    lang,
+    effectiveModelConfidence,
+    effectiveModelGuardrails
+  );
 
   const effectiveEdgeSummary =
     quote?.edge_summary ??
@@ -2220,12 +2468,45 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                         </div>
 
                         {vis.context.show_confidence_level ? (
-                          <div className="pi-panel">
-                            <div className="pi-panel-label">{t(lang, "matchup.confidence")}</div>
-                            <div className="pi-panel-value">{fmtPct(effectiveConfidence)}</div>
-                            <div className="pi-muted">
-                              {t(lang, "matchup.status")}: <b>{effectiveMatchStatus ?? "—"}</b>
+                          <div
+                            className={`pi-panel pi-panel-confidence pi-panel-confidence--${
+                              String(effectiveModelConfidenceLevel || "unknown").toLowerCase()
+                            }`}
+                          >
+                            <div className="pi-panel-label">
+                              {lang === "en"
+                                ? "Model confidence"
+                                : lang === "es"
+                                ? "Confianza del modelo"
+                                : "Confiança do modelo"}
                             </div>
+
+                            <div className="pi-panel-value">
+                              {fmtPctNullable(effectiveModelConfidenceOverall)}
+                            </div>
+
+                            <div className="pi-muted">
+                              {lang === "en" ? "Level" : lang === "es" ? "Nivel" : "Nível"}:{" "}
+                              <b>{getModelConfidenceLabel(lang, effectiveModelConfidenceLevel)}</b>
+                            </div>
+
+                            {modelConfidenceNotes.length ? (
+                              <div className="pi-model-confidence-notes">
+                                {modelConfidenceNotes.map((note) => (
+                                  <div key={note}>{note}</div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="pi-model-confidence-notes">
+                                <div>
+                                  {lang === "en"
+                                    ? "Model confidence not available for this snapshot."
+                                    : lang === "es"
+                                    ? "La confianza del modelo no está disponible para este snapshot."
+                                    : "A confiança do modelo não está disponível para este snapshot."}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <LockedPanel

@@ -2,6 +2,7 @@ import React from "react";
 
 import {
   adminCreateUser,
+  adminGetTelemetryAnonymousSummary,
   adminGetUserDetail,
   adminGrantUserCredits,
   adminListUsers,
@@ -10,6 +11,7 @@ import {
   adminUpsertUserRole,
 } from "../api/client";
 import type {
+  AdminTelemetryAnonymousSummaryResponse,
   AdminUserDetailResponse,
   AdminUsersListResponse,
 } from "../api/contracts";
@@ -17,6 +19,13 @@ import type {
 const PLAN_OPTIONS = ["FREE", "BASIC", "LIGHT", "PRO"];
 const STATUS_OPTIONS = ["active", "pending_verification", "blocked", "deleted"];
 const ROLE_OPTIONS = ["staff_viewer", "staff_ops", "staff_admin"];
+const USER_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const ANON_WINDOW_OPTIONS: Array<"today" | "7d" | "30d"> = ["today", "7d", "30d"];
+
+function formatPct(value: number | null | undefined) {
+  const safe = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return `${(safe * 100).toFixed(1)}%`;
+}
 
 export default function AdminUsers() {
   const [filters, setFilters] = React.useState({
@@ -26,8 +35,15 @@ export default function AdminUsers() {
     role_key: "",
   });
 
-  const [listData, setListData] = React.useState<AdminUsersListResponse | null>(null);
+  const [anonWindow, setAnonWindow] = React.useState<"today" | "7d" | "30d">("7d");
+  const [anonSummary, setAnonSummary] =
+    React.useState<AdminTelemetryAnonymousSummaryResponse | null>(null);
+  const [anonLoading, setAnonLoading] = React.useState(false);
+
   const [listLoading, setListLoading] = React.useState(false);
+  const [listData, setListData] = React.useState<AdminUsersListResponse | null>(null);
+  const [userOffset, setUserOffset] = React.useState(0);
+  const [userPageSize, setUserPageSize] = React.useState(20);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [selectedUserId, setSelectedUserId] = React.useState<number | null>(null);
   const [detail, setDetail] = React.useState<AdminUserDetailResponse | null>(null);
@@ -53,8 +69,29 @@ export default function AdminUsers() {
     createEmailDraft.trim().length > 3 &&
     createPasswordDraft.length >= 8 &&
     createReasonIsValid;
+  const anonKpiStyle: React.CSSProperties = {
+    gridColumn: "auto",
+    minWidth: 0,
+  };
 
-  async function loadUsers(nextSelectedUserId?: number | null) {
+  async function loadAnonSummary(nextWindow = anonWindow) {
+    setAnonLoading(true);
+
+    try {
+      const data = await adminGetTelemetryAnonymousSummary({ window: nextWindow });
+      setAnonSummary(data);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Falha ao carregar telemetria Anon.");
+    } finally {
+      setAnonLoading(false);
+    }
+  }
+
+  async function loadUsers(
+    nextSelectedUserId?: number | null,
+    nextOffset = userOffset,
+    nextLimit = userPageSize
+  ) {
     setListLoading(true);
     setActionError(null);
 
@@ -64,11 +101,12 @@ export default function AdminUsers() {
         user_status: filters.user_status || undefined,
         plan_code: filters.plan_code || undefined,
         role_key: filters.role_key || undefined,
-        limit: 20,
-        offset: 0,
+        limit: nextLimit,
+        offset: nextOffset,
       });
 
       setListData(data);
+      setUserOffset(data.offset ?? nextOffset);
 
       const desiredSelected =
         nextSelectedUserId ??
@@ -115,6 +153,11 @@ export default function AdminUsers() {
     void loadUsers(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  React.useEffect(() => {
+    void loadAnonSummary(anonWindow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anonWindow]);
 
   React.useEffect(() => {
     if (selectedUserId != null) {
@@ -170,7 +213,7 @@ export default function AdminUsers() {
       setCreatePasswordDraft("");
       setCreateReasonDraft("");
 
-      await loadUsers(created.user.user_id);
+      await loadUsers(created.user.user_id, 0, userPageSize);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Falha ao criar usuário.");
     } finally {
@@ -178,11 +221,171 @@ export default function AdminUsers() {
     }
   }
 
+  const listItemsCount = listData?.items.length ?? 0;
+  const listStart = listData && listItemsCount > 0 ? listData.offset + 1 : 0;
+  const listEnd = listData ? listData.offset + listItemsCount : 0;
+
+  const hasPreviousUsersPage =
+    listData?.previous_offset != null || (listData?.offset ?? userOffset) > 0;
+
+  const hasNextUsersPage =
+    Boolean(listData?.has_more) ||
+    Boolean(
+      listData &&
+        listData.count_is_exact !== false &&
+        listData.offset + listData.items.length < listData.count
+    );
+
+  const previousUsersOffset =
+    listData?.previous_offset ?? Math.max(0, (listData?.offset ?? userOffset) - userPageSize);
+
+  const nextUsersOffset =
+    listData?.next_offset ?? ((listData?.offset ?? userOffset) + userPageSize);
+
+  const usersListLabel = !listData
+    ? "Sem dados ainda."
+    : listItemsCount === 0
+      ? "Nenhum usuário encontrado nesta página."
+      : listData.count_is_exact === false
+        ? `Mostrando ${listStart}-${listEnd} • há mais resultados sob demanda`
+        : `Mostrando ${listStart}-${listEnd} de ${listData.count} usuário(s)`;
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16 }}>
-      <div>
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card-title">Criar usuário</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="card">
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <div className="card-title">Uso Free Anon</div>
+              <div className="note">Visitantes sem conta. Não entram na lista de usuários.</div>
+            </div>
+
+            <div className="row">
+              <select
+                className="select"
+                value={anonWindow}
+                onChange={(e) => setAnonWindow(e.target.value as "today" | "7d" | "30d")}
+              >
+                {ANON_WINDOW_OPTIONS.map((item) => (
+                  <option key={item} value={item}>
+                    {item === "today" ? "Hoje" : item}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                className="btn"
+                disabled={anonLoading}
+                onClick={() => void loadAnonSummary(anonWindow)}
+              >
+                {anonLoading ? "Atualizando..." : "Atualizar"}
+              </button>
+            </div>
+          </div>
+
+          {anonSummary ? (
+            <>
+               <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gap: 12,
+                  marginBottom: 12,
+                }}
+              >
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Visitantes</div>
+                  <div className="kpi-value">{anonSummary.metrics.anonymous_visitors}</div>
+                </div>
+
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Análises abertas</div>
+                  <div className="kpi-value">{anonSummary.metrics.reveal_succeeded}</div>
+                </div>
+
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Bloqueios por limite</div>
+                  <div className="kpi-value">{anonSummary.metrics.blocked_no_credits}</div>
+                </div>
+
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Sessões</div>
+                  <div className="kpi-value">{anonSummary.metrics.anonymous_sessions}</div>
+                </div>
+
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Signup vindo do Anon</div>
+                  <div className="kpi-value">{anonSummary.metrics.anon_promoted_to_user}</div>
+                </div>
+
+                <div className="kpi" style={anonKpiStyle}>
+                  <div className="kpi-label">Visitante → análise</div>
+                  <div className="kpi-value">
+                    {formatPct(anonSummary.metrics.visitor_to_reveal_rate)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="note" style={{ marginBottom: 8 }}>
+                Funil: embed visto {anonSummary.metrics.embed_viewed} • jogo selecionado{" "}
+                {anonSummary.metrics.matches_selected} • auth aberto{" "}
+                {anonSummary.metrics.auth_modal_opened}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div className="section-title">Top ligas</div>
+                  <table className="table">
+                    <tbody>
+                      {anonSummary.top_leagues.slice(0, 5).map((item) => (
+                        <tr key={item.sport_key}>
+                          <td>{item.league_name}</td>
+                          <td className="mono">{item.reveal_count}</td>
+                        </tr>
+                      ))}
+
+                      {!anonSummary.top_leagues.length ? (
+                        <tr>
+                          <td className="note">Sem dados.</td>
+                          <td />
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div>
+                  <div className="section-title">Top jogos</div>
+                  <table className="table">
+                    <tbody>
+                      {anonSummary.top_events.slice(0, 5).map((item) => (
+                        <tr key={item.event_id}>
+                          <td>
+                            {item.home_name} x {item.away_name}
+                          </td>
+                          <td className="mono">{item.reveal_count}</td>
+                        </tr>
+                      ))}
+
+                      {!anonSummary.top_events.length ? (
+                        <tr>
+                          <td className="note">Sem dados.</td>
+                          <td />
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="note">Telemetria Anon ainda sem dados.</div>
+          )}
+        </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16 }}>
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-title">Criar usuário</div>
 
           <div className="note" style={{ marginBottom: 10 }}>
             Cria uma conta manual com login por email e senha. O usuário nasce como
@@ -272,13 +475,17 @@ export default function AdminUsers() {
               ))}
             </select>
 
-            <button className="btn primary" onClick={() => void loadUsers(null)} disabled={listLoading}>
+            <button
+              className="btn primary"
+              onClick={() => void loadUsers(null, 0, userPageSize)}
+              disabled={listLoading}
+            >
               {listLoading ? "Carregando..." : "Buscar"}
             </button>
           </div>
 
           <div className="note" style={{ marginBottom: 8 }}>
-            {listData ? `${listData.count} usuário(s) encontrado(s)` : "Sem dados ainda."}
+            {usersListLabel}
           </div>
 
           <table className="table">
@@ -330,9 +537,58 @@ export default function AdminUsers() {
               ) : null}
             </tbody>
           </table>
+
+          <div
+            className="row"
+            style={{
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: 12,
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div className="row" style={{ gap: 8 }}>
+              <span className="note">Itens por página</span>
+              <select
+                className="select"
+                value={userPageSize}
+                disabled={listLoading}
+                onChange={(e) => {
+                  const nextLimit = Number(e.target.value || 20);
+                  setUserPageSize(nextLimit);
+                  void loadUsers(null, 0, nextLimit);
+                }}
+                style={{ width: 110 }}
+              >
+                {USER_PAGE_SIZE_OPTIONS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className="btn"
+                disabled={listLoading || !hasPreviousUsersPage}
+                onClick={() => void loadUsers(null, previousUsersOffset, userPageSize)}
+              >
+                Anterior
+              </button>
+
+              <button
+                className="btn"
+                disabled={listLoading || !hasNextUsersPage}
+                onClick={() => void loadUsers(null, nextUsersOffset, userPageSize)}
+              >
+                Próxima
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-
       <div>
         <div className="card">
           <div className="card-title">Detalhe do usuário</div>
@@ -691,5 +947,6 @@ export default function AdminUsers() {
         </div>
       </div>
     </div>
+  </div>
   );
 }

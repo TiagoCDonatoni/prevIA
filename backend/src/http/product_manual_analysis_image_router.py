@@ -14,7 +14,7 @@ from src.http.product_manual_analysis_router import (
     _ensure_manual_analysis_access,
     _prune_manual_analysis_history,
 )
-from src.image_import.schemas import ImageImportBatchEvaluateRequest
+from src.image_import.schemas import ImageImportBatchEvaluateRequest, ImageImportRowConfirmRequest
 from src.image_import.service import (
     DEFAULT_TOTALS_LINE,
     create_preview_request,
@@ -24,6 +24,7 @@ from src.image_import.service import (
     read_and_validate_image,
     require_image_import_enabled,
 )
+from src.odds.matchup_resolver import _norm_name, _upsert_team_alias_auto
 
 router = APIRouter(
     prefix="/product/manual-analysis/image-import",
@@ -79,6 +80,161 @@ def _safe_float(raw: Any) -> float | None:
     except Exception:
         return None
     return value if value > 0 else None
+
+def _jsonb_as_dict(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _jsonb_as_list(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, dict)]
+        except Exception:
+            return []
+
+    return []
+
+
+def _fetch_team_names(conn, team_ids: List[int]) -> Dict[int, str]:
+    clean_ids = sorted({int(team_id) for team_id in team_ids if team_id})
+
+    if not clean_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT team_id, name
+            FROM core.teams
+            WHERE team_id = ANY(%(team_ids)s)
+            """,
+            {"team_ids": clean_ids},
+        )
+        rows = cur.fetchall()
+
+    return {int(team_id): str(name) for team_id, name in rows}
+
+
+def _infer_confirmed_row_competition(
+    conn,
+    *,
+    home_team_id: int,
+    away_team_id: int,
+) -> Dict[str, Any]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT league_id, season, fixture_id
+            FROM core.fixtures
+            WHERE (
+                home_team_id = %(home_team_id)s
+                AND away_team_id = %(away_team_id)s
+            )
+            OR (
+                home_team_id = %(away_team_id)s
+                AND away_team_id = %(home_team_id)s
+            )
+            ORDER BY kickoff_utc DESC NULLS LAST, fixture_id DESC
+            LIMIT 1
+            """,
+            {
+                "home_team_id": int(home_team_id),
+                "away_team_id": int(away_team_id),
+            },
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return {"league_id": None, "season": None, "fixture_id": None}
+
+    return {
+        "league_id": int(row[0]) if row[0] is not None else None,
+        "season": int(row[1]) if row[1] is not None else None,
+        "fixture_id": int(row[2]) if row[2] is not None else None,
+    }
+
+
+def _learn_confirmed_image_aliases(
+    conn,
+    *,
+    sport_key: str,
+    raw: Dict[str, Any],
+    home_team_id: int,
+    away_team_id: int,
+) -> None:
+    home_raw = str(raw.get("home") or "").strip()
+    away_raw = str(raw.get("away") or "").strip()
+
+    if home_raw:
+        _upsert_team_alias_auto(
+            conn,
+            sport_key=sport_key,
+            raw_name=home_raw,
+            normalized_name=_norm_name(home_raw),
+            team_id=int(home_team_id),
+            confidence=1.0,
+            source="image_import_user_confirmed",
+        )
+
+    if away_raw:
+        _upsert_team_alias_auto(
+            conn,
+            sport_key=sport_key,
+            raw_name=away_raw,
+            normalized_name=_norm_name(away_raw),
+            team_id=int(away_team_id),
+            confidence=1.0,
+            source="image_import_user_confirmed",
+        )
+
+
+def _confirmed_row_response_item(
+    *,
+    row_id: int,
+    row_index: int,
+    raw: Dict[str, Any],
+    normalized: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    home_team_id: int,
+    away_team_id: int,
+    home_name: str,
+    away_name: str,
+    fixture_id: int | None,
+) -> Dict[str, Any]:
+    return {
+        "row_id": int(row_id),
+        "row_index": int(row_index),
+        "status": "USER_CONFIRMED",
+        "raw": raw,
+        "normalized": normalized,
+        "resolved": {
+            "fixture_id": fixture_id,
+            "home_team_id": int(home_team_id),
+            "away_team_id": int(away_team_id),
+            "home_name": home_name,
+            "away_name": away_name,
+            "kickoff_utc": None,
+            "confidence": 1.0,
+        },
+        "candidates": candidates,
+        "message": "confirmed by user",
+    }
+
 
 
 def _row_to_manual_payload(row: Dict[str, Any]) -> ManualAnalysisEvaluateRequest:
@@ -149,6 +305,214 @@ def _row_to_manual_payload(row: Dict[str, Any]) -> ManualAnalysisEvaluateRequest
             "no": _safe_float(odds_btts.get("no")),
         },
     )
+
+
+@router.post("/rows/{row_id}/confirm")
+def product_manual_analysis_image_confirm_row(
+    request: Request,
+    row_id: int,
+    payload: ImageImportRowConfirmRequest,
+):
+    require_image_import_enabled()
+    _actor, _plan_code, user_id, _is_internal = _actor_plan_and_user(request)
+
+    home_team_id = int(payload.home_team_id)
+    away_team_id = int(payload.away_team_id)
+
+    if home_team_id <= 0 or away_team_id <= 0 or home_team_id == away_team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "ok": False,
+                "code": "INVALID_TEAM_SELECTION",
+                "message": "select two valid different teams",
+            },
+        )
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT row_id,
+                       request_id,
+                       row_index,
+                       status,
+                       raw_extraction_json,
+                       normalized_json,
+                       candidates_json,
+                       market_supported,
+                       generated_analysis_id
+                FROM access.user_manual_analysis_image_rows
+                WHERE row_id = %(row_id)s
+                  AND request_id = %(request_id)s
+                  AND user_id = %(user_id)s
+                FOR UPDATE
+                """,
+                {
+                    "row_id": int(row_id),
+                    "request_id": int(payload.request_id),
+                    "user_id": int(user_id),
+                },
+            )
+            db_row = cur.fetchone()
+
+            if not db_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "ok": False,
+                        "code": "IMAGE_IMPORT_ROW_NOT_FOUND",
+                        "message": "row not found",
+                    },
+                )
+
+            if db_row[8]:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "ok": False,
+                        "code": "IMAGE_IMPORT_ROW_ALREADY_GENERATED",
+                        "message": "this row already generated an analysis",
+                    },
+                )
+
+            market_supported = bool(db_row[7])
+            if not market_supported:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "ok": False,
+                        "code": "UNSUPPORTED_MARKET",
+                        "message": "unsupported market cannot be confirmed",
+                    },
+                )
+
+            team_names = _fetch_team_names(conn, [home_team_id, away_team_id])
+
+            if home_team_id not in team_names or away_team_id not in team_names:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "ok": False,
+                        "code": "TEAM_NOT_FOUND",
+                        "message": "one or more selected teams were not found",
+                    },
+                )
+
+            inferred = _infer_confirmed_row_competition(
+                conn,
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+            )
+
+            fixture_id = (
+                int(payload.fixture_id)
+                if payload.fixture_id is not None
+                else inferred.get("fixture_id")
+            )
+            league_id = (
+                int(payload.league_id)
+                if payload.league_id is not None
+                else inferred.get("league_id")
+            )
+            season = (
+                int(payload.season)
+                if payload.season is not None
+                else inferred.get("season")
+            )
+
+            raw = _jsonb_as_dict(db_row[4])
+            normalized = _jsonb_as_dict(db_row[5])
+            candidates = _jsonb_as_list(db_row[6])
+
+            cur.execute(
+                """
+                UPDATE access.user_manual_analysis_image_rows
+                SET status = 'USER_CONFIRMED',
+                    resolved_fixture_id = %(fixture_id)s,
+                    resolved_home_team_id = %(home_team_id)s,
+                    resolved_away_team_id = %(away_team_id)s,
+                    league_id = %(league_id)s,
+                    season = %(season)s,
+                    match_confidence = 1,
+                    user_confirmed = true,
+                    updated_at_utc = NOW()
+                WHERE row_id = %(row_id)s
+                  AND user_id = %(user_id)s
+                """,
+                {
+                    "fixture_id": fixture_id,
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id,
+                    "league_id": league_id,
+                    "season": season,
+                    "row_id": int(row_id),
+                    "user_id": int(user_id),
+                },
+            )
+
+            if payload.learn_aliases:
+                _learn_confirmed_image_aliases(
+                    conn,
+                    sport_key="soccer",
+                    raw=raw,
+                    home_team_id=home_team_id,
+                    away_team_id=away_team_id,
+                )
+
+            cur.execute(
+                """
+                INSERT INTO access.user_manual_analysis_image_actions (
+                    row_id,
+                    request_id,
+                    user_id,
+                    action_type,
+                    actor_type,
+                    payload_json
+                )
+                VALUES (
+                    %(row_id)s,
+                    %(request_id)s,
+                    %(user_id)s,
+                    'ROW_CONFIRMED',
+                    'user',
+                    %(payload_json)s::jsonb
+                )
+                """,
+                {
+                    "row_id": int(row_id),
+                    "request_id": int(payload.request_id),
+                    "user_id": int(user_id),
+                    "payload_json": json.dumps(
+                        {
+                            "home_team_id": home_team_id,
+                            "away_team_id": away_team_id,
+                            "fixture_id": fixture_id,
+                            "league_id": league_id,
+                            "season": season,
+                            "learn_aliases": bool(payload.learn_aliases),
+                        }
+                    ),
+                },
+            )
+
+            conn.commit()
+
+    return {
+        "ok": True,
+        "item": _confirmed_row_response_item(
+            row_id=int(row_id),
+            row_index=int(db_row[2]),
+            raw=raw,
+            normalized=normalized,
+            candidates=candidates,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_name=team_names[home_team_id],
+            away_name=team_names[away_team_id],
+            fixture_id=fixture_id,
+        ),
+    }
 
 
 @router.post("/evaluate-batch")

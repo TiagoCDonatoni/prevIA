@@ -39,6 +39,7 @@ import type {
   AdminAccessCampaignDetailResponse,
   AdminAccessCampaignsListResponse,
   AdminAccessCampaignUpsertPayload,
+  AdminTelemetryAnonymousSummaryResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -372,6 +373,7 @@ export async function getAdminOddsAuditEvents(params?: {
   severe_threshold?: number;
   only_severe?: boolean;
   limit?: number;
+  offset?: number;
   offset_windows?: number;
 }): Promise<AdminOddsAuditEventsResponse> {
   const url = new URL("/admin/odds/audit/reliability/events", API_BASE_URL);
@@ -385,6 +387,7 @@ export async function getAdminOddsAuditEvents(params?: {
   if (params?.severe_threshold != null) url.searchParams.set("severe_threshold", String(params.severe_threshold));
   if (params?.only_severe != null) url.searchParams.set("only_severe", String(params.only_severe));
   if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+  if (params?.offset != null) url.searchParams.set("offset", String(params.offset));
   if (params?.offset_windows != null) url.searchParams.set("offset_windows", String(params.offset_windows));
 
   return fetchJson<AdminOddsAuditEventsResponse>(url.toString(), {
@@ -537,6 +540,7 @@ export async function adminOpsPipelineHealth(params?: {
 
 export async function adminOpsRunsRecent(params?: {
   limit?: number;
+  before_run_id?: number | null;
   job_key?: string | null;
   status?: string | null;
 }): Promise<AdminOpsRunsRecentResponse> {
@@ -544,6 +548,9 @@ export async function adminOpsRunsRecent(params?: {
 
   if (params?.limit != null) {
     url.searchParams.set("limit", String(params.limit));
+  }
+  if (params?.before_run_id != null) {
+    url.searchParams.set("before_run_id", String(params.before_run_id));
   }
   if (params?.job_key) {
     url.searchParams.set("job_key", params.job_key);
@@ -921,6 +928,18 @@ export async function adminOpsApproveLeagueMap(params: {
 
   return fetchJson(url.toString(), {
     method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminGetTelemetryAnonymousSummary(params?: {
+  window?: "today" | "7d" | "30d";
+}): Promise<AdminTelemetryAnonymousSummaryResponse> {
+  const url = new URL("/admin/telemetry/anonymous-summary", API_BASE_URL);
+
+  if (params?.window) url.searchParams.set("window", params.window);
+
+  return fetchJson<AdminTelemetryAnonymousSummaryResponse>(url.toString(), {
     headers: { Accept: "application/json" },
   });
 }

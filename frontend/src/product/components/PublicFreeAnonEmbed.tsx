@@ -3,6 +3,7 @@ import type { Lang } from "../../product/i18n";
 import { ProductIndexSurface } from "../../product/runtime/ProductIndexSurface";
 import { ProductRuntime } from "../../product/runtime/ProductRuntime";
 import { useProductStore } from "../../product/state/productStore";
+import { trackProductTelemetry } from "../telemetry/productTelemetry";
 
 const EMBED_COPY: Record<
   Lang,
@@ -73,6 +74,16 @@ function PublicFreeAnonEmbedInner({ lang }: { lang: Lang }) {
 
   const copy = EMBED_COPY[lang] ?? EMBED_COPY.pt;
 
+  React.useEffect(() => {
+    trackProductTelemetry("public_free_anon_embed_loaded", {
+      surface: "public_embed",
+      actor_type: isAuthenticated ? "user" : "anonymous",
+      plan_code: isAuthenticated ? store.entitlements.plan : "FREE_ANON",
+      auth_mode: isAuthenticated ? store.bootstrap.auth_mode ?? "session" : "anonymous",
+      lang,
+    });
+  }, [isAuthenticated, lang, store.bootstrap.auth_mode, store.entitlements.plan]);
+
   const kicker = isAuthenticated ? copy.authLabel : copy.guestLabel;
 
   const caption = isAuthenticated
@@ -123,6 +134,14 @@ export function PublicFreeAnonEmbed({
         const isVisible = entries.some((entry) => entry.isIntersecting);
         if (!isVisible) return;
 
+        trackProductTelemetry("public_free_anon_embed_viewed", {
+          surface: "landing",
+          actor_type: "anonymous",
+          plan_code: "FREE_ANON",
+          auth_mode: "anonymous",
+          lang,
+        });
+
         setShouldMountEmbed(true);
         observer.disconnect();
       },
@@ -136,7 +155,7 @@ export function PublicFreeAnonEmbed({
     observer.observe(node);
 
     return () => observer.disconnect();
-  }, [shouldMountEmbed]);
+  }, [lang, shouldMountEmbed]);
 
   return (
     <section ref={sectionRef} className="landing-section">

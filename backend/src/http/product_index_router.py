@@ -40,30 +40,51 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
             return {}
     return {}
 
-OPPORTUNITY_EDGE_THRESHOLD = 0.05
-OPPORTUNITY_EV_THRESHOLD = 0.03
-OPPORTUNITY_MIN_BOOKS = 4
-OPPORTUNITY_MAX_FRESHNESS_SECONDS = 7 * 24 * 60 * 60
+OPPORTUNITY_EDGE_THRESHOLD = 0.12
+OPPORTUNITY_EV_THRESHOLD = 0.10
+OPPORTUNITY_MIN_BOOKS = 7
+OPPORTUNITY_MAX_FRESHNESS_SECONDS = 2 * 24 * 60 * 60
+OPPORTUNITY_MIN_CONFIDENCE = 0.90
 
 
-def _has_public_opportunity(summary: Optional[EdgeSummary]) -> bool:
+def _safe_float(raw: Any) -> Optional[float]:
+    try:
+        if raw is None:
+            return None
+        value = float(raw)
+        return value if value == value else None
+    except Exception:
+        return None
+
+
+def _has_public_opportunity(
+    summary: Optional[EdgeSummary],
+    *,
+    confidence_overall: Any = None,
+) -> bool:
     if not summary:
         return False
 
     side = summary.opportunity_outcome
-    edge = summary.opportunity_edge
-    ev = summary.opportunity_ev
+    edge = _safe_float(summary.opportunity_edge)
+    ev = _safe_float(summary.opportunity_ev)
     books = summary.market_complete_books_count or summary.market_books_count or 0
-    freshness = summary.opportunity_book_freshness_seconds
+    freshness = _safe_float(summary.opportunity_book_freshness_seconds)
+    confidence = _safe_float(confidence_overall)
 
     return (
-        (side == "H" or side == "D" or side == "A")
-        and isinstance(edge, (int, float))
-        and isinstance(ev, (int, float))
-        and float(edge) >= OPPORTUNITY_EDGE_THRESHOLD
-        and float(ev) >= OPPORTUNITY_EV_THRESHOLD
+        side in {"H", "D", "A"}
+        and edge is not None
+        and ev is not None
+        and confidence is not None
+        and edge >= OPPORTUNITY_EDGE_THRESHOLD
+        and ev >= OPPORTUNITY_EV_THRESHOLD
         and int(books) >= OPPORTUNITY_MIN_BOOKS
-        and (freshness is None or int(freshness) <= OPPORTUNITY_MAX_FRESHNESS_SECONDS)
+        and confidence >= OPPORTUNITY_MIN_CONFIDENCE
+        and (
+            freshness is None
+            or int(freshness) <= OPPORTUNITY_MAX_FRESHNESS_SECONDS
+        )
     )
 
 
@@ -201,6 +222,8 @@ def product_index(
 
             inputs = payload.get("inputs") or {}
             markets = payload.get("markets") or {}
+            confidence = payload.get("confidence") or {}
+            confidence_overall = confidence.get("overall")
             probs_1x2 = ((markets.get("1x2") or {}).get("p_model") or {})
             snapshot_summary = _build_snapshot_summary(payload)
 
@@ -229,7 +252,10 @@ def product_index(
                 edge_summary = _build_edge_summary_from_books(probs_block, books)
 
             is_unlocked = str(event_id) in revealed_fixture_keys
-            has_public_opportunity = _has_public_opportunity(edge_summary)
+            has_public_opportunity = _has_public_opportunity(
+                edge_summary,
+                confidence_overall=confidence_overall,
+            )
 
             events.append(
                 OddsEventRow(

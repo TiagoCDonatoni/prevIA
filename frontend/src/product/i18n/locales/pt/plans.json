@@ -1,6 +1,15 @@
 {
   "freeAnon": { "name": "Free", "badge": "Sem login", "desc": "Teste rápido sem conta" },
-  "free": { "name": "Free+", "badge": "Com login", "desc": "Comece e teste o produto" },
+  "free": {
+    "name": "Free+",
+    "badge": "Com login",
+    "desc": "Comece e teste o produto",
+    "bullets": [
+      "{limit} créditos/dia com conta grátis",
+      "Crie login para continuar sem pagar",
+      "Ideal para testar o produto com mais folga"
+    ]
+  },
 
   "basic": {
     "name": "Basic",

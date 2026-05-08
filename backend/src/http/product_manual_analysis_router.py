@@ -24,6 +24,7 @@ router = APIRouter(prefix="/product/manual-analysis", tags=["product-manual-anal
 MANUAL_ANALYSIS_ALLOWED_PLANS = {"LIGHT", "PRO"}
 INTERESTING_ODD_PREMIUM = 0.03
 ALIGNED_ODD_DISCOUNT = 0.02
+INTERESTING_ODD_EPSILON = 0.005
 MANUAL_ANALYSIS_HISTORY_PAGE_SIZE = 5
 MANUAL_ANALYSIS_HISTORY_MAX_SAVED = 20
 
@@ -143,7 +144,13 @@ def _build_selection(prob: Optional[float]) -> Dict[str, Any]:
     }
 
 
-def _compare_price(prob: Optional[float], odd: Optional[float]) -> Optional[Dict[str, Any]]:
+def _compare_price(
+    prob: Optional[float],
+    odd: Optional[float],
+    *,
+    recommendation_allowed: bool = True,
+    blocked_reasons: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
     odd_value = _safe_float(odd)
     if prob is None or odd_value is None:
         return None
@@ -154,10 +161,15 @@ def _compare_price(prob: Optional[float], odd: Optional[float]) -> Optional[Dict
     edge = None if implied is None else float(prob) - float(implied)
 
     classification = "ALIGNED"
-    if interesting is not None and odd_value >= interesting:
+    if interesting is not None and odd_value >= (interesting - INTERESTING_ODD_EPSILON):
         classification = "GOOD"
     elif fair is not None and odd_value < (fair * (1.0 - ALIGNED_ODD_DISCOUNT)):
         classification = "BAD"
+
+    guardrail_blocked = False
+    if classification == "GOOD" and not recommendation_allowed:
+        classification = "REVIEW"
+        guardrail_blocked = True
 
     return {
         "odd": odd_value,
@@ -167,7 +179,89 @@ def _compare_price(prob: Optional[float], odd: Optional[float]) -> Optional[Dict
         "interesting_above": interesting,
         "edge": edge,
         "classification": classification,
+        "guardrail_blocked": guardrail_blocked,
+        "guardrail_reasons": list(blocked_reasons or []) if guardrail_blocked else [],
     }
+
+def _build_model_guardrails(
+    *,
+    confidence: Dict[str, Any],
+    inputs: Dict[str, Any],
+) -> Dict[str, Any]:
+    factors = dict((confidence or {}).get("factors") or {})
+    coverage = dict((confidence or {}).get("coverage") or {})
+
+    level = str((confidence or {}).get("level") or "").lower()
+    overall_raw = (confidence or {}).get("overall")
+    try:
+        overall = float(overall_raw)
+    except Exception:
+        overall = 0.0
+
+    def as_float(raw):
+        try:
+            return float(raw)
+        except Exception:
+            return None
+
+    lambda_home = as_float((inputs or {}).get("lambda_home"))
+    lambda_away = as_float((inputs or {}).get("lambda_away"))
+    lambda_floor_hit = bool(factors.get("lambda_floor_hit"))
+    if lambda_home is not None and lambda_home <= 0.151:
+        lambda_floor_hit = True
+    if lambda_away is not None and lambda_away <= 0.151:
+        lambda_floor_hit = True
+
+    coverage_tier = (
+        factors.get("coverage_tier")
+        or coverage.get("match_coverage_tier")
+        or coverage.get("coverage_tier")
+    )
+    coverage_tier = str(coverage_tier or "").upper() or None
+
+    blocked_reasons: List[str] = []
+
+    if level == "low" or overall < 0.50:
+        blocked_reasons.append("low_model_confidence")
+
+    if lambda_floor_hit:
+        blocked_reasons.append("lambda_floor_hit")
+
+    if coverage_tier in {"THIN", "COLD_START"}:
+        blocked_reasons.append("insufficient_team_coverage")
+
+    strength_context = (
+        (inputs or {}).get("strength_context")
+        or ((inputs or {}).get("diagnostics") or {}).get("strength_context")
+        or {}
+    )
+
+    if bool(strength_context.get("adjustment_applied")):
+        abs_gap = float(strength_context.get("abs_power_gap") or 0.0)
+        if abs_gap >= 0.28 and overall < 0.60:
+            blocked_reasons.append("large_cross_league_strength_gap")
+
+    recommendation_allowed = len(blocked_reasons) == 0
+
+    return {
+        "recommendation_allowed": bool(recommendation_allowed),
+        "blocked_reasons": sorted(set(blocked_reasons)),
+        "lambda_floor_hit": bool(lambda_floor_hit),
+        "coverage_tier": coverage_tier,
+        "confidence_level": level or None,
+        "confidence_overall": overall,
+        "strength_context": {
+            "cross_league": bool(strength_context.get("cross_league")),
+            "adjustment_applied": bool(strength_context.get("adjustment_applied")),
+            "elite_mismatch": bool(strength_context.get("elite_mismatch")),
+            "stronger_side": strength_context.get("stronger_side"),
+            "abs_power_gap": strength_context.get("abs_power_gap"),
+            "home_lambda_factor": strength_context.get("home_lambda_factor"),
+            "away_lambda_factor": strength_context.get("away_lambda_factor"),
+            "season_alignment_status": strength_context.get("season_alignment_status"),
+        } if strength_context else None,
+    }
+
 
 def _build_market_snapshot(
     *,
@@ -180,29 +274,41 @@ def _build_market_snapshot(
     confidence: Dict[str, Any],
     inputs: Dict[str, Any],
 ) -> Dict[str, Any]:
+    guardrails = _build_model_guardrails(confidence=confidence, inputs=inputs)
+
     comparisons = {
-        key: _compare_price(selections[key]["model_prob"], provided.get(key))
+        key: _compare_price(
+            selections[key]["model_prob"],
+            provided.get(key),
+            recommendation_allowed=bool(guardrails.get("recommendation_allowed")),
+            blocked_reasons=list(guardrails.get("blocked_reasons") or []),
+        )
         for key in selection_order
     }
-    manual_odds = {key: _safe_float(provided.get(key)) for key in selection_order}
+
+    provided_count = sum(1 for value in comparisons.values() if value is not None)
 
     return {
         "market": {
-            "market_key": market_key,
+            "market_key": str(market_key),
             "line": line,
         },
         "model": {
             "selections": selections,
             "confidence": confidence,
             "inputs": inputs,
-        },
-        "manual_input": {
-            "bookmaker_name": (bookmaker_name or "").strip() or None,
-            "selections": manual_odds,
+            "guardrails": guardrails,
         },
         "evaluation": {
-            "provided_count": sum(1 for value in manual_odds.values() if value is not None),
             "comparisons": comparisons,
+            "provided_count": int(provided_count),
+        },
+        "manual_input": {
+            "bookmaker_name": bookmaker_name,
+            "selections": {
+                key: _safe_float((provided or {}).get(key))
+                for key in selection_order
+            },
         },
     }
 
@@ -515,7 +621,8 @@ def _build_whatif_analysis_payload(conn, req: ManualAnalysisEvaluateRequest) -> 
     totals_line = float(req.totals_line) if req.totals_line is not None else 2.5
     probs_totals = derive_totals(matrix_result.matrix, totals_line)
 
-    confidence = dict((estimate.diagnostics or {}).get("confidence") or {})
+    diagnostics = dict(estimate.diagnostics or {})
+    confidence = dict((diagnostics or {}).get("confidence") or {})
     if not confidence.get("source"):
         confidence["source"] = str(estimate.source)
 
@@ -545,7 +652,11 @@ def _build_whatif_analysis_payload(conn, req: ManualAnalysisEvaluateRequest) -> 
         "context_source": str(reference_context.get("context_source") or "selected_league"),
         "model_source_1x2": model_source,
         "artifact_filename": str(artifact_filename) if artifact_filename else None,
+        "strength_context": diagnostics.get("strength_context"),
+        "diagnostics": diagnostics,
     }
+
+    model_guardrails = _build_model_guardrails(confidence=confidence, inputs=inputs)
 
     selections_1x2 = {
         "H": _build_selection(float(probs_1x2["H"])),
@@ -626,6 +737,7 @@ def _build_whatif_analysis_payload(conn, req: ManualAnalysisEvaluateRequest) -> 
         },
 
         "markets": markets,
+        "guardrails": model_guardrails,
 
         # Campos legados preservados para compatibilidade com históricos/telas antigas.
         # O frontend novo deve preferir "markets".
@@ -633,6 +745,7 @@ def _build_whatif_analysis_payload(conn, req: ManualAnalysisEvaluateRequest) -> 
             "selections": selections_1x2,
             "confidence": confidence,
             "inputs": inputs,
+            "guardrails": model_guardrails,
         },
         "manual_input": {
             "bookmaker_name": bookmaker_name,

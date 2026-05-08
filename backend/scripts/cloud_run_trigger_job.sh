@@ -6,6 +6,7 @@ set -euo pipefail
 : "${JOB_KEY:?export JOB_KEY=...}"
 
 export REQUESTED_BY="${REQUESTED_BY:-manual_cloud}"
+export TRIGGER_SOURCE="${TRIGGER_SOURCE:-manual}"
 export JOB_KWARGS_JSON="${JOB_KWARGS_JSON:-{}}"
 export PAYLOAD_JSON="${PAYLOAD_JSON:-{}}"
 export CORRELATION_ID="${CORRELATION_ID:-}"
@@ -21,6 +22,7 @@ payload = json.loads(os.environ.get("PAYLOAD_JSON", "{}"))
 
 body = {
     "job_key": os.environ["JOB_KEY"],
+    "trigger_source": os.environ.get("TRIGGER_SOURCE", "manual"),
     "requested_by": os.environ.get("REQUESTED_BY", "manual_cloud"),
     "job_kwargs": job_kwargs,
     "payload": payload,

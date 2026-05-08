@@ -9,6 +9,7 @@ import { t, type Lang } from "../i18n";
 import {
   fetchManualAnalysisHistory,
   postManualAnalysisEvaluate,
+  postManualAnalysisImageConfirmRow,
   postManualAnalysisImageEvaluateBatch,
   postManualAnalysisImagePreview,
   type ManualAnalysisEvaluateRequest,
@@ -75,6 +76,76 @@ function fmtPct(value: number | null | undefined) {
 function fmtOdd(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "—";
   return value.toFixed(2);
+}
+
+function getManualModelConfidenceLabel(lang: Lang, level?: string | null) {
+  const normalized = String(level || "").toLowerCase();
+
+  if (normalized === "high") {
+    return lang === "en" ? "High" : lang === "es" ? "Alta" : "Alta";
+  }
+
+  if (normalized === "medium") {
+    return lang === "en" ? "Moderate" : lang === "es" ? "Moderada" : "Moderada";
+  }
+
+  if (normalized === "low") {
+    return lang === "en" ? "Low" : lang === "es" ? "Baja" : "Baixa";
+  }
+
+  return lang === "en" ? "Not available" : lang === "es" ? "No disponible" : "Não informada";
+}
+
+function getManualGuardrailReasonLabel(lang: Lang, reason: string) {
+  if (reason === "low_model_confidence") {
+    return lang === "en"
+      ? "Low model confidence"
+      : lang === "es"
+      ? "Confianza baja del modelo"
+      : "Baixa confiança do modelo";
+  }
+
+  if (reason === "insufficient_team_coverage") {
+    return lang === "en"
+      ? "Limited team coverage"
+      : lang === "es"
+      ? "Cobertura limitada de equipos"
+      : "Cobertura limitada dos times";
+  }
+
+  if (reason === "large_cross_league_strength_gap") {
+    return lang === "en"
+      ? "Large cross-league strength gap"
+      : lang === "es"
+      ? "Gran diferencia de fuerza entre ligas"
+      : "Grande diferença de força entre ligas";
+  }
+
+  if (reason === "lambda_floor_hit") {
+    return lang === "en"
+      ? "Extreme lambda guardrail"
+      : lang === "es"
+      ? "Protección por lambda extremo"
+      : "Proteção por lambda extremo";
+  }
+
+  return reason;
+}
+
+function getManualBadgeLabel(
+  lang: Lang,
+  classification?: string | null,
+  guardrailBlocked?: boolean
+) {
+  const value = String(classification || "ALIGNED").toUpperCase();
+
+  if (value === "GOOD") return lang === "en" ? "Above model" : lang === "es" ? "Por encima del modelo" : "Acima do modelo";
+  if (value === "BAD") return lang === "en" ? "Below model" : lang === "es" ? "Por debajo del modelo" : "Abaixo do modelo";
+  if (value === "REVIEW" || guardrailBlocked) {
+    return lang === "en" ? "Review" : lang === "es" ? "Revisar" : "Revisar";
+  }
+
+  return lang === "en" ? "Aligned" : lang === "es" ? "Alineado" : "Alinhado";
 }
 
 function getSelectionLabel(
@@ -344,8 +415,98 @@ function imageImportItemOddsSummary(item: ManualAnalysisImageImportPreviewItem) 
   return parts.join(" · ") || "—";
 }
 
+function isSelectableImageImportStatus(status: string | null | undefined) {
+  return status === "READY" || status === "USER_CONFIRMED";
+}
+
 function canSelectImageImportItem(item: ManualAnalysisImageImportPreviewItem) {
-  return item.status === "READY";
+  return isSelectableImageImportStatus(item.status);
+}
+
+function canReviewImageImportItem(item: ManualAnalysisImageImportPreviewItem) {
+  return item.status === "NEEDS_CONFIRMATION" || item.status === "LOW_CONFIDENCE";
+}
+
+function recomputeImageImportSummary(items: ManualAnalysisImageImportPreviewItem[]) {
+  return {
+    items_detected: items.length,
+    auto_resolved: items.filter((item) => isSelectableImageImportStatus(item.status)).length,
+    needs_confirmation: items.filter((item) => item.status === "NEEDS_CONFIRMATION").length,
+    rejected: items.filter(
+      (item) =>
+        !isSelectableImageImportStatus(item.status) &&
+        item.status !== "NEEDS_CONFIRMATION"
+    ).length,
+  };
+}
+
+type ImageImportTeamCandidateOption = {
+  team_id: number;
+  name: string;
+  side?: string;
+  country_name?: string;
+  confidence?: number | null;
+};
+
+function getCandidateNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getCandidateText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getImageImportTeamCandidateOptions(
+  item: ManualAnalysisImageImportPreviewItem,
+  side: "home" | "away"
+): ImageImportTeamCandidateOption[] {
+  const options: ImageImportTeamCandidateOption[] = [];
+  const seen = new Set<number>();
+
+  const resolvedId =
+    side === "home" ? item.resolved?.home_team_id : item.resolved?.away_team_id;
+  const resolvedName =
+    side === "home" ? item.resolved?.home_name : item.resolved?.away_name;
+
+  if (resolvedId && resolvedName) {
+    options.push({
+      team_id: Number(resolvedId),
+      name: resolvedName,
+      side,
+      confidence: item.resolved?.confidence ?? null,
+    });
+    seen.add(Number(resolvedId));
+  }
+
+  (item.candidates ?? []).forEach((candidate) => {
+    const rawSide = getCandidateText(candidate.side);
+
+    if (rawSide && rawSide !== side) return;
+
+    const teamId =
+      getCandidateNumber(candidate.team_id) ??
+      getCandidateNumber(side === "home" ? candidate.home_team_id : candidate.away_team_id);
+
+    if (!teamId || seen.has(teamId)) return;
+
+    const name =
+      getCandidateText(candidate.name) ??
+      getCandidateText(side === "home" ? candidate.home_name : candidate.away_name);
+
+    if (!name) return;
+
+    seen.add(teamId);
+    options.push({
+      team_id: teamId,
+      name,
+      side,
+      country_name: getCandidateText(candidate.country_name) ?? undefined,
+      confidence: getCandidateNumber(candidate.confidence ?? candidate.score),
+    });
+  });
+
+  return options;
 }
 
 type ManualAnalysisBatchBestEdge = {
@@ -517,6 +678,11 @@ export default function ProductManualAnalysisPage() {
     }>
   >([]);
   const [imageBatchSkipped, setImageBatchSkipped] = useState<Array<Record<string, unknown>>>([]);
+  const [imageReviewItem, setImageReviewItem] =
+    useState<ManualAnalysisImageImportPreviewItem | null>(null);
+  const [imageReviewHomeTeamId, setImageReviewHomeTeamId] = useState<number | null>(null);
+  const [imageReviewAwayTeamId, setImageReviewAwayTeamId] = useState<number | null>(null);
+  const [isImageReviewSubmitting, setIsImageReviewSubmitting] = useState(false);
 
   const hasFeatureAccess =
     ALLOWED_PLANS.includes(plan) || Boolean(store.accessContext?.product_internal_access);
@@ -557,6 +723,22 @@ export default function ProductManualAnalysisPage() {
   const imageBatchReusedCount = imageBatchResults.filter(
     (item) => item.status === "already_generated"
   ).length;
+
+  const imageReviewHomeOptions = useMemo(
+    () =>
+      imageReviewItem
+        ? getImageImportTeamCandidateOptions(imageReviewItem, "home")
+        : [],
+    [imageReviewItem]
+  );
+
+  const imageReviewAwayOptions = useMemo(
+    () =>
+      imageReviewItem
+        ? getImageImportTeamCandidateOptions(imageReviewItem, "away")
+        : [],
+    [imageReviewItem]
+  );
 
   function applyManualAnalysisUsage(response: ManualAnalysisResponse) {
     const usage = response.usage;
@@ -860,6 +1042,84 @@ export default function ProductManualAnalysisPage() {
     setSelectedImageRowIds((prev) => [...prev, rowId]);
   }
 
+  function openImageImportReview(item: ManualAnalysisImageImportPreviewItem) {
+    const homeOptions = getImageImportTeamCandidateOptions(item, "home");
+    const awayOptions = getImageImportTeamCandidateOptions(item, "away");
+
+    setImageImportError(null);
+    setImageReviewItem(item);
+    setImageReviewHomeTeamId(
+      Number(item.resolved?.home_team_id || homeOptions[0]?.team_id || 0) || null
+    );
+    setImageReviewAwayTeamId(
+      Number(item.resolved?.away_team_id || awayOptions[0]?.team_id || 0) || null
+    );
+  }
+
+  async function handleImageImportConfirmRow() {
+    if (
+      !imagePreview ||
+      !imageReviewItem ||
+      !imageReviewHomeTeamId ||
+      !imageReviewAwayTeamId ||
+      isImageReviewSubmitting
+    ) {
+      return;
+    }
+
+    setImageImportError(null);
+    setIsImageReviewSubmitting(true);
+
+    try {
+      const response = await postManualAnalysisImageConfirmRow(imageReviewItem.row_id, {
+        request_id: imagePreview.request_id,
+        home_team_id: imageReviewHomeTeamId,
+        away_team_id: imageReviewAwayTeamId,
+        fixture_id: imageReviewItem.resolved?.fixture_id ?? null,
+        learn_aliases: true,
+      });
+
+      if (!response.ok || !response.item) {
+        setImageImportError(response.message ?? tr("imageImportReviewGenericError"));
+        return;
+      }
+
+      const updatedItem = response.item;
+
+      setImagePreview((prev) => {
+        if (!prev) return prev;
+
+        const items = prev.items.map((item) =>
+          item.row_id === updatedItem.row_id ? updatedItem : item
+        );
+
+        return {
+          ...prev,
+          summary: recomputeImageImportSummary(items),
+          items,
+        };
+      });
+
+      setSelectedImageRowIds((prev) => {
+        if (prev.includes(updatedItem.row_id)) return prev;
+
+        const remaining = remainingCredits ?? 0;
+        if (prev.length >= remaining) return prev;
+
+        return [...prev, updatedItem.row_id];
+      });
+
+      setImageReviewItem(null);
+      setImageReviewHomeTeamId(null);
+      setImageReviewAwayTeamId(null);
+    } catch (error) {
+      console.error("manual analysis image confirm row failed", error);
+      setImageImportError(tr("imageImportReviewGenericError"));
+    } finally {
+      setIsImageReviewSubmitting(false);
+    }
+  }
+
   async function handleImageImportBatchEvaluate() {
     if (!imagePreview || !selectedImageRowIds.length || isImageBatchSubmitting) return;
 
@@ -1068,6 +1328,9 @@ export default function ProductManualAnalysisPage() {
                   setImageBatchSkipped([]);
                   setImagePreview(null);
                   setSelectedImageRowIds([]);
+                  setImageReviewItem(null);
+                  setImageReviewHomeTeamId(null);
+                  setImageReviewAwayTeamId(null);
                   setImageFile(event.target.files?.[0] ?? null);
                 }}
               />
@@ -1473,6 +1736,65 @@ export default function ProductManualAnalysisPage() {
                 ))}
               </div>
 
+              {(() => {
+                const confidence = currentAnalysis.model?.confidence ?? null;
+                const guardrails = currentAnalysis.model?.guardrails ?? null;
+                const overall =
+                  typeof confidence?.overall === "number" && Number.isFinite(confidence.overall)
+                    ? confidence.overall
+                    : null;
+                const level = confidence?.level ?? guardrails?.confidence_level ?? null;
+                const blockedReasons = Array.isArray(guardrails?.blocked_reasons)
+                  ? guardrails.blocked_reasons
+                  : [];
+                const recommendationAllowed = guardrails?.recommendation_allowed;
+
+                if (!confidence && !guardrails) return null;
+
+                return (
+                  <div
+                    className={`manual-analysis-confidence-card manual-analysis-confidence-card--${String(
+                      level || "unknown"
+                    ).toLowerCase()}`}
+                  >
+                    <div className="manual-analysis-confidence-main">
+                      <div>
+                        <div className="manual-analysis-confidence-label">
+                          {lang === "en"
+                            ? "Model confidence"
+                            : lang === "es"
+                            ? "Confianza del modelo"
+                            : "Confiança do modelo"}
+                        </div>
+                        <strong>{fmtPct(overall)}</strong>
+                      </div>
+
+                      <span className="manual-analysis-confidence-level">
+                        {getManualModelConfidenceLabel(lang, level)}
+                      </span>
+                    </div>
+
+                    {recommendationAllowed === false ? (
+                      <div className="manual-analysis-confidence-warning">
+                        {lang === "en"
+                          ? "No strong recommendation: model guardrails are active."
+                          : lang === "es"
+                          ? "Sin recomendación fuerte: las protecciones del modelo están activas."
+                          : "Sem recomendação forte: as proteções do modelo estão ativas."}
+                      </div>
+                    ) : null}
+
+                    {blockedReasons.length ? (
+                      <div className="manual-analysis-confidence-reasons">
+                        {blockedReasons.map((reason) => (
+                          <span key={reason}>{getManualGuardrailReasonLabel(lang, reason)}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
+
               <div className="manual-analysis-result-markets">
                 {resultMarketSections.length ? (
                   <>
@@ -1545,15 +1867,15 @@ export default function ProductManualAnalysisPage() {
 
                                   {comparison ? (
                                     <div
-                                      className={`manual-analysis-badge manual-analysis-badge--${String(
-                                        comparison.classification || "ALIGNED"
-                                      ).toLowerCase()}`}
+                                    className={`manual-analysis-badge manual-analysis-badge--${String(
+                                      comparison.guardrail_blocked ? "REVIEW" : comparison.classification || "ALIGNED"
+                                    ).toLowerCase()}`}
                                     >
-                                      {comparison.classification === "GOOD"
-                                        ? tr("badgeGood")
-                                        : comparison.classification === "BAD"
-                                        ? tr("badgeBad")
-                                        : tr("badgeAligned")}
+                                    {getManualBadgeLabel(
+                                      lang,
+                                      comparison.classification,
+                                      Boolean(comparison.guardrail_blocked)
+                                    )}
                                     </div>
                                   ) : null}
                                 </div>
@@ -1716,21 +2038,124 @@ export default function ProductManualAnalysisPage() {
                       {item.message ? <em>{item.message}</em> : null}
                     </span>
 
-                    <span className="manual-analysis-image-row-status">
-                      {item.status === "READY"
-                        ? tr("imageImportStatusReady")
-                        : item.status === "NEEDS_CONFIRMATION"
-                        ? tr("imageImportStatusNeedsConfirmation")
-                        : item.status === "UNSUPPORTED_MARKET"
-                        ? tr("imageImportStatusUnsupported")
-                        : item.status === "LOW_CONFIDENCE"
-                        ? tr("imageImportStatusLowConfidence")
-                        : tr("imageImportStatusUnreadable")}
+                    <span className="manual-analysis-image-row-actions">
+                      <span className="manual-analysis-image-row-status">
+                        {isSelectableImageImportStatus(item.status)
+                          ? tr("imageImportStatusReady")
+                          : item.status === "NEEDS_CONFIRMATION"
+                          ? tr("imageImportStatusNeedsConfirmation")
+                          : item.status === "UNSUPPORTED_MARKET"
+                          ? tr("imageImportStatusUnsupported")
+                          : item.status === "LOW_CONFIDENCE"
+                          ? tr("imageImportStatusLowConfidence")
+                          : tr("imageImportStatusUnreadable")}
+                      </span>
+
+                      {canReviewImageImportItem(item) ? (
+                        <button
+                          type="button"
+                          className="manual-analysis-image-review-btn"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openImageImportReview(item);
+                          }}
+                        >
+                          {tr("imageImportReview")}
+                        </button>
+                      ) : null}
                     </span>
                   </label>
                 );
               })}
             </div>
+
+            {imageReviewItem ? (
+              <div className="manual-analysis-image-review-panel">
+                <div className="manual-analysis-image-review-head">
+                  <strong>{tr("imageImportReviewTitle")}</strong>
+                  <span>{tr("imageImportReviewBody")}</span>
+                </div>
+
+                <div className="manual-analysis-image-review-match">
+                  {imageReviewItem.raw?.home || "—"} x {imageReviewItem.raw?.away || "—"}
+                </div>
+
+                <div className="manual-analysis-image-review-grid">
+                  <label className="manual-analysis-field">
+                    <span>{tr("imageImportReviewHome")}</span>
+                    <select
+                      className="manual-analysis-line-select"
+                      value={imageReviewHomeTeamId ?? ""}
+                      onChange={(event) => setImageReviewHomeTeamId(Number(event.target.value) || null)}
+                    >
+                      <option value="">{tr("imageImportReviewSelectTeam")}</option>
+                      {imageReviewHomeOptions.map((option) => (
+                        <option key={option.team_id} value={option.team_id}>
+                          {option.name}
+                          {option.country_name ? ` · ${option.country_name}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="manual-analysis-field">
+                    <span>{tr("imageImportReviewAway")}</span>
+                    <select
+                      className="manual-analysis-line-select"
+                      value={imageReviewAwayTeamId ?? ""}
+                      onChange={(event) => setImageReviewAwayTeamId(Number(event.target.value) || null)}
+                    >
+                      <option value="">{tr("imageImportReviewSelectTeam")}</option>
+                      {imageReviewAwayOptions.map((option) => (
+                        <option key={option.team_id} value={option.team_id}>
+                          {option.name}
+                          {option.country_name ? ` · ${option.country_name}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {!imageReviewHomeOptions.length || !imageReviewAwayOptions.length ? (
+                  <div className="manual-analysis-warning">
+                    {tr("imageImportReviewNoCandidates")}
+                  </div>
+                ) : null}
+
+                <div className="manual-analysis-image-review-actions">
+                  <button
+                    type="button"
+                    className="manual-analysis-secondary-btn"
+                    onClick={() => {
+                      setImageReviewItem(null);
+                      setImageReviewHomeTeamId(null);
+                      setImageReviewAwayTeamId(null);
+                    }}
+                    disabled={isImageReviewSubmitting}
+                  >
+                    {tr("confirmCancel")}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="manual-analysis-primary-btn"
+                    onClick={() => void handleImageImportConfirmRow()}
+                    disabled={
+                      !imageReviewHomeTeamId ||
+                      !imageReviewAwayTeamId ||
+                      imageReviewHomeTeamId === imageReviewAwayTeamId ||
+                      isImageReviewSubmitting
+                    }
+                  >
+                    {isImageReviewSubmitting
+                      ? tr("imageImportReviewBusy")
+                      : tr("imageImportReviewConfirm")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
 
             <div className="manual-analysis-note manual-analysis-note--modal">
               {tr("imageImportCreditSummary", {

@@ -7,6 +7,7 @@ import unicodedata
 from zoneinfo import ZoneInfo
 
 from src.odds.matchup_resolver import (
+    _name_similarity,
     _norm_name,
     _resolve_single_team_name,
     _upsert_team_alias_auto,
@@ -124,11 +125,12 @@ def _promote_candidate_if_safe(
     country_hint: str | None,
 ) -> Dict[str, Any]:
     """
-    Para image import, alguns nomes vêm transliterados:
+    Para image import, alguns nomes vêm transliterados ou traduzidos:
     Al Akhdood -> Al Okhdood.
 
-    Se houver country_hint e um candidato claramente acima dos demais,
-    podemos promover para resolved_team_id e aprender alias.
+    A pontuação original dos candidatos pode ser baixa quando o matcher
+    caiu em busca ampla. Então aqui calculamos uma similaridade direta
+    entre o nome cru extraído do print e o nome do candidato.
     """
     if result.get("resolved_team_id") is not None:
         return result
@@ -146,34 +148,59 @@ def _promote_candidate_if_safe(
     if not clean:
         return result
 
-    clean.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+    scored = []
 
-    top1 = clean[0]
-    top2 = clean[1] if len(clean) > 1 else None
+    for candidate in clean:
+        candidate_name = str(candidate.get("name") or "").strip()
+        if not candidate_name:
+            continue
 
-    top1_score = float(top1.get("score") or 0)
-    top2_score = float(top2.get("score") or 0) if top2 else 0
+        direct_similarity = float(_name_similarity(raw_name, candidate_name))
+        original_score = float(candidate.get("score") or 0)
+
+        scored.append(
+            {
+                **candidate,
+                "_direct_similarity": direct_similarity,
+                "_original_score": original_score,
+                "_promotion_score": max(direct_similarity, original_score),
+            }
+        )
+
+    if not scored:
+        return result
+
+    scored.sort(key=lambda item: float(item.get("_promotion_score") or 0), reverse=True)
+
+    top1 = scored[0]
+    top2 = scored[1] if len(scored) > 1 else None
+
+    top1_score = float(top1.get("_promotion_score") or 0)
+    top2_score = float(top2.get("_promotion_score") or 0) if top2 else 0
     margin = top1_score - top2_score
 
-    # Caso comum: score absoluto ainda não é altíssimo,
-    # mas o país/liga restringiu bem o espaço e há um candidato plausível.
-    safe_by_score = top1_score >= 0.84 and margin >= 0.08
-
-    # Caso especial para transliteração árabe comum: diferença pequena de vogal/consoante.
     raw_norm = _fold_text(raw_name)
     candidate_norm = _fold_text(top1.get("name"))
-    safe_by_token_overlap = (
-        top1_score >= 0.80
-        and raw_norm
-        and candidate_norm
-        and (
-            raw_norm in candidate_norm
-            or candidate_norm in raw_norm
-            or len(set(raw_norm.split()) & set(candidate_norm.split())) >= 1
-        )
+
+    token_overlap = (
+        len(set(raw_norm.split()) & set(candidate_norm.split()))
+        if raw_norm and candidate_norm
+        else 0
     )
 
-    if not safe_by_score and not safe_by_token_overlap:
+    safe_by_similarity = top1_score >= 0.88 and margin >= 0.03
+
+    safe_by_transliteration = (
+        top1_score >= 0.84
+        and token_overlap >= 1
+    )
+
+    safe_by_single_candidate = (
+        len(scored) == 1
+        and top1_score >= 0.84
+    )
+
+    if not safe_by_similarity and not safe_by_transliteration and not safe_by_single_candidate:
         return result
 
     promoted = dict(result)
@@ -182,8 +209,16 @@ def _promote_candidate_if_safe(
     promoted["source"] = "image_import_candidate_promoted"
     promoted["payload"] = {
         **payload,
-        "promoted_candidate": top1,
-        "promotion_reason": "country_hint_candidate_match",
+        "promoted_candidate": {
+            key: value
+            for key, value in top1.items()
+            if not str(key).startswith("_")
+        },
+        "promotion_reason": "country_hint_direct_similarity",
+        "promotion_score": top1_score,
+        "promotion_margin": margin,
+        "direct_similarity": float(top1.get("_direct_similarity") or 0),
+        "original_score": float(top1.get("_original_score") or 0),
     }
 
     _learn_or_queue_image_team_alias(

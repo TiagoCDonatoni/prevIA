@@ -834,11 +834,11 @@ def admin_ops_pipeline_health(
                 select
                   count(*) filter (
                     where updated_at_utc >= now() - interval '24 hours'
-                      and status like 'failed%%'
+                      and status in ('failed', 'blocked', 'cancelled')
                   ) as failed_24h,
                   count(*) filter (
                     where updated_at_utc >= now() - interval '7 days'
-                      and status like 'failed%%'
+                      and status in ('failed', 'blocked', 'cancelled')
                   ) as failed_7d
                 from ops.ops_job_runs
             """)
@@ -854,6 +854,7 @@ def admin_ops_pipeline_health(
                   started_at_utc,
                   finished_at_utc,
                   duration_ms,
+                  counters_json,
                   error_json
                 from (
                   select
@@ -865,13 +866,22 @@ def admin_ops_pipeline_health(
                     started_at_utc,
                     finished_at_utc,
                     duration_ms,
+                    counters_json,
                     error_json,
                     row_number() over (
                       partition by job_key
                       order by run_id desc
                     ) as rn
                   from ops.ops_job_runs
-                  where job_key in ('update_pipeline_run', 'pipeline_run_all')
+                  where job_key in (
+                    'pipeline_run_all',
+                    'update_pipeline_run',
+                    'update_pipeline_run_shard',
+                    'audit_sync_from_product_snapshots',
+                    'odds_catalog_sync',
+                    'odds_league_gap_scan',
+                    'odds_league_autoclassify'
+                  )
                 ) t
                 where rn = 1
                 order by job_key asc
@@ -879,8 +889,13 @@ def admin_ops_pipeline_health(
             last_run_rows = cur.fetchall() or []
 
     last_runs: Dict[str, Any] = {
-        "update_pipeline_run": None,
         "pipeline_run_all": None,
+        "update_pipeline_run": None,
+        "update_pipeline_run_shard": None,
+        "audit_sync_from_product_snapshots": None,
+        "odds_catalog_sync": None,
+        "odds_league_gap_scan": None,
+        "odds_league_autoclassify": None,
     }
 
     for r in last_run_rows:
@@ -892,7 +907,8 @@ def admin_ops_pipeline_health(
             "started_at_utc": _iso_dt(r[5]),
             "finished_at_utc": _iso_dt(r[6]),
             "duration_ms": int(r[7]) if r[7] is not None else None,
-            "error": _json_value(r[8]),
+            "counters": _json_value(r[8]),
+            "error": _json_value(r[9]),
         }
 
     return {
@@ -920,10 +936,14 @@ def admin_ops_pipeline_health(
 
 @router.get("/runs/recent")
 def admin_ops_runs_recent(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=30, ge=1, le=100),
+    before_run_id: int | None = Query(default=None),
     job_key: str | None = Query(default=None),
     status: str | None = Query(default=None),
 ):
+    page_size = int(limit)
+    fetch_limit = page_size + 1
+
     sql = """
       select
         run_id,
@@ -935,7 +955,6 @@ def admin_ops_runs_recent(
         sport_key,
         status,
         block_reason,
-        result_json,
         counters_json,
         error_json,
         started_at_utc,
@@ -945,6 +964,7 @@ def admin_ops_runs_recent(
       from ops.ops_job_runs
       where (%(job_key)s::text is null or job_key = %(job_key)s::text)
         and (%(status)s::text is null or status = %(status)s::text)
+        and (%(before_run_id)s::bigint is null or run_id < %(before_run_id)s::bigint)
       order by run_id desc
       limit %(limit)s
     """
@@ -954,15 +974,19 @@ def admin_ops_runs_recent(
             cur.execute(
                 sql,
                 {
-                    "limit": int(limit),
+                    "limit": fetch_limit,
+                    "before_run_id": before_run_id,
                     "job_key": job_key,
                     "status": status,
                 },
             )
             rows = cur.fetchall() or []
 
+    has_more = len(rows) > page_size
+    page_rows = rows[:page_size]
+
     items = []
-    for r in rows:
+    for r in page_rows:
         items.append(
             {
                 "run_id": int(r[0]),
@@ -974,17 +998,30 @@ def admin_ops_runs_recent(
                 "sport_key": str(r[6]) if r[6] is not None else None,
                 "status": str(r[7]),
                 "block_reason": str(r[8]) if r[8] is not None else None,
-                "result": _json_value(r[9]),
-                "counters": _json_value(r[10]),
-                "error": _json_value(r[11]),
-                "started_at_utc": _iso_dt(r[12]),
-                "finished_at_utc": _iso_dt(r[13]),
-                "duration_ms": int(r[14]) if r[14] is not None else None,
-                "updated_at_utc": _iso_dt(r[15]),
+
+                # Mantemos a listagem leve. result_json pode ficar grande em
+                # pipeline_run_all/update_pipeline_run_shard.
+                # Drill-down completo pode virar endpoint próprio no futuro.
+                "result": None,
+
+                "counters": _json_value(r[9]),
+                "error": _json_value(r[10]),
+                "started_at_utc": _iso_dt(r[11]),
+                "finished_at_utc": _iso_dt(r[12]),
+                "duration_ms": int(r[13]) if r[13] is not None else None,
+                "updated_at_utc": _iso_dt(r[14]),
             }
         )
 
-    return {"ok": True, "items": items, "count": len(items)}
+    next_before_run_id = items[-1]["run_id"] if has_more and items else None
+
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+        "has_more": has_more,
+        "next_before_run_id": next_before_run_id,
+    }
 
 @router.get("/runs/{run_id}/events")
 def admin_ops_run_events(

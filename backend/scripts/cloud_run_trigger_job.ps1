@@ -34,8 +34,14 @@ if ([string]::IsNullOrWhiteSpace($requestedBy)) {
 $jobKwargs = Read-JsonEnv "JOB_KWARGS_JSON"
 $payload = Read-JsonEnv "PAYLOAD_JSON"
 
+$triggerSource = [Environment]::GetEnvironmentVariable("TRIGGER_SOURCE")
+if ([string]::IsNullOrWhiteSpace($triggerSource)) {
+    $triggerSource = "manual"
+}
+
 $body = @{
     job_key = $jobKey
+    trigger_source = $triggerSource
     requested_by = $requestedBy
     job_kwargs = $jobKwargs
     payload = $payload

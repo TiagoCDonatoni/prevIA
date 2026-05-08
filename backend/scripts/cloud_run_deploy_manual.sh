@@ -17,6 +17,8 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com \
   sqladmin.googleapis.com \
+  cloudscheduler.googleapis.com \
+  iam.googleapis.com \
   --project "${GCP_PROJECT_ID}"
 
 gcloud run deploy "${CLOUD_RUN_SERVICE}" \

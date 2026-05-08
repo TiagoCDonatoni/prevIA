@@ -53,6 +53,47 @@ def _merge_payloads(
     merged.update(explicit_payload or {})
     return merged
 
+def _extract_counters(raw_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(raw_result, dict):
+        return {}
+
+    explicit = raw_result.get("counters")
+    if isinstance(explicit, dict):
+        return dict(explicit)
+
+    ignored_keys = {
+        "ok",
+        "error",
+        "message",
+        "diagnostics",
+        "steps",
+        "traceback",
+        "result",
+        "data",
+    }
+
+    counters: Dict[str, Any] = {}
+
+    for key, value in raw_result.items():
+        if key in ignored_keys:
+            continue
+
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            counters[key] = value
+
+    return counters
+
+def _normalize_trigger_source(value: Optional[str]) -> str:
+    raw = str(value or "manual").strip().lower()
+
+    if raw in {"cloud_scheduler", "cloud-scheduler", "cron"}:
+        return "scheduler"
+
+    if raw in {"api", "manual", "scheduler"}:
+        return raw
+
+    return raw or "manual"
+
 
 def _append_event(
     conn,
@@ -96,6 +137,7 @@ def run_job(
     **job_kwargs: Any,
 ) -> JobRunResult:
     t0 = time.perf_counter()
+    trigger_source = _normalize_trigger_source(trigger_source)
 
     scope = _infer_scope(job_kwargs)
     scope_type = scope["scope_type"] or "global"
@@ -131,7 +173,7 @@ def run_job(
     effective_enabled = bool(job_def["enabled_by_default"])
     block_reason: Optional[str] = None
 
-    if trigger_source == "manual" and not job_def["allow_manual_run"]:
+    if trigger_source in {"manual", "api"} and not job_def["allow_manual_run"]:
         block_reason = "manual_run_disabled"
     elif trigger_source == "scheduler" and not job_def["allow_scheduler_run"]:
         block_reason = "scheduler_run_disabled"
@@ -204,14 +246,34 @@ def run_job(
         )
 
         if block_reason:
+            elapsed_sec = round(time.perf_counter() - t0, 6)
+            duration_ms = int(elapsed_sec * 1000)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ops.ops_job_runs
+                    SET started_at_utc = COALESCE(started_at_utc, created_at_utc),
+                        finished_at_utc = now(),
+                        duration_ms = %(duration_ms)s,
+                        updated_at_utc = now()
+                    WHERE run_id = %(run_id)s
+                    """,
+                    {
+                        "duration_ms": duration_ms,
+                        "run_id": run_id,
+                    },
+                )
+
             conn.commit()
+
             return JobRunResult(
                 ok=False,
                 job_name=job_name,
                 run_id=run_id,
                 attempt_id=None,
                 status="blocked",
-                elapsed_sec=round(time.perf_counter() - t0, 6),
+                elapsed_sec=elapsed_sec,
                 counters={},
                 error=None,
                 blocked_reason=block_reason,
@@ -261,7 +323,7 @@ def run_job(
     try:
         raw_result = job_fn(**effective_job_kwargs)
         ok = bool((raw_result or {}).get("ok", True))
-        counters = dict((raw_result or {}).get("counters") or {})
+        counters = _extract_counters(raw_result)
         error_text = None if ok else str((raw_result or {}).get("error") or "job_returned_not_ok")
         status = "succeeded" if ok else "failed"
 
@@ -359,7 +421,7 @@ def run_job(
         attempt_id=attempt_id,
         status=status,
         elapsed_sec=elapsed_sec,
-        counters=counters if counters else (raw_result or {}),
+        counters=counters,
         error=error_text,
         blocked_reason=None,
     )

@@ -92,6 +92,14 @@ class ImageImportBatchEvaluateRequest(BaseModel):
     request_id: int
     row_ids: List[int]
 
+class ImageImportRowConfirmRequest(BaseModel):
+    request_id: int
+    home_team_id: int
+    away_team_id: int
+    fixture_id: Optional[int] = None
+    league_id: Optional[int] = None
+    season: Optional[int] = None
+    learn_aliases: bool = True
 
 class ImageImportBatchEvaluateResponse(BaseModel):
     ok: bool

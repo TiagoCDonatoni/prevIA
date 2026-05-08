@@ -13,6 +13,7 @@ from src.ops.jobs.odds_refresh import odds_refresh
 from src.ops.jobs.odds_resolve import odds_resolve_batch
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.models_ensure_1x2_v1 import ensure_models_1x2_v1
+from src.ops.jobs.audit_sync import audit_sync_from_product_snapshots
 from src.product.model_registry import get_active_model_version
 from src.core.season_policy import resolve_candidate_seasons
 
@@ -194,6 +195,11 @@ def update_pipeline_run(
             "odds_refresh_runs": 0,
             "events_resolved": 0,
             "snapshots_upserted": 0,
+            "audit_predictions_upserted": 0,
+            "audit_results_upserted": 0,
+            "audit_missing_event_id": 0,
+            "audit_missing_fixture_id": 0,
+            "audit_missing_model_probs": 0,
             "fallbacks": 0,
             "sports_refresh_failures": 0,
             "sports_refresh_retries_used": 0,
@@ -453,6 +459,44 @@ def update_pipeline_run(
                 f"elapsed_ms={league_out['timing_ms']['snapshots']}",
                 flush=True,
             )
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=audit_sync start "
+                f"sport_key={scope.sport_key} league_id={scope.league_id}",
+                flush=True,
+            )
+            step_t0 = perf_counter()
+            audit_sync_out = audit_sync_from_product_snapshots(
+                sport_key=scope.sport_key,
+                league_id=scope.league_id,
+                lookback_days=60,
+                finished_before_hours=1,
+                max_prediction_rows=10000,
+                max_result_rows=10000,
+            )
+            league_out["steps"]["audit_sync"] = audit_sync_out
+            league_out["timing_ms"]["audit_sync"] = int((perf_counter() - step_t0) * 1000)
+
+            audit_predictions_upserted = _safe_int(
+                (audit_sync_out or {}).get("audit_predictions_upserted", 0)
+            )
+            audit_results_upserted = _safe_int(
+                (audit_sync_out or {}).get("audit_results_upserted", 0)
+            )
+            audit_diag = (audit_sync_out or {}).get("diagnostics") or {}
+            audit_missing_event_id = _safe_int(audit_diag.get("missing_event_id", 0))
+            audit_missing_fixture_id = _safe_int(audit_diag.get("missing_fixture_id", 0))
+            audit_missing_model_probs = _safe_int(audit_diag.get("missing_model_probs", 0))
+
+            print(
+                f"[UPDATE_PIPELINE] [{idx}/{total}] step=audit_sync done "
+                f"audit_predictions_upserted={audit_predictions_upserted} "
+                f"audit_results_upserted={audit_results_upserted} "
+                f"missing_event_id={audit_missing_event_id} "
+                f"missing_fixture_id={audit_missing_fixture_id} "
+                f"missing_model_probs={audit_missing_model_probs} "
+                f"elapsed_ms={league_out['timing_ms']['audit_sync']}",
+                flush=True,
+            )
 
             result["summary"]["leagues_processed"] += 1
             result["summary"]["fixtures_updated"] += fixtures_upserts
@@ -461,6 +505,11 @@ def update_pipeline_run(
             result["summary"]["odds_refresh_runs"] += 1
             result["summary"]["events_resolved"] += resolve_persisted
             result["summary"]["snapshots_upserted"] += snapshots_upserted
+            result["summary"]["audit_predictions_upserted"] += audit_predictions_upserted
+            result["summary"]["audit_results_upserted"] += audit_results_upserted
+            result["summary"]["audit_missing_event_id"] += audit_missing_event_id
+            result["summary"]["audit_missing_fixture_id"] += audit_missing_fixture_id
+            result["summary"]["audit_missing_model_probs"] += audit_missing_model_probs
             result["summary"]["fallbacks"] += snapshots_fallback
 
 
@@ -502,3 +551,218 @@ def update_pipeline_run(
     )
 
     return result
+
+
+def update_pipeline_run_shard(
+    *,
+    shard_index: int = 0,
+    shard_count: int = 10,
+    max_scopes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Cloud-safe wrapper para o update_pipeline_run.
+
+    Divide as ligas approved/enabled em shards estáveis, usando a ordem
+    alfabética de sport_key já definida por _load_pipeline_scopes().
+
+    Exemplo:
+      shard_count=10, shard_index=0 -> roda ~1/10 das ligas.
+    """
+    started_at = datetime.now(timezone.utc)
+    global_t0 = perf_counter()
+
+    try:
+        shard_index = int(shard_index)
+        shard_count = int(shard_count)
+    except Exception:
+        return {
+            "ok": False,
+            "error": "invalid_shard_params",
+            "message": "shard_index and shard_count must be integers",
+            "counters": {
+                "shard_index": shard_index,
+                "shard_count": shard_count,
+                "count": 0,
+                "succeeded_count": 0,
+                "failed_count": 0,
+            },
+        }
+
+    if shard_count <= 0:
+        return {
+            "ok": False,
+            "error": "invalid_shard_count",
+            "message": "shard_count must be greater than zero",
+            "counters": {
+                "shard_index": shard_index,
+                "shard_count": shard_count,
+                "count": 0,
+                "succeeded_count": 0,
+                "failed_count": 0,
+            },
+        }
+
+    if shard_index < 0 or shard_index >= shard_count:
+        return {
+            "ok": False,
+            "error": "invalid_shard_index",
+            "message": "shard_index must be between 0 and shard_count - 1",
+            "counters": {
+                "shard_index": shard_index,
+                "shard_count": shard_count,
+                "count": 0,
+                "succeeded_count": 0,
+                "failed_count": 0,
+            },
+        }
+
+    all_scopes = _load_pipeline_scopes(only_sport_key=None)
+
+    selected_scopes = [
+        scope
+        for idx, scope in enumerate(all_scopes)
+        if idx % shard_count == shard_index
+    ]
+
+    if max_scopes is not None:
+        try:
+            max_scopes_int = int(max_scopes)
+        except Exception:
+            max_scopes_int = 0
+
+        if max_scopes_int > 0:
+            selected_scopes = selected_scopes[:max_scopes_int]
+
+    items: List[Dict[str, Any]] = []
+    succeeded_count = 0
+    failed_count = 0
+
+    summary: Dict[str, Any] = {
+        "shard_index": shard_index,
+        "shard_count": shard_count,
+        "total_available_scopes": len(all_scopes),
+        "selected_scopes": len(selected_scopes),
+        "leagues_processed": 0,
+        "fixtures_updated": 0,
+        "stats_inserted": 0,
+        "stats_deleted": 0,
+        "odds_refresh_runs": 0,
+        "events_resolved": 0,
+        "snapshots_upserted": 0,
+        "audit_predictions_upserted": 0,
+        "audit_results_upserted": 0,
+        "warnings": 0,
+        "errors": 0,
+        "elapsed_ms": 0,
+    }
+
+    print(
+        f"[UPDATE_PIPELINE_SHARD] start shard_index={shard_index} "
+        f"shard_count={shard_count} selected_scopes={len(selected_scopes)}",
+        flush=True,
+    )
+
+    for idx, scope in enumerate(selected_scopes, start=1):
+        item_t0 = perf_counter()
+
+        item: Dict[str, Any] = {
+            "ok": True,
+            "sport_key": scope.sport_key,
+            "league_id": scope.league_id,
+            "shard_index": shard_index,
+            "shard_count": shard_count,
+            "timing_ms": {},
+        }
+
+        print(
+            f"[UPDATE_PIPELINE_SHARD] [{idx}/{len(selected_scopes)}] "
+            f"start sport_key={scope.sport_key} league_id={scope.league_id}",
+            flush=True,
+        )
+
+        try:
+            out = update_pipeline_run(only_sport_key=scope.sport_key)
+            out = out if isinstance(out, dict) else {"result": out}
+
+            child_summary = out.get("summary") or {}
+            ok = bool(out.get("ok", True))
+
+            item["ok"] = ok
+            item["summary"] = child_summary
+            item["result"] = out
+
+            if ok:
+                succeeded_count += 1
+            else:
+                failed_count += 1
+                summary["errors"] += 1
+
+            summary["leagues_processed"] += _safe_int(child_summary.get("leagues_processed", 0))
+            summary["fixtures_updated"] += _safe_int(child_summary.get("fixtures_updated", 0))
+            summary["stats_inserted"] += _safe_int(child_summary.get("stats_inserted", 0))
+            summary["stats_deleted"] += _safe_int(child_summary.get("stats_deleted", 0))
+            summary["odds_refresh_runs"] += _safe_int(child_summary.get("odds_refresh_runs", 0))
+            summary["events_resolved"] += _safe_int(child_summary.get("events_resolved", 0))
+            summary["snapshots_upserted"] += _safe_int(child_summary.get("snapshots_upserted", 0))
+            summary["audit_predictions_upserted"] += _safe_int(
+                child_summary.get("audit_predictions_upserted", 0)
+            )
+            summary["audit_results_upserted"] += _safe_int(
+                child_summary.get("audit_results_upserted", 0)
+            )
+            summary["warnings"] += _safe_int(child_summary.get("warnings", 0))
+            summary["errors"] += _safe_int(child_summary.get("errors", 0))
+
+        except Exception as exc:
+            failed_count += 1
+            summary["errors"] += 1
+            item["ok"] = False
+            item["exception"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+
+            print(
+                f"[UPDATE_PIPELINE_SHARD] [{idx}/{len(selected_scopes)}] "
+                f"error sport_key={scope.sport_key} error={exc}",
+                flush=True,
+            )
+
+        item["timing_ms"]["total"] = int((perf_counter() - item_t0) * 1000)
+        items.append(item)
+
+        print(
+            f"[UPDATE_PIPELINE_SHARD] [{idx}/{len(selected_scopes)}] "
+            f"done sport_key={scope.sport_key} ok={item['ok']} "
+            f"elapsed_ms={item['timing_ms']['total']}",
+            flush=True,
+        )
+
+    elapsed_ms = int((perf_counter() - global_t0) * 1000)
+    summary["elapsed_ms"] = elapsed_ms
+
+    counters = {
+        "shard_index": shard_index,
+        "shard_count": shard_count,
+        "count": len(selected_scopes),
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+        "elapsed_ms": elapsed_ms,
+    }
+
+    return {
+        "ok": failed_count == 0,
+        "job": "update_pipeline_run_shard",
+        "started_at_utc": started_at.isoformat(),
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        "shard_index": shard_index,
+        "shard_count": shard_count,
+        "total_available_scopes": len(all_scopes),
+        "count": len(selected_scopes),
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+        "summary": summary,
+        "items": items,
+        "counters": counters,
+    }

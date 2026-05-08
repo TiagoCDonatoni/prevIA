@@ -22,6 +22,7 @@ from src.http.internal_ops_router import router as internal_ops_router
 from src.http.admin_users_router import router as admin_users_router
 from src.http.billing_router import router as billing_router
 from src.http.admin_access_campaigns_router import router as admin_access_campaigns_router
+from src.http.telemetry_router import router as telemetry_router, admin_router as admin_telemetry_router
 
 
 def create_app() -> FastAPI:
@@ -62,8 +63,9 @@ def create_app() -> FastAPI:
 
     api.include_router(admin_catalog_router)
     api.include_router(product_leagues_router)
-    api.include_router(product_manual_analysis_router)
-    api.include_router(product_manual_analysis_image_router)
+    if settings.product_manual_analysis_enabled:
+        api.include_router(product_manual_analysis_router)
+        api.include_router(product_manual_analysis_image_router)
     api.include_router(product_index_router)
     api.include_router(auth_router)
     api.include_router(billing_router)
@@ -71,6 +73,8 @@ def create_app() -> FastAPI:
     api.include_router(internal_ops_router)
     api.include_router(admin_users_router)
     api.include_router(admin_access_campaigns_router)
+    api.include_router(telemetry_router)
+    api.include_router(admin_telemetry_router)
 
     @api.get("/", response_class=HTMLResponse)
     def index():
@@ -89,6 +93,7 @@ def create_app() -> FastAPI:
             "frontend_allowed_origins": settings.frontend_allowed_origins,
             "product_auth_enabled": settings.product_auth_enabled,
             "admin_auth_enabled": settings.admin_auth_enabled,
+            "product_manual_analysis_enabled": settings.product_manual_analysis_enabled,
             "product_dev_auto_login_enabled": settings.product_dev_auto_login_enabled,
             "admin_dev_bypass_enabled": settings.admin_dev_bypass_enabled,
             "apifootball_base_url_set": bool(settings.apifootball_base_url),

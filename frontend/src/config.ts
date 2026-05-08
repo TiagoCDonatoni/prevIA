@@ -30,6 +30,9 @@ export const PRODUCT_DEV_AUTO_LOGIN_PLAN =
 export const ENABLE_PRODUCT_APP =
   envFlag(import.meta.env.VITE_ENABLE_PRODUCT_APP, false);
 
+export const ENABLE_PRODUCT_MANUAL_ANALYSIS_PAGE =
+  envFlag(import.meta.env.VITE_ENABLE_PRODUCT_MANUAL_ANALYSIS_PAGE, true);
+
 export const ENABLE_ADMIN_APP =
   envFlag(import.meta.env.VITE_ENABLE_ADMIN_APP, false);
 

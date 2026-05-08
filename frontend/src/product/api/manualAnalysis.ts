@@ -19,7 +19,9 @@ export type ManualAnalysisComparison = {
   fair_odd: number | null;
   interesting_above: number | null;
   edge: number | null;
-  classification: "GOOD" | "ALIGNED" | "BAD";
+  classification: "GOOD" | "ALIGNED" | "BAD" | "REVIEW";
+  guardrail_blocked?: boolean;
+  guardrail_reasons?: string[];
 };
 
 export type ManualAnalysisMarketSnapshot = {
@@ -33,6 +35,18 @@ export type ManualAnalysisMarketSnapshot = {
       overall?: number | null;
       level?: string | null;
       source?: string | null;
+      factors?: Record<string, unknown> | null;
+      coverage?: Record<string, unknown> | null;
+      reasons?: string[] | null;
+    };
+    guardrails?: {
+      recommendation_allowed?: boolean | null;
+      blocked_reasons?: string[] | null;
+      confidence_level?: string | null;
+      confidence_overall?: number | null;
+      coverage_tier?: string | null;
+      lambda_floor_hit?: boolean | null;
+      strength_context?: Record<string, unknown> | null;
     };
     inputs?: ManualAnalysisResponse["model"] extends infer M
       ? M extends { inputs?: infer I }
@@ -246,6 +260,40 @@ export type ManualAnalysisImageBatchEvaluateResponse = {
   skipped: Array<Record<string, unknown>>;
 };
 
+export type ManualAnalysisImageRowConfirmRequest = {
+  request_id: number;
+  home_team_id: number;
+  away_team_id: number;
+  fixture_id?: number | null;
+  league_id?: number | null;
+  season?: number | null;
+  learn_aliases?: boolean;
+};
+
+export type ManualAnalysisImageRowConfirmResponse = {
+  ok: boolean;
+  item?: ManualAnalysisImageImportPreviewItem;
+  code?: string;
+  message?: string;
+};
+
+export type ManualAnalysisImageRowConfirmRequest = {
+  request_id: number;
+  home_team_id: number;
+  away_team_id: number;
+  fixture_id?: number | null;
+  league_id?: number | null;
+  season?: number | null;
+  learn_aliases?: boolean;
+};
+
+export type ManualAnalysisImageRowConfirmResponse = {
+  ok: boolean;
+  item?: ManualAnalysisImageImportPreviewItem;
+  code?: string;
+  message?: string;
+};
+
 export async function postManualAnalysisEvaluate(
   payload: ManualAnalysisEvaluateRequest
 ): Promise<ManualAnalysisResponse> {
@@ -318,6 +366,29 @@ export async function postManualAnalysisImageEvaluateBatch(
 
   if (!res.ok && !data.ok) return data;
   if (!res.ok) throw new Error(`manual_analysis_image_batch_failed:${res.status}`);
+
+  return data;
+}
+
+export async function postManualAnalysisImageConfirmRow(
+  rowId: number,
+  payload: ManualAnalysisImageRowConfirmRequest
+): Promise<ManualAnalysisImageRowConfirmResponse> {
+  const res = await fetch(`${API_BASE_URL}/product/manual-analysis/image-import/rows/${rowId}/confirm`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await res.json().catch(() => ({}))) as ManualAnalysisImageRowConfirmResponse;
+
+  if (!res.ok && !data.ok) return data;
+  if (!res.ok) throw new Error(`manual_analysis_image_confirm_failed:${res.status}`);
 
   return data;
 }

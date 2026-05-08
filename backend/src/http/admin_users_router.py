@@ -102,6 +102,24 @@ def _required_reason(raw: Any) -> str:
         raise HTTPException(status_code=400, detail="reason too long")
     return value
 
+def _actor_user_id_or_none(actor: Dict[str, Any]) -> int | None:
+    """
+    Admin dev bypass usa user_id=0 apenas como marcador local.
+    Nunca devemos gravar 0 em colunas FK para app.users.
+    """
+    user = actor.get("user") or {}
+    raw_user_id = user.get("user_id")
+
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        return None
+
+    if user_id <= 0:
+        return None
+
+    return user_id
+
 def _require_capability(actor: Dict[str, Any], capability_key: str) -> None:
     access_context = actor.get("access") or {}
     if not actor_has_capability(access_context, capability_key):
@@ -352,7 +370,7 @@ def admin_create_user(
     password = str(payload.get("password") or "")
     full_name = str(payload.get("full_name") or "").strip() or None
     reason = _required_reason(payload.get("reason"))
-    actor_user_id = int(actor["user"]["user_id"]) if actor.get("user") else None
+    actor_user_id = _actor_user_id_or_none(actor)
 
     if not _is_valid_email(email_normalized):
         raise HTTPException(status_code=400, detail="invalid email")
@@ -540,6 +558,8 @@ def admin_list_users(
     normalized_status = str(user_status or "").strip()
     qq = str(q or "").strip()
 
+    fetch_limit = limit + 1
+
     sql = """
     WITH role_agg AS (
         SELECT
@@ -584,7 +604,6 @@ def admin_list_users(
             s.subscription_id DESC
     )
     SELECT
-        COUNT(*) OVER() AS total_count,
         u.user_id,
         u.email,
         u.full_name,
@@ -614,7 +633,7 @@ def admin_list_users(
       AND (%(plan_code)s = '' OR COALESCE(cs.plan_code, 'FREE') = %(plan_code)s)
       AND (%(role_key)s = '' OR %(role_key)s = ANY(COALESCE(ra.active_role_keys, ARRAY[]::text[])))
     ORDER BY u.created_at_utc DESC, u.user_id DESC
-    LIMIT %(limit)s
+    LIMIT %(fetch_limit)s
     OFFSET %(offset)s
     """
 
@@ -628,19 +647,18 @@ def admin_list_users(
                     "user_status": normalized_status,
                     "plan_code": normalized_plan_code,
                     "role_key": normalized_role_key,
-                    "limit": limit,
+                    "fetch_limit": fetch_limit,
                     "offset": offset,
                 },
             )
-            rows = cur.fetchall() or []
+            raw_rows = cur.fetchall() or []
+            has_more = len(raw_rows) > limit
+            rows = raw_rows[:limit]
 
             items: List[Dict[str, Any]] = []
-            total_count = 0
 
             for row in rows:
-                total_count = int(row[0] or 0)
                 (
-                    _total_count,
                     user_id,
                     email,
                     full_name,
@@ -703,12 +721,19 @@ def admin_list_users(
                     }
                 )
 
+    known_count = offset + len(items) + (1 if has_more else 0)
+
     return {
         "ok": True,
         "items": items,
-        "count": total_count,
+        "count": known_count,
+        "known_count": known_count,
+        "count_is_exact": not has_more,
+        "has_more": has_more,
         "limit": limit,
         "offset": offset,
+        "next_offset": offset + limit if has_more else None,
+        "previous_offset": max(0, offset - limit) if offset > 0 else None,
     }
 
 
@@ -803,7 +828,7 @@ def admin_set_user_status(
 
     next_status = _safe_user_status(payload.get("status"))
     reason = _required_reason(payload.get("reason"))
-    actor_user_id = int(actor["user"]["user_id"]) if actor.get("user") else None
+    actor_user_id = _actor_user_id_or_none(actor)
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -851,7 +876,7 @@ def admin_set_user_plan(
 
     next_plan_code = _safe_plan_code(payload.get("plan_code"))
     reason = _required_reason(payload.get("reason"))
-    actor_user_id = int(actor["user"]["user_id"]) if actor.get("user") else None
+    actor_user_id = _actor_user_id_or_none(actor)
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -971,7 +996,7 @@ def admin_upsert_user_role(
     is_active = bool(payload.get("is_active"))
     notes = str(payload.get("notes") or "").strip() or None
     reason = _required_reason(payload.get("reason"))
-    actor_user_id = int(actor["user"]["user_id"]) if actor.get("user") else None
+    actor_user_id = _actor_user_id_or_none(actor)
 
     if not role_key:
         raise HTTPException(status_code=400, detail="role_key is required")
@@ -1105,7 +1130,7 @@ def admin_grant_user_credits(
         raise HTTPException(status_code=400, detail="credits too high for a single grant")
 
     reason = _required_reason(payload.get("reason"))
-    actor_user_id = int(actor["user"]["user_id"]) if actor.get("user") else None
+    actor_user_id = _actor_user_id_or_none(actor)
     date_key = _today_date_key()
 
     with pg_conn() as conn:

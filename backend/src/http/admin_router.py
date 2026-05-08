@@ -15,6 +15,7 @@ from src.provider.apifootball.client import ApiFootballClient
 from src.etl.raw_ingest_pg import insert_raw_response
 from src.etl.core_etl_pg import run_core_etl
 from src.internal_access.guards import require_admin_access
+from src.ops.jobs.audit_sync import audit_sync_from_product_snapshots
 
 admin_router = APIRouter(
     prefix="/admin",
@@ -723,7 +724,12 @@ def _audit_best_side_prob(probs: Optional[Dict[str, float]], best_side: Optional
     return float(probs[best_side])
 
 
-def _audit_window_bounds(window_days: int, offset_windows: int = 0) -> Tuple[datetime, datetime]:
+def _audit_window_bounds(window_days: int, offset_windows: int = 0) -> Tuple[Optional[datetime], Optional[datetime]]:
+    # window_days=0 means full historical audit. In this mode there is no
+    # current/previous period because the query intentionally has no date bounds.
+    if int(window_days) <= 0:
+        return None, None
+
     now_utc = datetime.now(timezone.utc)
     offset = max(0, int(offset_windows))
     end_utc = now_utc - timedelta(days=int(window_days) * offset)
@@ -739,11 +745,18 @@ def _audit_pick_rows(
     artifact_filename: Optional[str],
     min_confidence: str,
     offset_windows: int = 0,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    only_severe: bool = False,
+    severe_threshold: float = 0.70,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
     start_utc, end_utc = _audit_window_bounds(window_days=window_days, offset_windows=offset_windows)
     confs = _audit_conf_values(min_confidence)
 
-    sql = """
+    limit_sql = "LIMIT %(limit)s" if limit is not None else ""
+    offset_sql = "OFFSET %(offset)s" if limit is not None and int(offset) > 0 else ""
+
+    sql = f"""
       WITH cand AS (
         SELECT
           p.event_id,
@@ -774,8 +787,8 @@ def _audit_pick_rows(
           ON r.event_id = p.event_id
         WHERE p.kickoff_utc IS NOT NULL
           AND p.captured_at_utc IS NOT NULL
-          AND p.kickoff_utc >= %(start_utc)s
-          AND p.kickoff_utc <= %(end_utc)s
+          AND (%(start_utc)s::timestamptz IS NULL OR p.kickoff_utc >= %(start_utc)s::timestamptz)
+          AND (%(end_utc)s::timestamptz IS NULL OR p.kickoff_utc <= %(end_utc)s::timestamptz)
           AND (%(league_id)s::int IS NULL OR p.league_id = %(league_id)s::int)
           AND (%(season)s::int IS NULL OR p.season = %(season)s::int)
           AND (%(artifact_filename)s::text IS NULL OR p.artifact_filename = %(artifact_filename)s::text)
@@ -787,6 +800,28 @@ def _audit_pick_rows(
           *
         FROM cand
         ORDER BY event_id, artifact_filename, captured_at_utc DESC
+      ),
+      classified AS (
+        SELECT
+          *,
+          CASE
+            WHEN p_model_h IS NULL OR p_model_d IS NULL OR p_model_a IS NULL THEN NULL
+            WHEN p_model_h >= p_model_d AND p_model_h >= p_model_a THEN 'H'
+            WHEN p_model_d >= p_model_h AND p_model_d >= p_model_a THEN 'D'
+            ELSE 'A'
+          END AS model_top_side
+        FROM picked
+      ),
+      scored AS (
+        SELECT
+          *,
+          CASE model_top_side
+            WHEN 'H' THEN p_model_h
+            WHEN 'D' THEN p_model_d
+            WHEN 'A' THEN p_model_a
+            ELSE NULL
+          END AS model_top_prob
+        FROM classified
       )
       SELECT
         event_id,
@@ -810,8 +845,16 @@ def _audit_pick_rows(
         result_1x2,
         home_goals,
         away_goals
-      FROM picked
+      FROM scored
+      WHERE (%(only_severe)s = FALSE OR (
+        result_1x2 IN ('H','D','A')
+        AND model_top_side IN ('H','D','A')
+        AND model_top_prob >= %(severe_threshold)s
+        AND model_top_side <> result_1x2
+      ))
       ORDER BY kickoff_utc DESC, event_id ASC
+      {limit_sql}
+      {offset_sql}
     """
 
     with pg_conn() as conn:
@@ -826,6 +869,10 @@ def _audit_pick_rows(
                     "artifact_filename": artifact_filename,
                     "confs": confs,
                     "cutoff_hours": int(cutoff_hours),
+                    "limit": int(limit) if limit is not None else None,
+                    "offset": max(0, int(offset)),
+                    "only_severe": bool(only_severe),
+                    "severe_threshold": float(severe_threshold),
                 },
             )
             rows = cur.fetchall()
@@ -910,12 +957,11 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
             model_top = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
             sum_top1_model += 1.0 if model_top == outcome else 0.0
 
-            best_side = row.get("best_side")
-            if best_side not in ("H", "D", "A"):
-                best_side = model_top
-
-            best_side_prob = _audit_best_side_prob(model_probs, best_side)
-            if best_side_prob is not None and best_side != outcome and best_side_prob >= float(severe_threshold):
+            # Severe miss must audit the model's own top probability, not the persisted
+            # best EV side. EV can point to a different outcome and would undercount
+            # high-confidence model mistakes.
+            model_top_prob = _audit_best_side_prob(model_probs, model_top)
+            if model_top_prob is not None and model_top != outcome and model_top_prob >= float(severe_threshold):
                 severe_miss_count += 1
 
         if market_probs:
@@ -976,146 +1022,40 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
 def admin_odds_audit_sync_results(
     league_id: Optional[int] = Query(default=None, ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    max_rows: int = Query(default=500, ge=1, le=5000),
+    max_rows: int = Query(default=10000, ge=1, le=50000),
     finished_before_hours: int = Query(default=1, ge=0, le=168),
-    lookback_days: Optional[int] = Query(default=None, ge=1, le=30),
+    lookback_days: Optional[int] = Query(default=None, ge=1, le=3650),
 ) -> Dict[str, Any]:
     """
-    Preenche odds.audit_result usando core.fixtures para eventos auditados que ja terminaram.
+    Sincroniza a auditoria a partir do produto:
+      1) product.matchup_snapshot_v1 -> odds.audit_predictions
+      2) core.fixtures -> odds.audit_result
+
+    Mantém os campos antigos (inserted/scanned) para compatibilidade com a tela.
     """
 
-    now_utc = datetime.now(timezone.utc)
-    cutoff = now_utc - timedelta(hours=int(finished_before_hours))
-
-    lookback_utc = (
-        now_utc - timedelta(days=int(lookback_days))
-        if lookback_days is not None
-        else None
+    out = audit_sync_from_product_snapshots(
+        sport_key=None,
+        league_id=league_id,
+        season=season,
+        lookback_days=int(lookback_days) if lookback_days is not None else 60,
+        finished_before_hours=finished_before_hours,
+        max_prediction_rows=max_rows,
+        max_result_rows=max_rows,
     )
 
-    sql_pick = """
-      WITH pending AS (
-        SELECT DISTINCT ON (p.event_id)
-          p.event_id,
-          p.fixture_id,
-          p.league_id,
-          p.season,
-          p.kickoff_utc,
-          f.goals_home,
-          f.goals_away
-        FROM odds.audit_predictions p
-        JOIN core.fixtures f
-          ON f.fixture_id = p.fixture_id
-        LEFT JOIN odds.audit_result r
-          ON r.event_id = p.event_id
-        WHERE p.fixture_id IS NOT NULL
-          AND r.event_id IS NULL
-          AND f.is_finished = TRUE
-          AND COALESCE(f.is_cancelled, FALSE) = FALSE
-          AND p.kickoff_utc IS NOT NULL
-          AND p.kickoff_utc <= %(cutoff)s
-          AND (%(lookback_utc)s IS NULL OR p.kickoff_utc >= %(lookback_utc)s)
-          AND (%(league_id)s::int IS NULL OR p.league_id = %(league_id)s::int)
-          AND (%(season)s::int IS NULL OR p.season = %(season)s::int)
-        ORDER BY p.event_id, p.updated_at_utc DESC NULLS LAST, p.created_at_utc DESC
-      )
-      SELECT
-        event_id,
-        fixture_id,
-        league_id,
-        season,
-        kickoff_utc,
-        goals_home,
-        goals_away
-      FROM pending
-      ORDER BY kickoff_utc DESC
-      LIMIT %(max_rows)s
-    """
-
-    sql_ins = """
-      INSERT INTO odds.audit_result (
-        event_id,
-        fixture_id,
-        league_id,
-        season,
-        kickoff_utc,
-        result_1x2,
-        home_goals,
-        away_goals,
-        finished_at_utc,
-        updated_at_utc
-      )
-      VALUES (
-        %(event_id)s,
-        %(fixture_id)s,
-        %(league_id)s,
-        %(season)s,
-        %(kickoff_utc)s,
-        %(result_1x2)s,
-        %(home_goals)s,
-        %(away_goals)s,
-        now(),
-        now()
-      )
-      ON CONFLICT (event_id) DO UPDATE SET
-        fixture_id = EXCLUDED.fixture_id,
-        league_id = EXCLUDED.league_id,
-        season = EXCLUDED.season,
-        kickoff_utc = EXCLUDED.kickoff_utc,
-        result_1x2 = EXCLUDED.result_1x2,
-        home_goals = EXCLUDED.home_goals,
-        away_goals = EXCLUDED.away_goals,
-        finished_at_utc = now(),
-        updated_at_utc = now()
-    """
-
-    inserted = 0
-    rows: List[Tuple[Any, ...]] = []
-
-    with pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql_pick,
-                    {
-                        "cutoff": cutoff,
-                        "lookback_utc": lookback_utc,
-                        "league_id": league_id,
-                        "season": season,
-                        "max_rows": max_rows,
-                    }
-            )
-            rows = cur.fetchall()
-
-        with conn.cursor() as cur:
-            for (event_id, fixture_id, league_id_db, season_db, kickoff_utc, goals_home, goals_away) in rows:
-                if goals_home is None or goals_away is None:
-                    continue
-
-                result_1x2 = _label_1x2(int(goals_home), int(goals_away))
-
-                cur.execute(
-                    sql_ins,
-                    {
-                        "event_id": event_id,
-                        "fixture_id": fixture_id,
-                        "league_id": league_id_db,
-                        "season": season_db,
-                        "kickoff_utc": kickoff_utc,
-                        "result_1x2": result_1x2,
-                        "home_goals": int(goals_home),
-                        "away_goals": int(goals_away),
-                    },
-                )
-                inserted += 1
-
-        conn.commit()
+    diagnostics = out.get("diagnostics") or {}
+    result_step = ((out.get("steps") or {}).get("results") or {})
 
     return {
         "ok": True,
-        "inserted": inserted,
-        "scanned": len(rows),
-        "cutoff_utc": _iso_utc_or_none(cutoff),
-        "lookback_utc": _iso_utc_or_none(lookback_utc),
+        "inserted": int(out.get("audit_results_upserted") or 0),
+        "scanned": int(diagnostics.get("eligible_prediction_snapshots") or 0),
+        "cutoff_utc": result_step.get("cutoff_utc"),
+        "lookback_utc": result_step.get("lookback_utc"),
+        "audit_predictions_upserted": int(out.get("audit_predictions_upserted") or 0),
+        "audit_results_upserted": int(out.get("audit_results_upserted") or 0),
+        "diagnostics": diagnostics,
     }
 
 
@@ -1123,7 +1063,7 @@ def admin_odds_audit_sync_results(
 def admin_odds_audit_reliability(
     league_id: Optional[int] = Query(default=None, ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    window_days: int = Query(default=30, ge=1, le=365),
+    window_days: int = Query(default=30, ge=0, le=3650),
     cutoff_hours: int = Query(default=6, ge=0, le=168),
     artifact_filename: Optional[str] = Query(default=None),
     min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
@@ -1161,7 +1101,7 @@ def admin_odds_audit_reliability(
 @admin_odds_router.get("/audit/reliability/by-league")
 def admin_odds_audit_reliability_by_league(
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    window_days: int = Query(default=30, ge=1, le=365),
+    window_days: int = Query(default=30, ge=0, le=3650),
     cutoff_hours: int = Query(default=6, ge=0, le=168),
     artifact_filename: Optional[str] = Query(default=None),
     min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
@@ -1216,15 +1156,17 @@ def admin_odds_audit_reliability_by_league(
 def admin_odds_audit_reliability_events(
     league_id: Optional[int] = Query(default=None, ge=1),
     season: Optional[int] = Query(default=None, ge=1900, le=2100),
-    window_days: int = Query(default=30, ge=1, le=365),
+    window_days: int = Query(default=30, ge=0, le=3650),
     cutoff_hours: int = Query(default=6, ge=0, le=168),
     artifact_filename: Optional[str] = Query(default=None),
     min_confidence: str = Query(default="NONE", pattern="^(NONE|ILIKE|EXACT)$"),
     severe_threshold: float = Query(default=0.70, ge=0.50, le=0.99),
     only_severe: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     offset_windows: int = Query(default=0, ge=0, le=24),
 ) -> Dict[str, Any]:
+    fetch_limit = int(limit) + 1
     rows, start_utc, end_utc = _audit_pick_rows(
         league_id=league_id,
         season=season,
@@ -1233,7 +1175,13 @@ def admin_odds_audit_reliability_events(
         artifact_filename=artifact_filename,
         min_confidence=min_confidence,
         offset_windows=offset_windows,
+        limit=fetch_limit,
+        offset=offset,
+        only_severe=only_severe,
+        severe_threshold=severe_threshold,
     )
+    has_more = len(rows) > int(limit)
+    rows = rows[: int(limit)]
 
     event_rows: List[Dict[str, Any]] = []
     for row in rows:
@@ -1242,7 +1190,10 @@ def admin_odds_audit_reliability_events(
         market_probs = row.get("market_probs")
         best_side = row.get("best_side")
 
-        if model_probs and best_side not in ("H", "D", "A"):
+        # Reliability drilldown should show the model top1 side. The persisted
+        # best_side is the best EV side, which is a betting decision, not the
+        # highest-probability model prediction.
+        if model_probs:
             best_side = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
 
         best_side_prob = _audit_best_side_prob(model_probs, best_side)
@@ -1314,6 +1265,8 @@ def admin_odds_audit_reliability_events(
             "severe_threshold": severe_threshold,
             "only_severe": only_severe,
             "limit": limit,
+            "offset": offset,
+            "has_more": has_more,            
             "start_utc": start_utc,
             "end_utc": end_utc,
             "returned": len(event_rows),

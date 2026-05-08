@@ -1,6 +1,15 @@
 {
   "freeAnon": { "name": "Free", "badge": "No login", "desc": "Quick trial without an account" },
-  "free": { "name": "Free+", "badge": "With login", "desc": "Start and try the product" },
+  "free": {
+    "name": "Free+",
+    "badge": "With login",
+    "desc": "Start and try the product",
+    "bullets": [
+      "{limit} credits/day with a free account",
+      "Create a login to keep going without paying",
+      "Ideal for testing the product with more room"
+    ]
+  },
 
   "basic": {
     "name": "Basic",
