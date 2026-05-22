@@ -7,8 +7,12 @@ steps:
     args:
       - "-lc"
       - |
+        set -euxo pipefail
+        node --version
+        npm --version
         cd frontend
-        npm ci
+        npm ci --include=dev
+        chmod -R +x node_modules/.bin || true
         npm run build
 
   - name: "node:20"
@@ -16,5 +20,6 @@ steps:
     args:
       - "-lc"
       - |
+        set -euxo pipefail
         npm install -g firebase-tools
         firebase deploy --project "$PROJECT_ID" --only hosting:landing --non-interactive
