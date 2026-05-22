@@ -724,6 +724,224 @@ def _audit_best_side_prob(probs: Optional[Dict[str, float]], best_side: Optional
     return float(probs[best_side])
 
 
+def _audit_top_side_and_prob(probs: Optional[Dict[str, float]]) -> Tuple[Optional[str], Optional[float]]:
+    if not probs:
+        return None, None
+    side = _top1(probs["H"], probs["D"], probs["A"])
+    return side, _audit_best_side_prob(probs, side)
+
+
+def _audit_market_consensus(probs: Optional[Dict[str, float]]) -> Dict[str, Any]:
+    # v1.1 usa market_probs já persistido em odds.audit_predictions como consenso no-vig.
+    # Quando salvarmos odds por casa no audit, este helper vira o ponto único para trocar
+    # para mediana por bookmaker sem alterar os endpoints nem a tela.
+    if not probs:
+        return {
+            "method": "AUDIT_MARKET_PROBS",
+            "favorite_side": None,
+            "favorite_prob": None,
+            "favorite_margin": None,
+            "favorite_strength": "UNKNOWN",
+        }
+
+    ranked = sorted(
+        [("H", float(probs["H"])), ("D", float(probs["D"])), ("A", float(probs["A"]))],
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    favorite_side, favorite_prob = ranked[0]
+    second_prob = ranked[1][1]
+    margin = favorite_prob - second_prob
+
+    if favorite_prob < 0.45 or margin <= 0.06:
+        strength = "BALANCED_GAME"
+    elif favorite_prob >= 0.65:
+        strength = "STRONG_FAVORITE"
+    elif favorite_prob >= 0.55:
+        strength = "CLEAR_FAVORITE"
+    else:
+        strength = "SOFT_FAVORITE"
+
+    return {
+        "method": "AUDIT_MARKET_PROBS",
+        "favorite_side": favorite_side,
+        "favorite_prob": float(favorite_prob),
+        "favorite_margin": float(margin),
+        "favorite_strength": strength,
+    }
+
+
+def _audit_market_result_class(
+    market_favorite_side: Optional[str],
+    market_favorite_strength: str,
+    outcome: Optional[str],
+) -> str:
+    if market_favorite_side not in ("H", "D", "A") or outcome not in ("H", "D", "A"):
+        return "UNKNOWN"
+    if market_favorite_strength == "BALANCED_GAME":
+        return "MARKET_BALANCED_GAME"
+    if market_favorite_side == outcome:
+        return "MARKET_FAVORITE_HIT"
+    if market_favorite_side in ("H", "A") and outcome == "D":
+        return "MARKET_FAVORITE_DRAW_MISS"
+    if market_favorite_side == "H" and outcome == "A":
+        return "MARKET_FAVORITE_UNDERDOG_MISS"
+    if market_favorite_side == "A" and outcome == "H":
+        return "MARKET_FAVORITE_UNDERDOG_MISS"
+    if market_favorite_side == "D" and outcome in ("H", "A"):
+        return "MARKET_DRAW_FAVORITE_MISS"
+    return "UNKNOWN"
+
+
+def _audit_model_market_outcome_class(
+    model_top_side: Optional[str],
+    market_favorite_side: Optional[str],
+    outcome: Optional[str],
+) -> str:
+    if model_top_side not in ("H", "D", "A") or market_favorite_side not in ("H", "D", "A"):
+        return "UNKNOWN"
+    if outcome not in ("H", "D", "A"):
+        return "UNKNOWN"
+
+    model_hit = model_top_side == outcome
+    market_hit = market_favorite_side == outcome
+
+    if model_hit and market_hit:
+        return "BOTH_HIT"
+    if (not model_hit) and (not market_hit):
+        return "BOTH_MISS"
+    if model_hit and (not market_hit):
+        return "MODEL_HIT_MARKET_MISS"
+    return "MARKET_HIT_MODEL_MISS"
+
+
+def _audit_is_severe_miss(
+    model_top_side: Optional[str],
+    model_top_prob: Optional[float],
+    outcome: Optional[str],
+    severe_threshold: float,
+) -> bool:
+    return bool(
+        outcome in ("H", "D", "A")
+        and model_top_side in ("H", "D", "A")
+        and model_top_prob is not None
+        and float(model_top_prob) >= float(severe_threshold)
+        and model_top_side != outcome
+    )
+
+
+def _audit_enrich_market_validation(row: Dict[str, Any], severe_threshold: float) -> Dict[str, Any]:
+    outcome = row.get("result_1x2")
+    model_probs = row.get("model_probs")
+    market_probs = row.get("market_probs")
+
+    model_top_side, model_top_prob = _audit_top_side_and_prob(model_probs)
+    market = _audit_market_consensus(market_probs)
+    market_favorite_side = market["favorite_side"]
+    market_favorite_prob = market["favorite_prob"]
+    market_favorite_strength = market["favorite_strength"]
+
+    market_favorite_hit = (
+        market_favorite_side == outcome
+        if market_favorite_side in ("H", "D", "A") and outcome in ("H", "D", "A")
+        else None
+    )
+    market_strong_upset = bool(
+        market_favorite_prob is not None
+        and float(market_favorite_prob) >= 0.65
+        and market_favorite_side in ("H", "D", "A")
+        and outcome in ("H", "D", "A")
+        and market_favorite_side != outcome
+    )
+    market_favorite_miss = bool(
+        market_favorite_hit is False
+        and market_favorite_strength != "BALANCED_GAME"
+    )
+
+    market_result_class = _audit_market_result_class(
+        market_favorite_side=market_favorite_side,
+        market_favorite_strength=market_favorite_strength,
+        outcome=outcome,
+    )
+    model_market_agreement = (
+        model_top_side == market_favorite_side
+        if model_top_side in ("H", "D", "A") and market_favorite_side in ("H", "D", "A")
+        else None
+    )
+    model_market_outcome_class = _audit_model_market_outcome_class(
+        model_top_side=model_top_side,
+        market_favorite_side=market_favorite_side,
+        outcome=outcome,
+    )
+    severe_miss = _audit_is_severe_miss(
+        model_top_side=model_top_side,
+        model_top_prob=model_top_prob,
+        outcome=outcome,
+        severe_threshold=severe_threshold,
+    )
+
+    if not severe_miss:
+        severe_triage_class = "NOT_SEVERE_MISS"
+        severe_triage_reason = None
+    elif not market_probs or market_favorite_side not in ("H", "D", "A") or outcome not in ("H", "D", "A"):
+        severe_triage_class = "MISSING_MARKET_CONTEXT"
+        severe_triage_reason = "Sem consenso de mercado suficiente para separar zebra de erro claro."
+    elif market_favorite_strength == "BALANCED_GAME":
+        severe_triage_class = "BALANCED_GAME_NOISE"
+        severe_triage_reason = "Mercado estava equilibrado; erro grave pode refletir jogo aberto/ruído."
+    elif market_strong_upset:
+        severe_triage_class = "ZEBRA_EXPLAINED"
+        severe_triage_reason = "Favorito forte do mercado não confirmou."
+    elif model_market_outcome_class == "MARKET_HIT_MODEL_MISS":
+        severe_triage_class = "CLEAR_MODEL_ERROR"
+        severe_triage_reason = "Mercado acertou e o modelo errou com alta confiança."
+    elif model_market_outcome_class == "BOTH_MISS":
+        severe_triage_class = "MARKET_ALSO_MISSED"
+        severe_triage_reason = "Modelo e consenso de mercado erraram o resultado."
+    else:
+        severe_triage_class = "MARKET_ALSO_MISSED"
+        severe_triage_reason = "Erro grave não ficou classificado como erro claro do modelo."
+
+    clean_without_strong_upsets_eligible = not market_strong_upset
+    clean_without_market_favorite_misses_eligible = not market_favorite_miss
+
+    clean_exclusion_reason = None
+    if market_strong_upset:
+        clean_exclusion_reason = "MARKET_STRONG_UPSET"
+    elif market_result_class in (
+        "MARKET_FAVORITE_DRAW_MISS",
+        "MARKET_FAVORITE_UNDERDOG_MISS",
+        "MARKET_DRAW_FAVORITE_MISS",
+    ):
+        clean_exclusion_reason = market_result_class
+    elif market_favorite_strength == "BALANCED_GAME":
+        clean_exclusion_reason = "MARKET_BALANCED_GAME"
+    elif not market_probs:
+        clean_exclusion_reason = "MISSING_MARKET"
+
+    return {
+        "model_top_side": model_top_side,
+        "model_top_prob": model_top_prob,
+        "market_consensus_method": market["method"],
+        "market_favorite_side": market_favorite_side,
+        "market_favorite_prob": market_favorite_prob,
+        "market_favorite_margin": market["favorite_margin"],
+        "market_favorite_strength": market_favorite_strength,
+        "market_favorite_hit": market_favorite_hit,
+        "market_result_class": market_result_class,
+        "market_strong_upset": market_strong_upset,
+        "market_favorite_miss": market_favorite_miss,
+        "model_market_agreement": model_market_agreement,
+        "model_market_outcome_class": model_market_outcome_class,
+        "severe_miss": severe_miss,
+        "severe_miss_triage_class": severe_triage_class,
+        "severe_miss_triage_reason": severe_triage_reason,
+        "clean_without_strong_upsets_eligible": clean_without_strong_upsets_eligible,
+        "clean_without_market_favorite_misses_eligible": clean_without_market_favorite_misses_eligible,
+        "clean_exclusion_reason": clean_exclusion_reason,
+    }
+
+
 def _audit_window_bounds(window_days: int, offset_windows: int = 0) -> Tuple[Optional[datetime], Optional[datetime]]:
     # window_days=0 means full historical audit. In this mode there is no
     # current/previous period because the query intentionally has no date bounds.
@@ -942,6 +1160,44 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
 
     severe_miss_count = 0
 
+    market_counts = {
+        "with_market_and_result": 0,
+        "market_favorite_hits": 0,
+        "market_favorite_misses": 0,
+        "market_draw_misses": 0,
+        "market_underdog_misses": 0,
+        "market_draw_favorite_misses": 0,
+        "market_balanced_games": 0,
+        "market_strong_upsets": 0,
+        "model_market_agreements": 0,
+        "model_market_disagreements": 0,
+        "both_hit": 0,
+        "both_miss": 0,
+        "model_hit_market_miss": 0,
+        "market_hit_model_miss": 0,
+    }
+
+    bridge_counts = {
+        "both_hit": 0,
+        "both_miss": 0,
+        "model_hit_market_miss": 0,
+        "market_hit_model_miss": 0,
+        "both_miss_strong_upset": 0,
+        "both_miss_balanced_game": 0,
+        "both_miss_draw_vs_favorite": 0,
+        "both_miss_underdog_win": 0,
+    }
+
+    triage_counts = {
+        "severe_misses_clean": 0,
+        "explained_by_strong_upset": 0,
+        "explained_by_market_favorite_miss": 0,
+        "market_also_missed": 0,
+        "market_hit_model_miss": 0,
+        "balanced_game_noise": 0,
+        "missing_market_context": 0,
+    }
+
     for row in rows:
         outcome = row.get("result_1x2")
         if outcome not in ("H", "D", "A"):
@@ -949,33 +1205,96 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
 
         model_probs = row.get("model_probs")
         market_probs = row.get("market_probs")
+        validation = _audit_enrich_market_validation(row, severe_threshold=severe_threshold)
 
         if model_probs:
             n_model += 1
             sum_brier_model += _brier_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome)
             sum_ll_model += _logloss_3(model_probs["H"], model_probs["D"], model_probs["A"], outcome)
-            model_top = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
+            model_top = validation.get("model_top_side")
             sum_top1_model += 1.0 if model_top == outcome else 0.0
 
-            # Severe miss must audit the model's own top probability, not the persisted
-            # best EV side. EV can point to a different outcome and would undercount
-            # high-confidence model mistakes.
-            model_top_prob = _audit_best_side_prob(model_probs, model_top)
-            if model_top_prob is not None and model_top != outcome and model_top_prob >= float(severe_threshold):
+            if validation.get("severe_miss"):
                 severe_miss_count += 1
+
+                triage_class = validation.get("severe_miss_triage_class")
+                if triage_class == "CLEAR_MODEL_ERROR":
+                    triage_counts["severe_misses_clean"] += 1
+                elif triage_class == "MARKET_ALSO_MISSED":
+                    triage_counts["market_also_missed"] += 1
+                elif triage_class == "BALANCED_GAME_NOISE":
+                    triage_counts["balanced_game_noise"] += 1
+                elif triage_class == "MISSING_MARKET_CONTEXT":
+                    triage_counts["missing_market_context"] += 1
+
+                if validation.get("market_strong_upset"):
+                    triage_counts["explained_by_strong_upset"] += 1
+                if validation.get("market_favorite_miss"):
+                    triage_counts["explained_by_market_favorite_miss"] += 1
+                if validation.get("model_market_outcome_class") == "MARKET_HIT_MODEL_MISS":
+                    triage_counts["market_hit_model_miss"] += 1
 
         if market_probs:
             n_market += 1
             sum_brier_mkt += _brier_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome)
             sum_ll_mkt += _logloss_3(market_probs["H"], market_probs["D"], market_probs["A"], outcome)
-            market_top = _top1(market_probs["H"], market_probs["D"], market_probs["A"])
+            market_top = validation.get("market_favorite_side")
             sum_top1_mkt += 1.0 if market_top == outcome else 0.0
+
+            market_counts["with_market_and_result"] += 1
+            if validation.get("market_favorite_hit") is True:
+                market_counts["market_favorite_hits"] += 1
+            elif validation.get("market_favorite_hit") is False:
+                market_counts["market_favorite_misses"] += 1
+
+            market_result_class = validation.get("market_result_class")
+            if market_result_class == "MARKET_FAVORITE_DRAW_MISS":
+                market_counts["market_draw_misses"] += 1
+            elif market_result_class == "MARKET_FAVORITE_UNDERDOG_MISS":
+                market_counts["market_underdog_misses"] += 1
+            elif market_result_class == "MARKET_DRAW_FAVORITE_MISS":
+                market_counts["market_draw_favorite_misses"] += 1
+            elif market_result_class == "MARKET_BALANCED_GAME":
+                market_counts["market_balanced_games"] += 1
+
+            if validation.get("market_strong_upset"):
+                market_counts["market_strong_upsets"] += 1
 
         if model_probs and market_probs:
             n_both += 1
 
+            if validation.get("model_market_agreement") is True:
+                market_counts["model_market_agreements"] += 1
+            elif validation.get("model_market_agreement") is False:
+                market_counts["model_market_disagreements"] += 1
+
+            outcome_class = validation.get("model_market_outcome_class")
+            outcome_key = str(outcome_class or "").lower()
+            if outcome_key in bridge_counts:
+                bridge_counts[outcome_key] += 1
+            if outcome_key in ("both_hit", "both_miss", "model_hit_market_miss", "market_hit_model_miss"):
+                market_counts[outcome_key] += 1
+
+            if outcome_class == "BOTH_MISS":
+                if validation.get("market_strong_upset"):
+                    bridge_counts["both_miss_strong_upset"] += 1
+                if validation.get("market_favorite_strength") == "BALANCED_GAME":
+                    bridge_counts["both_miss_balanced_game"] += 1
+                if validation.get("market_result_class") == "MARKET_FAVORITE_DRAW_MISS":
+                    bridge_counts["both_miss_draw_vs_favorite"] += 1
+                if validation.get("market_result_class") == "MARKET_FAVORITE_UNDERDOG_MISS":
+                    bridge_counts["both_miss_underdog_win"] += 1
+
     def _avg(total: float, n: int) -> Optional[float]:
         return (total / n) if n > 0 else None
+
+    def _rate(part: int, total: int) -> Optional[float]:
+        return (float(part) / float(total)) if total > 0 else None
+
+    def _delta(a: Optional[float], b: Optional[float]) -> Optional[float]:
+        if a is None or b is None:
+            return None
+        return a - b
 
     model_metrics = {
         "brier": _avg(sum_brier_model, n_model),
@@ -989,10 +1308,73 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
         "top1_acc": _avg(sum_top1_mkt, n_market),
     }
 
-    def _delta(a: Optional[float], b: Optional[float]) -> Optional[float]:
-        if a is None or b is None:
-            return None
-        return a - b
+    market_total = market_counts["with_market_and_result"]
+
+    market_validator = {
+        "counts": market_counts,
+        "rates": {
+            "market_favorite_hit_rate": _rate(market_counts["market_favorite_hits"], market_total),
+            "market_favorite_miss_rate": _rate(market_counts["market_favorite_misses"], market_total),
+            "draw_vs_favorite_rate": _rate(market_counts["market_draw_misses"], market_total),
+            "underdog_win_vs_favorite_rate": _rate(market_counts["market_underdog_misses"], market_total),
+            "strong_upset_rate": _rate(market_counts["market_strong_upsets"], market_total),
+            "balanced_game_rate": _rate(market_counts["market_balanced_games"], market_total),
+            "model_market_agreement_rate": _rate(market_counts["model_market_agreements"], n_both),
+            "model_market_disagreement_rate": _rate(market_counts["model_market_disagreements"], n_both),
+            "both_hit_rate": _rate(market_counts["both_hit"], n_both),
+            "both_miss_rate": _rate(market_counts["both_miss"], n_both),
+            "model_hit_market_miss_rate": _rate(market_counts["model_hit_market_miss"], n_both),
+            "market_hit_model_miss_rate": _rate(market_counts["market_hit_model_miss"], n_both),
+        },
+    }
+
+    clean_severe_count = triage_counts["severe_misses_clean"]
+    severe_miss_triage = {
+        "total_events": n_model,
+        "severe_misses_raw": int(severe_miss_count),
+        "severe_miss_raw_rate": _rate(severe_miss_count, n_model),
+        "severe_misses_clean": int(clean_severe_count),
+        "severe_miss_clean_rate": _rate(clean_severe_count, n_model),
+        "explained_by_strong_upset": int(triage_counts["explained_by_strong_upset"]),
+        "explained_by_market_favorite_miss": int(triage_counts["explained_by_market_favorite_miss"]),
+        "market_also_missed": int(triage_counts["market_also_missed"]),
+        "market_hit_model_miss": int(triage_counts["market_hit_model_miss"]),
+        "balanced_game_noise": int(triage_counts["balanced_game_noise"]),
+        "missing_market_context": int(triage_counts["missing_market_context"]),
+        "rates": {
+            "clean_share_of_severe_misses": _rate(clean_severe_count, severe_miss_count),
+            "zebra_explained_share_of_severe_misses": _rate(
+                triage_counts["explained_by_strong_upset"], severe_miss_count
+            ),
+            "market_favorite_miss_share_of_severe_misses": _rate(
+                triage_counts["explained_by_market_favorite_miss"], severe_miss_count
+            ),
+            "market_also_missed_share_of_severe_misses": _rate(
+                triage_counts["market_also_missed"], severe_miss_count
+            ),
+            "market_hit_model_miss_share_of_severe_misses": _rate(
+                triage_counts["market_hit_model_miss"], severe_miss_count
+            ),
+            "balanced_noise_share_of_severe_misses": _rate(
+                triage_counts["balanced_game_noise"], severe_miss_count
+            ),
+        },
+    }
+
+    audit_market_bridge = {
+        "counts": bridge_counts,
+        "rates": {
+            "both_hit_rate": _rate(bridge_counts["both_hit"], n_both),
+            "both_miss_rate": _rate(bridge_counts["both_miss"], n_both),
+            "model_hit_market_miss_rate": _rate(bridge_counts["model_hit_market_miss"], n_both),
+            "market_hit_model_miss_rate": _rate(bridge_counts["market_hit_model_miss"], n_both),
+            "severe_miss_explained_rate": _rate(
+                triage_counts["explained_by_market_favorite_miss"] + triage_counts["balanced_game_noise"],
+                severe_miss_count,
+            ),
+            "severe_miss_unexplained_rate": _rate(clean_severe_count, severe_miss_count),
+        },
+    }
 
     return {
         "counts": {
@@ -1013,8 +1395,11 @@ def _audit_rollup(rows: List[Dict[str, Any]], severe_threshold: float) -> Dict[s
         "diagnostics": {
             "severe_threshold": float(severe_threshold),
             "severe_miss_count": int(severe_miss_count),
-            "severe_miss_rate": (float(severe_miss_count) / float(n_model)) if n_model > 0 else None,
+            "severe_miss_rate": _rate(severe_miss_count, n_model),
         },
+        "market_validator": market_validator,
+        "audit_market_bridge": audit_market_bridge,
+        "severe_miss_triage": severe_miss_triage,
     }
 
 
@@ -1190,13 +1575,15 @@ def admin_odds_audit_reliability_events(
         market_probs = row.get("market_probs")
         best_side = row.get("best_side")
 
+        validation = _audit_enrich_market_validation(row, severe_threshold=severe_threshold)
+
         # Reliability drilldown should show the model top1 side. The persisted
         # best_side is the best EV side, which is a betting decision, not the
         # highest-probability model prediction.
         if model_probs:
-            best_side = _top1(model_probs["H"], model_probs["D"], model_probs["A"])
+            best_side = validation.get("model_top_side")
 
-        best_side_prob = _audit_best_side_prob(model_probs, best_side)
+        best_side_prob = validation.get("model_top_prob")
 
         model_metrics = None
         if model_probs and outcome in ("H", "D", "A"):
@@ -1214,14 +1601,7 @@ def admin_odds_audit_reliability_events(
                 "top1_acc": 1.0 if _top1(market_probs["H"], market_probs["D"], market_probs["A"]) == outcome else 0.0,
             }
 
-        severe_miss = bool(
-            model_probs
-            and outcome in ("H", "D", "A")
-            and best_side in ("H", "D", "A")
-            and best_side_prob is not None
-            and best_side_prob >= float(severe_threshold)
-            and best_side != outcome
-        )
+        severe_miss = bool(validation.get("severe_miss"))
 
         if only_severe and not severe_miss:
             continue
@@ -1247,6 +1627,24 @@ def admin_odds_audit_reliability_events(
                 "home_goals": row.get("home_goals"),
                 "away_goals": row.get("away_goals"),
                 "severe_miss": severe_miss,
+                "model_top_side": validation.get("model_top_side"),
+                "model_top_prob": validation.get("model_top_prob"),
+                "market_consensus_method": validation.get("market_consensus_method"),
+                "market_favorite_side": validation.get("market_favorite_side"),
+                "market_favorite_prob": validation.get("market_favorite_prob"),
+                "market_favorite_margin": validation.get("market_favorite_margin"),
+                "market_favorite_strength": validation.get("market_favorite_strength"),
+                "market_favorite_hit": validation.get("market_favorite_hit"),
+                "market_result_class": validation.get("market_result_class"),
+                "market_strong_upset": validation.get("market_strong_upset"),
+                "market_favorite_miss": validation.get("market_favorite_miss"),
+                "model_market_agreement": validation.get("model_market_agreement"),
+                "model_market_outcome_class": validation.get("model_market_outcome_class"),
+                "clean_without_strong_upsets_eligible": validation.get("clean_without_strong_upsets_eligible"),
+                "clean_without_market_favorite_misses_eligible": validation.get("clean_without_market_favorite_misses_eligible"),
+                "clean_exclusion_reason": validation.get("clean_exclusion_reason"),
+                "severe_miss_triage_class": validation.get("severe_miss_triage_class"),
+                "severe_miss_triage_reason": validation.get("severe_miss_triage_reason"),
                 "model_metrics": model_metrics,
                 "market_metrics": market_metrics,
             }

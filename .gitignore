@@ -1,36 +1,104 @@
+# =========================
 # Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.env
-.venv
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual envs
+.venv/
 venv/
-
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Cache
-.cache/
-
-# Portable runtime (não versionar no repo de código)
 python-portable/
 
-# Bancos locais / artefatos
+# =========================
+# Environment / local secrets
+# =========================
+.env
+.env.local
+.env.*.local
+
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+frontend/.env.local
+frontend/.env.*.local
+
+# IMPORTANTE:
+# frontend/.env.production pode continuar versionado se tiver apenas VITE_* público.
+# backend/cloudrun.env.yaml pode continuar versionado enquanto o Cloud Build depender dele.
+# Não colocar secrets reais nesses arquivos versionados.
+
+# =========================
+# Logs / runtime files
+# =========================
+*.log
+backend/*.log
+backend/backend-run.log
+backend/ingest_error.log
+
+backend/COOKIE_JAR
+backend/beta_cookie.txt
+backend/PASS_*
+backend/TEST_*
+backend/BASE_URL
+
+# =========================
+# Local databases / artifacts
+# =========================
+backend/data/
 backend/data/*.db
 backend/data/*.sqlite
 backend/data/*.sqlite3
+backend/artifacts/
 
-# Python venv
-.venv/
-venv/
-.env
+# Generated/test JSON artifacts
+backend/odds_events_after_bookmaker_names.json
+backend/product_sudamericana_after_bookmaker_names.json
+backend/product_sudamericana_oddspapi.json
+backend/pipeline_*_pretty.json
+backend/telemetry-test.json
 
+# =========================
+# Frontend dependencies/build
+# =========================
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Firebase local cache
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# =========================
+# Local binaries / proxies
+# =========================
+proxy/
+
+# =========================
+# OS / IDE
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Accidental command/output files
+# =========================
+(selectedId
+h -u origin dev
+backend/Deploying
+backend/Enabling
+backend/cd
+backend/gcloud
+backend/powershell
+backend/'inputs'

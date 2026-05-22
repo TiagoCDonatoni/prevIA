@@ -444,6 +444,7 @@ export default function AdminAccessCampaigns() {
                 <th>Status</th>
                 <th>Trial</th>
                 <th>Uso</th>
+                <th>Parceiro</th>
               </tr>
             </thead>
             <tbody>
@@ -475,12 +476,24 @@ export default function AdminAccessCampaigns() {
                     {campaign.redeemed_count}
                     {campaign.max_redemptions != null ? `/${campaign.max_redemptions}` : ""}
                   </td>
+                  <td>
+                    {campaign.partner_link ? (
+                      <>
+                        <strong>{campaign.partner_link.partner_display_name || `Parceiro #${campaign.partner_link.partner_id}`}</strong>
+                        <div className="note">
+                          #{campaign.partner_link.partner_id} · {campaign.partner_link.association_type}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="note">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
 
               {!campaigns.length ? (
                 <tr>
-                  <td colSpan={4} className="note">
+                  <td colSpan={5} className="note">
                     Nenhuma campanha encontrada.
                   </td>
                 </tr>
@@ -526,7 +539,7 @@ export default function AdminAccessCampaigns() {
 
                 {!detail.redemptions.length ? (
                   <tr>
-                    <td colSpan={4} className="note">
+                    <td colSpan={5} className="note">
                       Nenhum resgate ainda.
                     </td>
                   </tr>
@@ -857,6 +870,37 @@ export default function AdminAccessCampaigns() {
           <div className="section-title">Link público</div>
 
           <div className="code">{publicCampaignUrl(form.slug || "slug-da-campanha")}</div>
+
+          {selectedCampaign?.partner_link ? (
+            <div className="partner-campaign-link-summary">
+              <div className="section-title">Parceiro vinculado</div>
+              <div className="partner-application-campaign-links-summary">
+                <span className="pill">
+                  Parceiro #{selectedCampaign.partner_link.partner_id}
+                </span>
+                <span className="pill">
+                  {selectedCampaign.partner_link.partner_display_name}
+                </span>
+                <span className="pill">
+                  Vínculo: {selectedCampaign.partner_link.status}
+                </span>
+                <span className="pill">
+                  Tipo: {selectedCampaign.partner_link.association_type}
+                </span>
+              </div>
+              {selectedCampaign.partner_link.label ? (
+                <div className="note">{selectedCampaign.partner_link.label}</div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="partner-campaign-link-summary">
+              <div className="section-title">Parceiro vinculado</div>
+              <div className="note">
+                Esta campanha ainda não está vinculada a um parceiro. Para oficializar, use o
+                Backoffice de Parceiros e informe o campaign_id.
+              </div>
+            </div>
+          )}
 
           <div className="actions" style={{ marginTop: 14 }}>
             {selectedCampaignId != null ? (

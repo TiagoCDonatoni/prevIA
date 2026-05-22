@@ -73,6 +73,16 @@ def require_admin_access(request: Request) -> Dict[str, Any]:
         return _build_dev_bypass_actor()
 
     if not settings.admin_auth_enabled:
+        if settings.app_env not in {"dev", "development", "local", "test"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "ok": False,
+                    "code": "ADMIN_AUTH_MISCONFIGURED",
+                    "message": "admin authentication is not enabled",
+                },
+            )
+
         return {
             "ok": True,
             "auth_mode": "admin_auth_disabled",

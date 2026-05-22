@@ -280,6 +280,115 @@ export type AdminOddsAuditDiagnostics = {
   severe_miss_rate: number | null;
 };
 
+export type AdminOddsAuditSide = "H" | "D" | "A";
+
+export type AdminOddsAuditFavoriteStrength =
+  | "STRONG_FAVORITE"
+  | "CLEAR_FAVORITE"
+  | "SOFT_FAVORITE"
+  | "BALANCED_GAME"
+  | "UNKNOWN";
+
+export type AdminOddsAuditMarketResultClass =
+  | "MARKET_FAVORITE_HIT"
+  | "MARKET_FAVORITE_DRAW_MISS"
+  | "MARKET_FAVORITE_UNDERDOG_MISS"
+  | "MARKET_DRAW_FAVORITE_MISS"
+  | "MARKET_BALANCED_GAME"
+  | "MARKET_STRONG_UPSET"
+  | "UNKNOWN";
+
+export type AdminOddsAuditModelMarketOutcomeClass =
+  | "BOTH_HIT"
+  | "BOTH_MISS"
+  | "MODEL_HIT_MARKET_MISS"
+  | "MARKET_HIT_MODEL_MISS"
+  | "UNKNOWN";
+
+export type AdminOddsAuditSevereMissTriageClass =
+  | "CLEAR_MODEL_ERROR"
+  | "ZEBRA_EXPLAINED"
+  | "MARKET_ALSO_MISSED"
+  | "BALANCED_GAME_NOISE"
+  | "MISSING_MARKET_CONTEXT"
+  | "NOT_SEVERE_MISS";
+
+export type AdminOddsAuditMarketValidator = {
+  counts: {
+    with_market_and_result: number;
+    market_favorite_hits: number;
+    market_favorite_misses: number;
+    market_draw_misses: number;
+    market_underdog_misses: number;
+    market_draw_favorite_misses: number;
+    market_balanced_games: number;
+    market_strong_upsets: number;
+    model_market_agreements: number;
+    model_market_disagreements: number;
+    both_hit: number;
+    both_miss: number;
+    model_hit_market_miss: number;
+    market_hit_model_miss: number;
+  };
+  rates: {
+    market_favorite_hit_rate: number | null;
+    market_favorite_miss_rate: number | null;
+    draw_vs_favorite_rate: number | null;
+    underdog_win_vs_favorite_rate: number | null;
+    strong_upset_rate: number | null;
+    balanced_game_rate: number | null;
+    model_market_agreement_rate: number | null;
+    model_market_disagreement_rate: number | null;
+    both_hit_rate: number | null;
+    both_miss_rate: number | null;
+    model_hit_market_miss_rate: number | null;
+    market_hit_model_miss_rate: number | null;
+  };
+};
+
+export type AdminOddsAuditMarketBridge = {
+  counts: {
+    both_hit: number;
+    both_miss: number;
+    model_hit_market_miss: number;
+    market_hit_model_miss: number;
+    both_miss_strong_upset: number;
+    both_miss_balanced_game: number;
+    both_miss_draw_vs_favorite: number;
+    both_miss_underdog_win: number;
+  };
+  rates: {
+    both_hit_rate: number | null;
+    both_miss_rate: number | null;
+    model_hit_market_miss_rate: number | null;
+    market_hit_model_miss_rate: number | null;
+    severe_miss_explained_rate: number | null;
+    severe_miss_unexplained_rate: number | null;
+  };
+};
+
+export type AdminOddsAuditSevereMissTriage = {
+  total_events: number;
+  severe_misses_raw: number;
+  severe_miss_raw_rate: number | null;
+  severe_misses_clean: number;
+  severe_miss_clean_rate: number | null;
+  explained_by_strong_upset: number;
+  explained_by_market_favorite_miss: number;
+  market_also_missed: number;
+  market_hit_model_miss: number;
+  balanced_game_noise: number;
+  missing_market_context: number;
+  rates: {
+    clean_share_of_severe_misses: number | null;
+    zebra_explained_share_of_severe_misses: number | null;
+    market_favorite_miss_share_of_severe_misses: number | null;
+    market_also_missed_share_of_severe_misses: number | null;
+    market_hit_model_miss_share_of_severe_misses: number | null;
+    balanced_noise_share_of_severe_misses: number | null;
+  };
+};
+
 export type AdminOddsAuditSummaryResponse = {
   meta: {
     league_id: number | null;
@@ -299,6 +408,9 @@ export type AdminOddsAuditSummaryResponse = {
     model_minus_market: AdminOddsAuditMetrics;
   };
   diagnostics: AdminOddsAuditDiagnostics;
+  market_validator?: AdminOddsAuditMarketValidator;
+  audit_market_bridge?: AdminOddsAuditMarketBridge;
+  severe_miss_triage?: AdminOddsAuditSevereMissTriage;
 };
 
 export type AdminOddsAuditByLeagueRow = {
@@ -311,6 +423,9 @@ export type AdminOddsAuditByLeagueRow = {
     model_minus_market: AdminOddsAuditMetrics;
   };
   diagnostics: AdminOddsAuditDiagnostics;
+  market_validator?: AdminOddsAuditMarketValidator;
+  audit_market_bridge?: AdminOddsAuditMarketBridge;
+  severe_miss_triage?: AdminOddsAuditSevereMissTriage;
 };
 
 export type AdminOddsAuditByLeagueResponse = {
@@ -347,6 +462,30 @@ export type AdminOddsAuditEventRow = {
   home_goals: number | null;
   away_goals: number | null;
   severe_miss: boolean;
+
+  model_top_side?: AdminOddsAuditSide | null;
+  model_top_prob?: number | null;
+
+  market_consensus_method?: string | null;
+  market_favorite_side?: AdminOddsAuditSide | null;
+  market_favorite_prob?: number | null;
+  market_favorite_margin?: number | null;
+  market_favorite_strength?: AdminOddsAuditFavoriteStrength | null;
+  market_favorite_hit?: boolean | null;
+  market_result_class?: AdminOddsAuditMarketResultClass | null;
+  market_strong_upset?: boolean | null;
+  market_favorite_miss?: boolean | null;
+
+  model_market_agreement?: boolean | null;
+  model_market_outcome_class?: AdminOddsAuditModelMarketOutcomeClass | null;
+
+  clean_without_strong_upsets_eligible?: boolean | null;
+  clean_without_market_favorite_misses_eligible?: boolean | null;
+  clean_exclusion_reason?: string | null;
+
+  severe_miss_triage_class?: AdminOddsAuditSevereMissTriageClass | null;
+  severe_miss_triage_reason?: string | null;
+
   model_metrics: AdminOddsAuditMetrics | null;
   market_metrics: AdminOddsAuditMetrics | null;
 };
@@ -1175,6 +1314,7 @@ export type AdminAccessCampaign = {
   active_grants_count?: number;
   redeemed_rows_count?: number;
   public_url_path?: string;
+  partner_link?: AdminPartnerCampaignLink | null;
 };
 
 export type AdminAccessCampaignOffer = {
@@ -1223,6 +1363,40 @@ export type AdminAccessCampaignRedemption = {
     ends_at_utc: string | null;
     status: string;
   };
+};
+
+export type AdminPartnerCampaignLink = {
+  link_id: number;
+  partner_id: number;
+  contract_id: number;
+  campaign_id: number;
+  status: "active" | "paused" | "ended" | "transferred" | "disabled";
+  association_type:
+    | "primary"
+    | "special"
+    | "seasonal"
+    | "youtube"
+    | "instagram"
+    | "tiktok"
+    | "newsletter"
+    | "community"
+    | "event"
+    | "manual";
+  label: string | null;
+  starts_at_utc: string | null;
+  ends_at_utc: string | null;
+  created_at_utc?: string | null;
+  updated_at_utc?: string | null;
+
+  campaign_slug?: string;
+  campaign_label?: string;
+  campaign_kind?: string;
+  campaign_status?: string;
+  campaign_redeemed_count?: number;
+  campaign_max_redemptions?: number | null;
+  public_url_path?: string;
+
+  partner_display_name?: string;
 };
 
 export type AdminAccessCampaignsListResponse = {
@@ -1278,4 +1452,230 @@ export type AdminAccessCampaignUpsertPayload = {
 
   metadata_json: Record<string, any>;
   offer?: AdminAccessCampaignOfferPayload;
+};
+
+export type PartnerApplicationStatus =
+  | "new"
+  | "under_review"
+  | "contacted"
+  | "approved"
+  | "rejected"
+  | "converted"
+  | "archived";
+
+export type AdminPartnerApplication = {
+  id: number;
+  full_name: string;
+  public_name: string;
+  email: string;
+  whatsapp: string;
+  lang: string;
+  main_social_platform: string;
+  main_social_url: string;
+  audience_size_range: string;
+  content_type: string;
+  promotion_plan: string;
+  other_social_urls: string | null;
+  city_state: string | null;
+  media_kit_url: string | null;
+  notes: string | null;
+  accepted_responsible_disclosure: boolean;
+  accepted_no_profit_promises: boolean;
+  accepted_not_guaranteed_approval: boolean;
+  accepted_contact: boolean;
+  status: PartnerApplicationStatus;
+  admin_notes: string | null;
+  reviewed_by_user_id: number | null;
+  reviewed_by_email: string | null;
+  reviewed_at_utc: string | null;
+  converted_partner_id: number | null;
+  source: string | null;
+  email_notification_sent: boolean;
+  email_notification_error: string | null;
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+};
+
+export type AdminPartnerApplicationsListResponse = {
+  ok: boolean;
+  items: AdminPartnerApplication[];
+  count: number;
+  has_more: boolean;
+  limit: number;
+  offset: number;
+  next_offset: number | null;
+  previous_offset: number | null;
+  filters: {
+    q: string;
+    status: string;
+  };
+};
+
+export type AdminPartnerApplicationDetailResponse = {
+  ok: boolean;
+  application: AdminPartnerApplication;
+};
+
+export type AdminPartnerApplicationUpdatePayload = {
+  status?: PartnerApplicationStatus;
+  admin_notes?: string | null;
+};
+
+export type PartnerTier = "founding" | "premium" | "standard" | "watchlist";
+
+export type AdminPartnerApplicationConvertPayload = {
+  owner_user_id?: number | null;
+  display_name?: string;
+  tier?: PartnerTier;
+  starts_at?: string;
+  ends_at?: string;
+  auto_renewal_enabled?: boolean;
+  commission_rate?: number;
+  commission_invoice_limit?: number;
+  validation_days?: number;
+  payout_minimum_amount?: number;
+  terms_version?: string;
+  commission_enabled?: boolean;
+  commission_only_for_new_users?: boolean;
+  commission_requires_paid_invoice?: boolean;
+  commission_excludes_refunded_payments?: boolean;
+  commission_excludes_disputed_payments?: boolean;
+  commission_requires_active_subscription?: boolean;
+  payout_frequency?: "manual" | "monthly" | "quarterly" | string;
+  payout_currency?: string;
+  payout_method?: "manual_pix" | "manual_bank_transfer" | "manual_other" | "platform_later" | string;
+  contract_file_url?: string | null;
+  signed_at_utc?: string | null;
+  commercial_notes?: string | null;
+};
+
+export type AdminPartnerApplicationConvertResponse = {
+  ok: boolean;
+  partner: {
+    partner_id: number;
+    owner_user_id: number;
+    owner_email: string;
+    display_name: string;
+    status: "active";
+    tier: PartnerTier;
+    created_at_utc: string | null;
+  };
+  contract: {
+    contract_id: number;
+    status: "active";
+    starts_at: string;
+    ends_at: string;
+    commission_rate: number;
+    commission_invoice_limit: number;
+    commission_base: "net_revenue";
+    validation_days: number;
+    payout_minimum_amount: number;
+    terms_version: string;
+    commission_enabled?: boolean;
+    commission_only_for_new_users?: boolean;
+    commission_requires_paid_invoice?: boolean;
+    commission_excludes_refunded_payments?: boolean;
+    commission_excludes_disputed_payments?: boolean;
+    commission_requires_active_subscription?: boolean;
+    payout_frequency?: string;
+    payout_currency?: string;
+    payout_method?: string;
+    contract_file_url?: string | null;
+    signed_at_utc?: string | null;
+    commercial_notes?: string | null;
+  };
+  application: AdminPartnerApplication;
+};
+
+export type AdminPartnerAttribution = {
+  attribution_id: number;
+  partner_id: number;
+  contract_id: number;
+  partner_campaign_link_id: number;
+  campaign_id: number;
+  user_id: number;
+  attributed_at: string | null;
+  attribution_rule:
+    | "new_user_campaign_redeem"
+    | "existing_user_campaign_redeem"
+    | "unknown_user_age_campaign_redeem"
+    | string;
+  attribution_source: "access_campaign_redeem" | "admin_manual" | "backfill" | string;
+  status: "pending" | "active" | "non_commissionable" | "cancelled" | "superseded" | string;
+  source_redemption_id: number | null;
+  created_at_utc: string | null;
+  updated_at_utc: string | null;
+  user_email: string | null;
+  user_full_name: string | null;
+  campaign_slug: string | null;
+  campaign_label: string | null;
+  campaign_kind: string | null;
+  source_redemption_status: string | null;
+  source_redeemed_at_utc: string | null;
+};
+
+export type AdminPartnerAttributionSummary = {
+  total: number;
+  active: number;
+  pending: number;
+  non_commissionable: number;
+  cancelled: number;
+  superseded: number;
+};
+
+export type AdminPartnerDetailResponse = {
+  ok: boolean;
+  partner: {
+    partner_id: number;
+    owner_user_id: number;
+    display_name: string;
+    email: string | null;
+    status: "pending" | "active" | "paused" | "suspended" | "terminated";
+    tier: "founding" | "premium" | "standard" | "watchlist";
+    created_from_application_id: number | null;
+    created_at_utc: string | null;
+    updated_at_utc: string | null;
+    owner_email: string | null;
+    owner_full_name: string | null;
+  };
+  active_contract: null | {
+    contract_id: number;
+    partner_id: number;
+    status: "draft" | "active" | "expired" | "terminated" | "superseded";
+    starts_at: string | null;
+    ends_at: string | null;
+    auto_renewal_enabled: boolean;
+    commission_rate: number | null;
+    commission_invoice_limit: number | null;
+    commission_base: "net_revenue" | string;
+    validation_days: number | null;
+    payout_minimum_amount: number | null;
+    terms_version: string | null;
+    commission_enabled?: boolean;
+    commission_only_for_new_users?: boolean;
+    commission_requires_paid_invoice?: boolean;
+    commission_excludes_refunded_payments?: boolean;
+    commission_excludes_disputed_payments?: boolean;
+    commission_requires_active_subscription?: boolean;
+    payout_frequency?: string;
+    payout_currency?: string;
+    payout_method?: string;
+    contract_file_url?: string | null;
+    signed_at_utc?: string | null;
+    commercial_notes?: string | null;
+    created_at_utc: string | null;
+    updated_at_utc: string | null;
+  };
+  campaign_links: AdminPartnerCampaignLink[];
+  attribution_summary?: AdminPartnerAttributionSummary;
+  attributions?: AdminPartnerAttribution[];
+};
+
+export type AdminCreatePartnerCampaignLinkPayload = {
+  campaign_id: number;
+  contract_id?: number | null;
+  association_type?: AdminPartnerCampaignLink["association_type"];
+  label?: string | null;
+  starts_at_utc?: string | null;
+  ends_at_utc?: string | null;
 };

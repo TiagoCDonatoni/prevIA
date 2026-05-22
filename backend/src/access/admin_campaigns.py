@@ -200,6 +200,71 @@ def _offer_row_to_dict(row: tuple[Any, ...] | None) -> Dict[str, Any] | None:
     }
 
 
+def _partner_link_row_to_dict(row: tuple[Any, ...] | None) -> Dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "link_id": int(row[0]),
+        "campaign_id": int(row[1]),
+        "partner_id": int(row[2]),
+        "partner_display_name": row[3],
+        "contract_id": int(row[4]),
+        "status": row[5],
+        "association_type": row[6],
+        "label": row[7],
+        "starts_at_utc": _utc_iso(row[8]),
+        "ends_at_utc": _utc_iso(row[9]),
+    }
+
+
+def _fetch_partner_links_for_campaign_ids(cur, *, campaign_ids: list[int]) -> dict[int, Dict[str, Any]]:
+    if not campaign_ids:
+        return {}
+
+    cur.execute(
+        """
+        SELECT
+          pcl.id,
+          pcl.campaign_id,
+          pcl.partner_id,
+          p.display_name,
+          pcl.contract_id,
+          pcl.status,
+          pcl.association_type,
+          pcl.label,
+          pcl.starts_at_utc,
+          pcl.ends_at_utc
+        FROM partnership.partner_campaign_links pcl
+        INNER JOIN partnership.partners p
+          ON p.id = pcl.partner_id
+        WHERE pcl.campaign_id = ANY(%(campaign_ids)s::bigint[])
+          AND pcl.status IN ('active', 'paused')
+        ORDER BY
+          CASE pcl.status
+            WHEN 'active' THEN 0
+            WHEN 'paused' THEN 1
+            ELSE 2
+          END,
+          pcl.created_at_utc DESC,
+          pcl.id DESC
+        """,
+        {"campaign_ids": campaign_ids},
+    )
+
+    result: dict[int, Dict[str, Any]] = {}
+    for row in cur.fetchall() or []:
+        item = _partner_link_row_to_dict(row)
+        if item is None:
+            continue
+
+        campaign_id = int(item["campaign_id"])
+        if campaign_id not in result:
+            result[campaign_id] = item
+
+    return result
+
+
 def _fetch_offer_for_campaign(cur, *, campaign_id: int) -> Dict[str, Any] | None:
     cur.execute(
         """
@@ -283,6 +348,11 @@ def list_admin_access_campaigns(*, limit: int = 50) -> Dict[str, Any]:
                 {"limit": safe_limit},
             )
             rows = cur.fetchall()
+            campaign_ids = [int(row[0]) for row in rows]
+            partner_links_by_campaign_id = _fetch_partner_links_for_campaign_ids(
+                cur,
+                campaign_ids=campaign_ids,
+            )
         conn.commit()
 
     campaigns = []
@@ -291,6 +361,7 @@ def list_admin_access_campaigns(*, limit: int = 50) -> Dict[str, Any]:
         campaign["active_grants_count"] = int(row[20] or 0)
         campaign["redeemed_rows_count"] = int(row[21] or 0)
         campaign["public_url_path"] = f"/pt/beta/{campaign['slug']}"
+        campaign["partner_link"] = partner_links_by_campaign_id.get(int(campaign["campaign_id"]))
         campaigns.append(campaign)
 
     return {
@@ -338,6 +409,11 @@ def get_admin_access_campaign(*, campaign_id: int) -> Dict[str, Any]:
 
             campaign = _campaign_row_to_dict(row)
             offer = _fetch_offer_for_campaign(cur, campaign_id=campaign_id)
+
+            partner_link = _fetch_partner_links_for_campaign_ids(
+                cur,
+                campaign_ids=[campaign_id],
+            ).get(campaign_id)
 
             cur.execute(
                 """
@@ -397,6 +473,7 @@ def get_admin_access_campaign(*, campaign_id: int) -> Dict[str, Any]:
         "campaign": {
             **campaign,
             "public_url_path": f"/pt/beta/{campaign['slug']}",
+            "partner_link": partner_link,
         },
         "offer": offer,
         "redemptions": redemptions,

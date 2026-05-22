@@ -13,6 +13,7 @@ type PublicCopy = {
   nav: {
     home: string;
     testFree: string;
+    worldCupPool: string;
     howItWorks: string;
     glossary: string;
     about: string;
@@ -129,6 +130,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     nav: {
       home: "Home",
       testFree: "Teste grátis",
+      worldCupPool: "Bolão da Copa",
       howItWorks: "Como funciona",
       glossary: "Glossário",
       about: "Sobre",
@@ -359,6 +361,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     nav: {
       home: "Home",
       testFree: "Free trial",
+      worldCupPool: "World Cup Pool",
       howItWorks: "How it works",
       glossary: "Glossary",
       about: "About",
@@ -588,6 +591,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     nav: {
       home: "Home",
       testFree: "Prueba gratis",
+      worldCupPool: "Porra del Mundial",
       howItWorks: "Cómo funciona",
       glossary: "Glosario",
       about: "Sobre",

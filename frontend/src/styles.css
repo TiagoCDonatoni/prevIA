@@ -685,3 +685,113 @@ hr.sep{
   font-size: 12px;
   opacity: 0.7;
 }
+
+.partner-applications-split {
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+}
+
+.partner-application-row-active td {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.partner-application-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.partner-application-detail-row {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+  min-width: 0;
+}
+
+.partner-application-detail-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+.partner-application-detail-value {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.partner-application-long-text {
+  white-space: pre-wrap;
+  max-height: 220px;
+}
+
+.partner-application-acceptances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.partner-application-status-new {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.partner-application-status-under_review {
+  background: rgba(255, 214, 102, 0.10);
+}
+
+.partner-application-status-contacted {
+  background: rgba(125, 211, 252, 0.10);
+}
+
+.partner-application-status-approved {
+  background: rgba(134, 239, 172, 0.10);
+}
+
+.partner-application-status-rejected {
+  background: rgba(252, 165, 165, 0.10);
+}
+
+.partner-application-status-converted {
+  background: rgba(196, 181, 253, 0.10);
+}
+
+.partner-application-status-archived {
+  background: rgba(148, 163, 184, 0.10);
+}
+
+@media (max-width: 980px) {
+  .partner-applications-split,
+  .partner-application-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.partner-application-convert-box {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid rgba(134, 239, 172, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(134, 239, 172, 0.045);
+}
+
+.partner-application-campaign-links-box {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(125, 211, 252, 0.045);
+}
+
+.partner-application-campaign-links-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.partner-campaign-link-summary {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(125, 211, 252, 0.035);
+}

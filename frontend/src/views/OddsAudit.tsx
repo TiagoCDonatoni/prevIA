@@ -118,11 +118,67 @@ function sampleTone(sample: number | null | undefined): ToneInfo {
 }
 
 function overallTone(input: { market: ToneInfo; severe: ToneInfo; sample: ToneInfo }): ToneInfo {
-  const scoreMap: Record<ToneKey, number> = { green: 1, yellow: 0, neutral: 0, red: -1 };
+  const scoreMap: Record<ToneKey, number> = {
+    green: 1,
+    yellow: 0,
+    neutral: 0,
+    red: -1,
+  };
+
   const score = scoreMap[input.market.tone] + scoreMap[input.severe.tone] + scoreMap[input.sample.tone];
+
   if (score >= 2) return { tone: "green", label: "Leitura favorável" };
   if (score <= -1) return { tone: "red", label: "Leitura fraca" };
   return { tone: "yellow", label: "Leitura mista" };
+}
+
+function triageTone(value: string | null | undefined): ToneInfo {
+  if (value === "CLEAR_MODEL_ERROR") return { tone: "red", label: "Erro claro" };
+  if (value === "ZEBRA_EXPLAINED") return { tone: "yellow", label: "Zebra" };
+  if (value === "MARKET_ALSO_MISSED") return { tone: "yellow", label: "Mercado errou" };
+  if (value === "BALANCED_GAME_NOISE") return { tone: "neutral", label: "Jogo aberto" };
+  if (value === "MISSING_MARKET_CONTEXT") return { tone: "neutral", label: "Sem mercado" };
+  return { tone: "neutral", label: "Não severe" };
+}
+
+function marketClassLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = {
+    MARKET_FAVORITE_HIT: "Favorito confirmou",
+    MARKET_FAVORITE_DRAW_MISS: "Empate contra favorito",
+    MARKET_FAVORITE_UNDERDOG_MISS: "Azarão venceu",
+    MARKET_DRAW_FAVORITE_MISS: "Empate favorito caiu",
+    MARKET_BALANCED_GAME: "Mercado equilibrado",
+    MARKET_STRONG_UPSET: "Zebra forte",
+    UNKNOWN: "—",
+  };
+  return value ? labels[value] ?? value : "—";
+}
+
+function modelMarketOutcomeLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = {
+    BOTH_HIT: "Ambos acertaram",
+    BOTH_MISS: "Ambos erraram",
+    MODEL_HIT_MARKET_MISS: "prevIA acertou / mercado errou",
+    MARKET_HIT_MODEL_MISS: "Mercado acertou / prevIA errou",
+    UNKNOWN: "—",
+  };
+  return value ? labels[value] ?? value : "—";
+}
+
+function favoriteStrengthLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = {
+    STRONG_FAVORITE: "forte",
+    CLEAR_FAVORITE: "claro",
+    SOFT_FAVORITE: "leve",
+    BALANCED_GAME: "equilibrado",
+    UNKNOWN: "—",
+  };
+  return value ? labels[value] ?? value : "—";
+}
+
+function boolText(value: boolean | null | undefined) {
+  if (value == null) return "";
+  return value ? "yes" : "no";
 }
 
 function TonePill({ tone, label }: ToneInfo) {
@@ -179,6 +235,70 @@ function downloadCsv(filename: string, rows: Array<Record<string, unknown>>) {
   URL.revokeObjectURL(href);
 }
 
+function buildAuditValidationExportFields(
+  source: AdminOddsAuditSummaryResponse | AdminOddsAuditByLeagueRow | null | undefined
+): Record<string, unknown> {
+  const market = source?.market_validator;
+  const bridge = source?.audit_market_bridge;
+  const triage = source?.severe_miss_triage;
+
+  return {
+    market_with_result: market?.counts.with_market_and_result ?? null,
+    market_favorite_hits: market?.counts.market_favorite_hits ?? null,
+    market_favorite_misses: market?.counts.market_favorite_misses ?? null,
+    market_favorite_hit_rate: market?.rates.market_favorite_hit_rate ?? null,
+    market_favorite_miss_rate: market?.rates.market_favorite_miss_rate ?? null,
+    market_draw_misses: market?.counts.market_draw_misses ?? null,
+    market_underdog_misses: market?.counts.market_underdog_misses ?? null,
+    market_draw_favorite_misses: market?.counts.market_draw_favorite_misses ?? null,
+    market_balanced_games: market?.counts.market_balanced_games ?? null,
+    market_strong_upsets: market?.counts.market_strong_upsets ?? null,
+    draw_vs_favorite_rate: market?.rates.draw_vs_favorite_rate ?? null,
+    underdog_win_vs_favorite_rate: market?.rates.underdog_win_vs_favorite_rate ?? null,
+    strong_upset_rate: market?.rates.strong_upset_rate ?? null,
+    balanced_game_rate: market?.rates.balanced_game_rate ?? null,
+
+    model_market_agreements: market?.counts.model_market_agreements ?? null,
+    model_market_disagreements: market?.counts.model_market_disagreements ?? null,
+    model_market_agreement_rate: market?.rates.model_market_agreement_rate ?? null,
+    model_market_disagreement_rate: market?.rates.model_market_disagreement_rate ?? null,
+
+    both_hit: bridge?.counts.both_hit ?? market?.counts.both_hit ?? null,
+    both_miss: bridge?.counts.both_miss ?? market?.counts.both_miss ?? null,
+    model_hit_market_miss: bridge?.counts.model_hit_market_miss ?? market?.counts.model_hit_market_miss ?? null,
+    market_hit_model_miss: bridge?.counts.market_hit_model_miss ?? market?.counts.market_hit_model_miss ?? null,
+    both_hit_rate: bridge?.rates.both_hit_rate ?? market?.rates.both_hit_rate ?? null,
+    both_miss_rate: bridge?.rates.both_miss_rate ?? market?.rates.both_miss_rate ?? null,
+    model_hit_market_miss_rate: bridge?.rates.model_hit_market_miss_rate ?? market?.rates.model_hit_market_miss_rate ?? null,
+    market_hit_model_miss_rate: bridge?.rates.market_hit_model_miss_rate ?? market?.rates.market_hit_model_miss_rate ?? null,
+
+    both_miss_strong_upset: bridge?.counts.both_miss_strong_upset ?? null,
+    both_miss_balanced_game: bridge?.counts.both_miss_balanced_game ?? null,
+    both_miss_draw_vs_favorite: bridge?.counts.both_miss_draw_vs_favorite ?? null,
+    both_miss_underdog_win: bridge?.counts.both_miss_underdog_win ?? null,
+    severe_miss_explained_rate: bridge?.rates.severe_miss_explained_rate ?? null,
+    severe_miss_unexplained_rate: bridge?.rates.severe_miss_unexplained_rate ?? null,
+
+    triage_total_events: triage?.total_events ?? null,
+    severe_misses_raw: triage?.severe_misses_raw ?? null,
+    severe_miss_raw_rate: triage?.severe_miss_raw_rate ?? null,
+    severe_misses_clean: triage?.severe_misses_clean ?? null,
+    severe_miss_clean_rate: triage?.severe_miss_clean_rate ?? null,
+    explained_by_strong_upset: triage?.explained_by_strong_upset ?? null,
+    explained_by_market_favorite_miss: triage?.explained_by_market_favorite_miss ?? null,
+    market_also_missed: triage?.market_also_missed ?? null,
+    market_hit_model_miss_triage: triage?.market_hit_model_miss ?? null,
+    balanced_game_noise: triage?.balanced_game_noise ?? null,
+    missing_market_context: triage?.missing_market_context ?? null,
+    clean_share_of_severe_misses: triage?.rates.clean_share_of_severe_misses ?? null,
+    zebra_explained_share_of_severe_misses: triage?.rates.zebra_explained_share_of_severe_misses ?? null,
+    market_favorite_miss_share_of_severe_misses: triage?.rates.market_favorite_miss_share_of_severe_misses ?? null,
+    market_also_missed_share_of_severe_misses: triage?.rates.market_also_missed_share_of_severe_misses ?? null,
+    market_hit_model_miss_share_of_severe_misses: triage?.rates.market_hit_model_miss_share_of_severe_misses ?? null,
+    balanced_noise_share_of_severe_misses: triage?.rates.balanced_noise_share_of_severe_misses ?? null,
+  };
+}
+
 function buildSummaryExportRows(
   current: AdminOddsAuditSummaryResponse | null,
   previous: AdminOddsAuditSummaryResponse | null
@@ -209,6 +329,7 @@ function buildSummaryExportRows(
     severe_threshold: current.diagnostics.severe_threshold,
     severe_miss_count: current.diagnostics.severe_miss_count,
     severe_miss_rate: current.diagnostics.severe_miss_rate,
+    ...buildAuditValidationExportFields(current),
   };
 
   const rows = [currentRow];
@@ -238,6 +359,7 @@ function buildSummaryExportRows(
       severe_threshold: previous.diagnostics.severe_threshold,
       severe_miss_count: previous.diagnostics.severe_miss_count,
       severe_miss_rate: previous.diagnostics.severe_miss_rate,
+      ...buildAuditValidationExportFields(previous),
     });
 
     rows.push({
@@ -309,6 +431,7 @@ function buildLeagueExportRows(
       severe_miss_rate_prev: prev?.diagnostics.severe_miss_rate ?? null,
       severe_miss_rate_delta: calcDelta(row.diagnostics.severe_miss_rate, prev?.diagnostics.severe_miss_rate),
       severe_miss_count: row.diagnostics.severe_miss_count,
+      ...buildAuditValidationExportFields(row),
     };
   });
 }
@@ -378,6 +501,30 @@ function buildEventsExportRows(events: AdminOddsAuditEventsResponse | null) {
       row.market_metrics?.logloss ?? null
     ),
     severe_miss: row.severe_miss,
+
+    model_top_side: row.model_top_side ?? row.best_side,
+    model_top_prob: row.model_top_prob ?? row.best_side_prob,
+
+    market_consensus_method: row.market_consensus_method ?? null,
+    market_favorite_side: row.market_favorite_side ?? null,
+    market_favorite_prob: row.market_favorite_prob ?? null,
+    market_favorite_margin: row.market_favorite_margin ?? null,
+    market_favorite_strength: row.market_favorite_strength ?? null,
+    market_favorite_hit: boolText(row.market_favorite_hit),
+    market_result_class: row.market_result_class ?? null,
+    market_strong_upset: boolText(row.market_strong_upset),
+    market_favorite_miss: boolText(row.market_favorite_miss),
+
+    model_market_agreement: boolText(row.model_market_agreement),
+    model_market_outcome_class: row.model_market_outcome_class ?? null,
+
+    clean_without_strong_upsets_eligible: boolText(row.clean_without_strong_upsets_eligible),
+    clean_without_market_favorite_misses_eligible: boolText(row.clean_without_market_favorite_misses_eligible),
+    clean_exclusion_reason: row.clean_exclusion_reason ?? null,
+
+    severe_miss_triage_class: row.severe_miss_triage_class ?? null,
+    severe_miss_triage_reason: row.severe_miss_triage_reason ?? null,
+
     match_confidence: row.match_confidence,
   }));
 }
@@ -930,6 +1077,93 @@ export default function OddsAudit() {
         </div>
       </Card>
 
+      <Card title="Market Validator & Severe Miss Triage">
+        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Pill>diagnóstico interno</Pill>
+          <Pill>não altera o modelo</Pill>
+          <Pill>zebra ≠ erro claro</Pill>
+        </div>
+
+        <div className="grid cards">
+          <Kpi
+            title="Favorito do mercado acertou"
+            value={summary ? metricPct(summary.market_validator?.rates.market_favorite_hit_rate) : "—"}
+            meta={
+              summary
+                ? `${summary.market_validator?.counts.market_favorite_hits ?? 0} de ${
+                    summary.market_validator?.counts.with_market_and_result ?? 0
+                  } eventos`
+                : "—"
+            }
+          />
+
+          <Kpi
+            title="Quebra do favorito"
+            value={summary ? metricPct(summary.market_validator?.rates.market_favorite_miss_rate) : "—"}
+            meta={
+              summary
+                ? `${summary.market_validator?.counts.market_favorite_misses ?? 0} jogos onde o favorito não confirmou`
+                : "—"
+            }
+          />
+
+          <Kpi
+            title="Zebra forte"
+            value={summary ? metricPct(summary.market_validator?.rates.strong_upset_rate) : "—"}
+            meta={
+              summary
+                ? `${summary.market_validator?.counts.market_strong_upsets ?? 0} favoritos fortes derrubados`
+                : "—"
+            }
+          />
+
+          <Kpi
+            title="Clean severe miss"
+            value={summary ? metricPct(summary.severe_miss_triage?.severe_miss_clean_rate) : "—"}
+            meta={
+              summary
+                ? `${summary.severe_miss_triage?.severe_misses_clean ?? 0} erros graves limpos`
+                : "erro grave claro do modelo"
+            }
+          />
+
+          <Kpi
+            title="Severe explicado por zebra"
+            value={summary ? metricPct(summary.severe_miss_triage?.rates.zebra_explained_share_of_severe_misses) : "—"}
+            meta={
+              summary
+                ? `${summary.severe_miss_triage?.explained_by_strong_upset ?? 0} de ${
+                    summary.severe_miss_triage?.severe_misses_raw ?? 0
+                  } severe misses`
+                : "—"
+            }
+          />
+
+          <Kpi
+            title="Mercado acertou / prevIA errou"
+            value={summary ? String(summary.audit_market_bridge?.counts.market_hit_model_miss ?? "—") : "—"}
+            meta={summary ? metricPct(summary.audit_market_bridge?.rates.market_hit_model_miss_rate) : "erro mais investigável"}
+          />
+
+          <Kpi
+            title="prevIA acertou / mercado errou"
+            value={summary ? String(summary.audit_market_bridge?.counts.model_hit_market_miss ?? "—") : "—"}
+            meta={summary ? metricPct(summary.audit_market_bridge?.rates.model_hit_market_miss_rate) : "sinal de valor potencial"}
+          />
+
+          <Kpi
+            title="Ambos erraram"
+            value={summary ? String(summary.audit_market_bridge?.counts.both_miss ?? "—") : "—"}
+            meta={summary ? metricPct(summary.audit_market_bridge?.rates.both_miss_rate) : "variância / jogo difícil"}
+          />
+        </div>
+
+        <div style={{ marginTop: 14 }} className="note">
+          A leitura principal para melhoria contínua é o <b>Clean severe miss</b>: erros graves em que o mercado não foi derrubado
+          e há sinal mais claro de falha do modelo. O severe miss bruto continua medindo a experiência real do usuário.
+        </div>
+      </Card>
+
       <Card title="By league">
         <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <Pill>{events?.meta.returned ?? 0} {params.all_events ? "rows carregadas" : "rows nesta página"}</Pill>
@@ -971,6 +1205,10 @@ export default function OddsAudit() {
                 <th className="mono">Δ Top1</th>
                 <th className="mono">Severe</th>
                 <th className="mono">Δ Severe</th>
+                <th className="mono">Clean Sev.</th>
+                <th className="mono">Mkt Fav %</th>
+                <th className="mono">Mkt hit / Model miss</th>
+                <th className="mono">Zebra exp.</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -995,6 +1233,19 @@ export default function OddsAudit() {
                   <td className="mono">{metricPct(row.diagnostics.severe_miss_rate)}</td>
                   <td className="mono" style={{ color: deltaColor(deltas.severe, "lower"), fontWeight: 700 }}>
                     {formatSignedPct(deltas.severe)}
+                  </td>
+                  <td className="mono">
+                    {metricPct(row.severe_miss_triage?.severe_miss_clean_rate)}
+                    <div className="note mono">{row.severe_miss_triage?.severe_misses_clean ?? "—"} erros</div>
+                  </td>
+                  <td className="mono">{metricPct(row.market_validator?.rates.market_favorite_hit_rate)}</td>
+                  <td className="mono">
+                    {row.audit_market_bridge?.counts.market_hit_model_miss ?? "—"}
+                    <div className="note mono">{metricPct(row.audit_market_bridge?.rates.market_hit_model_miss_rate)}</div>
+                  </td>
+                  <td className="mono">
+                    {metricPct(row.severe_miss_triage?.rates.zebra_explained_share_of_severe_misses)}
+                    <div className="note mono">{row.severe_miss_triage?.explained_by_strong_upset ?? "—"} jogos</div>
                   </td>
                   <td>
                     <TonePill {...overall} />
@@ -1023,6 +1274,10 @@ export default function OddsAudit() {
                 <th className="mono">Model H/D/A</th>
                 <th className="mono">Best</th>
                 <th className="mono">Result</th>
+                <th className="mono">Mkt fav</th>
+                <th className="mono">Market class</th>
+                <th className="mono">Model x Mkt</th>
+                <th className="mono">Triage</th>
                 <th className="mono">Model LL</th>
                 <th className="mono">Mkt LL</th>
                 <th className="mono">LL vs Mkt</th>
@@ -1056,6 +1311,24 @@ export default function OddsAudit() {
                     <td className="mono">
                       {row.result_1x2 ?? "—"}
                       {row.home_goals != null && row.away_goals != null ? ` (${row.home_goals}-${row.away_goals})` : ""}
+                    </td>
+                    <td className="mono">
+                      {row.market_favorite_side ?? "—"}
+                      {row.market_favorite_prob != null ? ` (${metricPct(row.market_favorite_prob)})` : ""}
+                      <div className="note mono">{favoriteStrengthLabel(row.market_favorite_strength)}</div>
+                    </td>
+                    <td className="mono">
+                      {marketClassLabel(row.market_result_class)}
+                      {row.market_strong_upset ? <div className="note mono">strong upset</div> : null}
+                    </td>
+                    <td className="mono">{modelMarketOutcomeLabel(row.model_market_outcome_class)}</td>
+                    <td>
+                      <TonePill {...triageTone(row.severe_miss_triage_class)} />
+                      {row.severe_miss_triage_reason ? (
+                        <div className="note" style={{ marginTop: 4 }}>
+                          {row.severe_miss_triage_reason}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="mono">{metricNum(row.model_metrics?.logloss ?? null, 4)}</td>
                     <td className="mono">{metricNum(row.market_metrics?.logloss ?? null, 4)}</td>

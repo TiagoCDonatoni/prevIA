@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import "./styles.css";
 
@@ -17,6 +17,7 @@ import OddsAudit from "./views/OddsAudit";
 import AdminLeagues from "./views/AdminLeagues";
 import AdminUsers from "./views/AdminUsers";
 import AdminAccessCampaigns from "./views/AdminAccessCampaigns";
+import AdminBackofficePartnerApplications from "./views/AdminBackofficePartnerApplications";
 
 type Page =
   | "dashboard"
@@ -33,6 +34,7 @@ type Page =
   | "odds_audit"
   | "users"
   | "access_campaigns"
+  | "partner_applications"
   | "leagues";
 
 type MacroAreaKey = "overview" | "ops" | "product" | "backoffice";
@@ -80,9 +82,24 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { key: "users", label: "Users" },
       { key: "access_campaigns", label: "Campanhas" },
+      { key: "partner_applications", label: "Parceiros · Candidaturas" },
     ],
   },
 ];
+
+const ADMIN_PAGE_PATHS: Partial<Record<Page, string>> = {
+  partner_applications: "/admin/backoffice/partners/applications",
+};
+
+function getInitialAdminPage(): Page {
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, "");
+
+  if (path === "/admin/backoffice/partners/applications") {
+    return "partner_applications";
+  }
+
+  return "dashboard";
+}
 
 function getMacroAreaForPage(page: Page): MacroAreaKey {
   for (const section of NAV_SECTIONS) {
@@ -94,9 +111,28 @@ function getMacroAreaForPage(page: Page): MacroAreaKey {
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>(() => getInitialAdminPage());
 
   const activeMacroArea = useMemo(() => getMacroAreaForPage(page), [page]);
+
+  function selectPage(nextPage: Page) {
+    setPage(nextPage);
+
+    const nextPath = ADMIN_PAGE_PATHS[nextPage] ?? "/admin";
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+  }
+
+  useEffect(() => {
+    function onPopState() {
+      setPage(getInitialAdminPage());
+    }
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   const activeSection =
     NAV_SECTIONS.find((section) => section.key === activeMacroArea) ??
     NAV_SECTIONS[0];
@@ -116,7 +152,7 @@ export default function App() {
             <button
               key={section.key}
               className={`nav-btn ${activeMacroArea === section.key ? "active" : ""}`}
-              onClick={() => setPage(section.items[0].key)}
+              onClick={() => selectPage(section.items[0].key)}
             >
               {section.label}
             </button>
@@ -139,7 +175,7 @@ export default function App() {
                 <button
                   key={item.key}
                   className={`nav-btn ${page === item.key ? "active" : ""}`}
-                  onClick={() => setPage(item.key)}
+                  onClick={() => selectPage(item.key)}
                 >
                   {item.label}
                 </button>
@@ -161,6 +197,7 @@ export default function App() {
           {page === "odds_audit" && <OddsAudit />}
           {page === "users" && <AdminUsers />}
           {page === "access_campaigns" && <AdminAccessCampaigns />}
+          {page === "partner_applications" && <AdminBackofficePartnerApplications />}
           {page === "leagues" && <AdminLeagues />}
         </div>
       </div>

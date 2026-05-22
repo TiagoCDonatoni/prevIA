@@ -82,6 +82,16 @@ class Settings:
     product_auth_enabled: bool
     admin_auth_enabled: bool
     product_manual_analysis_enabled: bool
+
+    worldcup_pool_enabled: bool
+    worldcup_pool_public_create_enabled: bool
+    worldcup_pool_join_enabled: bool
+    worldcup_pool_predictions_enabled: bool
+    worldcup_pool_readonly_enabled: bool
+    worldcup_pool_organizer_session_cookie_name: str
+    worldcup_pool_participant_session_cookie_name: str
+    worldcup_pool_session_ttl_days: int
+
     product_dev_auto_login_enabled: bool
     product_dev_auto_login_email: str
     product_dev_auto_login_plan: str
@@ -169,6 +179,43 @@ def load_settings() -> Settings:
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
     product_manual_analysis_enabled = _env_bool("PRODUCT_MANUAL_ANALYSIS_ENABLED", default=True)
 
+    worldcup_pool_enabled = _env_bool("WORLDCUP_POOL_ENABLED", default=False)
+    worldcup_pool_public_create_enabled = _env_bool(
+        "WORLDCUP_POOL_PUBLIC_CREATE_ENABLED",
+        default=False,
+    )
+    worldcup_pool_join_enabled = _env_bool(
+        "WORLDCUP_POOL_JOIN_ENABLED",
+        default=False,
+    )
+    worldcup_pool_predictions_enabled = _env_bool(
+        "WORLDCUP_POOL_PREDICTIONS_ENABLED",
+        default=False,
+    )
+    worldcup_pool_readonly_enabled = _env_bool(
+        "WORLDCUP_POOL_READONLY_ENABLED",
+        default=False,
+    )
+
+    if not worldcup_pool_enabled:
+        worldcup_pool_public_create_enabled = False
+        worldcup_pool_join_enabled = False
+        worldcup_pool_predictions_enabled = False
+        worldcup_pool_readonly_enabled = False
+
+    worldcup_pool_organizer_session_cookie_name = _env_str(
+        "WORLDCUP_POOL_ORGANIZER_SESSION_COOKIE_NAME",
+        "wc_pool_org_session",
+    )
+    worldcup_pool_participant_session_cookie_name = _env_str(
+        "WORLDCUP_POOL_PARTICIPANT_SESSION_COOKIE_NAME",
+        "wc_pool_participant_session",
+    )
+    worldcup_pool_session_ttl_days = max(
+        1,
+        _env_int("WORLDCUP_POOL_SESSION_TTL_DAYS", 90),
+    )
+
     product_dev_auto_login_enabled = _env_bool("PRODUCT_DEV_AUTO_LOGIN_ENABLED", default=False)
     product_dev_auto_login_email = _env_str("PRODUCT_DEV_AUTO_LOGIN_EMAIL", "dev@previa.local")
     product_dev_auto_login_plan = _env_str("PRODUCT_DEV_AUTO_LOGIN_PLAN", "PRO").upper()
@@ -248,6 +295,14 @@ def load_settings() -> Settings:
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
         product_manual_analysis_enabled=product_manual_analysis_enabled,
+        worldcup_pool_enabled=worldcup_pool_enabled,
+        worldcup_pool_public_create_enabled=worldcup_pool_public_create_enabled,
+        worldcup_pool_join_enabled=worldcup_pool_join_enabled,
+        worldcup_pool_predictions_enabled=worldcup_pool_predictions_enabled,
+        worldcup_pool_readonly_enabled=worldcup_pool_readonly_enabled,
+        worldcup_pool_organizer_session_cookie_name=worldcup_pool_organizer_session_cookie_name,
+        worldcup_pool_participant_session_cookie_name=worldcup_pool_participant_session_cookie_name,
+        worldcup_pool_session_ttl_days=worldcup_pool_session_ttl_days,
         product_dev_auto_login_enabled=product_dev_auto_login_enabled,
         product_dev_auto_login_email=product_dev_auto_login_email,
         product_dev_auto_login_plan=product_dev_auto_login_plan,

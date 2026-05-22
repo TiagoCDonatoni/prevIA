@@ -2520,7 +2520,6 @@ def _top1_acc_1x2(p: dict, outcome: str) -> float:
 def admin_odds_audit_snapshot(
     sport_key: str = Query(..., description="Ex: soccer_epl"),
     hours_back: int = Query(default=168, ge=0, le=720),
-
     min_confidence: str = Query(default="EXACT", pattern="^(NONE|ILIKE|EXACT)$"),
     artifact_filename: str = Query(default=DEFAULT_EPL_ARTIFACT),
     assume_league_id: int = Query(default=39, ge=1),
@@ -2528,142 +2527,297 @@ def admin_odds_audit_snapshot(
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict:
     """
-    Cria/atualiza snapshots do modelo para os próximos jogos (baseado em odds persistidas).
+    Cria/atualiza snapshots de auditoria para jogos recentes já iniciados/finalizados,
+    usando o último snapshot de odds capturado antes do kickoff.
+
     Não busca provider externo. Apenas DB + modelo local.
     """
-
-    # janela: passado recente (auditoria)
-    if hours_back > 720:
-        hours_back = 720
 
     now_utc = datetime.now(timezone.utc)
     start_utc = now_utc - timedelta(hours=int(hours_back))
     end_utc = now_utc
 
-    sql = """
+    conf_clause = "TRUE"
+    if min_confidence == "EXACT":
+        conf_clause = "lp.match_confidence = 'EXACT'"
+    elif min_confidence == "ILIKE":
+        conf_clause = "lp.match_confidence IN ('ILIKE','EXACT')"
+
+    sql = f"""
+      WITH latest_pre AS (
+        SELECT DISTINCT ON (e.event_id)
+          e.event_id,
+          e.sport_key,
+          e.commence_time_utc,
+          e.home_name,
+          e.away_name,
+          e.resolved_home_team_id,
+          e.resolved_away_team_id,
+          e.resolved_fixture_id,
+          e.match_confidence,
+          s.bookmaker,
+          s.market,
+          s.odds_home,
+          s.odds_draw,
+          s.odds_away,
+          s.captured_at_utc
+        FROM odds.odds_events e
+        JOIN odds.odds_snapshots_1x2 s
+          ON s.event_id = e.event_id
+        WHERE e.sport_key = %(sport_key)s
+          AND e.commence_time_utc IS NOT NULL
+          AND e.commence_time_utc >= %(start)s
+          AND e.commence_time_utc <= %(end)s
+          AND s.captured_at_utc <= e.commence_time_utc
+        ORDER BY e.event_id, s.captured_at_utc DESC, s.bookmaker ASC NULLS LAST
+      )
       SELECT
-        e.event_id,
-        e.sport_key,
-        e.kickoff_utc,
-        e.home_name,
-        e.away_name,
-        e.fixture_id,
-        e.confidence,
-        e.updated_at_utc
-      FROM odds.odds_events e
-      WHERE e.sport_key = %(sport_key)s
-        AND e.kickoff_utc >= %(start)s
-        AND e.kickoff_utc <= %(end)s
-      ORDER BY e.kickoff_utc DESC
+        lp.event_id,
+        lp.sport_key,
+        lp.commence_time_utc,
+        lp.home_name,
+        lp.away_name,
+        lp.resolved_home_team_id,
+        lp.resolved_away_team_id,
+        lp.resolved_fixture_id,
+        lp.match_confidence,
+        lp.bookmaker,
+        lp.market,
+        lp.odds_home,
+        lp.odds_draw,
+        lp.odds_away,
+        lp.captured_at_utc,
+        f.league_id,
+        f.season,
+        f.home_team_id AS fixture_home_team_id,
+        f.away_team_id AS fixture_away_team_id
+      FROM latest_pre lp
+      LEFT JOIN core.fixtures f
+        ON f.fixture_id = lp.resolved_fixture_id
+      WHERE ({conf_clause})
+      ORDER BY lp.commence_time_utc DESC
       LIMIT %(limit)s
     """
 
-    with pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, {"sport_key": sport_key, "start": start_utc, "end": end_utc, "limit": int(limit)})
-            rows = cur.fetchall()
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "sport_key": sport_key,
+                        "start": start_utc,
+                        "end": end_utc,
+                        "limit": int(limit),
+                    },
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"audit_snapshot_query_failed: {type(e).__name__}: {e}")
 
-    inserted = 0
-    skipped = 0
-    errors = 0
+    counts = {
+        "selected": len(rows),
+        "persisted_ok": 0,
+        "persisted_incomplete": 0,
+        "missing_team_id": 0,
+        "model_error": 0,
+        "persist_error": 0,
+    }
+    runtime_counts = _empty_runtime_counts()
 
     with pg_conn() as conn:
-        with conn.cursor() as cur:
-            for (
+        for row in rows:
+            (
                 event_id,
-                commence_time_utc,
-                home_id,
-                away_id,
-                match_confidence_db,
+                sport_key_db,
+                kickoff_utc,
+                home_name,
+                away_name,
+                resolved_home_team_id,
+                resolved_away_team_id,
+                fixture_id,
+                match_confidence,
                 bookmaker,
                 market,
                 odds_home,
                 odds_draw,
                 odds_away,
                 captured_at_utc,
-            ) in rows:
-                if not home_id or not away_id:
-                    skipped += 1
-                    continue
+                fixture_league_id,
+                fixture_season,
+                fixture_home_team_id,
+                fixture_away_team_id,
+            ) = row
+
+            home_id = fixture_home_team_id if fixture_home_team_id is not None else resolved_home_team_id
+            away_id = fixture_away_team_id if fixture_away_team_id is not None else resolved_away_team_id
+            league_id = fixture_league_id if fixture_league_id is not None else int(assume_league_id)
+            season = fixture_season if fixture_season is not None else int(assume_season)
+
+            kickoff_iso = (
+                kickoff_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                if kickoff_utc else None
+            )
+            captured_iso = (
+                captured_at_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                if captured_at_utc else None
+            )
+
+            oh = float(odds_home) if odds_home is not None else None
+            od = float(odds_draw) if odds_draw is not None else None
+            oa = float(odds_away) if odds_away is not None else None
+            p_mkt = (_market_probs_from_odds(oh, od, oa).get("novig") or None)
+
+            if not home_id or not away_id:
+                counts["missing_team_id"] += 1
+                try:
+                    _audit_insert_prediction(
+                        conn,
+                        event_id=str(event_id),
+                        sport_key=str(sport_key_db),
+                        kickoff_utc=kickoff_iso,
+                        captured_at_utc=captured_iso,
+                        bookmaker=(str(bookmaker) if bookmaker is not None else None),
+                        market=(str(market) if market is not None else None),
+                        league_id=int(league_id) if league_id is not None else None,
+                        season=int(season) if season is not None else None,
+                        fixture_id=int(fixture_id) if fixture_id is not None else None,
+                        home_team_id=int(home_id) if home_id is not None else None,
+                        away_team_id=int(away_id) if away_id is not None else None,
+                        match_confidence=(str(match_confidence) if match_confidence is not None else None),
+                        artifact_filename=artifact_filename,
+                        odds_h=oh,
+                        odds_d=od,
+                        odds_a=oa,
+                        p_mkt=p_mkt,
+                        p_model=None,
+                        best_side=None,
+                        best_ev=None,
+                        status="incomplete",
+                        reason="missing_team_id",
+                    )
+                    conn.commit()
+                    counts["persisted_incomplete"] += 1
+                except Exception:
+                    conn.rollback()
+                    counts["persist_error"] += 1
+                continue
+
+            try:
+                pred = predict_1x2_from_artifact(
+                    artifact_filename=artifact_filename,
+                    league_id=int(league_id),
+                    season=int(season),
+                    home_team_id=int(home_id),
+                    away_team_id=int(away_id),
+                )
+                p_model = pred["probs"]
+
+                match_stats_mode = _read_match_stats_mode_from_pred(pred)
+                if match_stats_mode in ("partial_fallback", "full_fallback"):
+                    runtime_counts["ok_fallback"] += 1
+                else:
+                    runtime_counts["ok_exact"] += 1
+
+                evv = {
+                    "H": (float(p_model["H"]) * oh - 1.0) if oh else None,
+                    "D": (float(p_model["D"]) * od - 1.0) if od else None,
+                    "A": (float(p_model["A"]) * oa - 1.0) if oa else None,
+                }
+                best_side = None
+                best_ev = None
+                for side in ("H", "D", "A"):
+                    value = evv.get(side)
+                    if value is None:
+                        continue
+                    if best_ev is None or value > best_ev:
+                        best_ev = value
+                        best_side = side
 
                 try:
-                    pred = predict_1x2_from_artifact(
-                        artifact_filename=artifact_filename,
-                        league_id=int(assume_league_id),
-                        season=int(assume_season),
+                    _audit_insert_prediction(
+                        conn,
+                        event_id=str(event_id),
+                        sport_key=str(sport_key_db),
+                        kickoff_utc=kickoff_iso,
+                        captured_at_utc=captured_iso,
+                        bookmaker=(str(bookmaker) if bookmaker is not None else None),
+                        market=(str(market) if market is not None else None),
+                        league_id=int(league_id) if league_id is not None else None,
+                        season=int(season) if season is not None else None,
+                        fixture_id=int(fixture_id) if fixture_id is not None else None,
                         home_team_id=int(home_id),
                         away_team_id=int(away_id),
+                        match_confidence=(str(match_confidence) if match_confidence is not None else None),
+                        artifact_filename=artifact_filename,
+                        odds_h=oh,
+                        odds_d=od,
+                        odds_a=oa,
+                        p_mkt=p_mkt,
+                        p_model=p_model,
+                        best_side=best_side,
+                        best_ev=best_ev,
+                        status="ok",
+                        reason=None,
                     )
-                    p = pred["probs"]
-
-                    upsert = """
-                      INSERT INTO odds.audit_event_predictions (
-                        event_id, artifact_filename, league_id, season,
-                        home_team_id, away_team_id, kickoff_utc,
-                        bookmaker, market, odds_home, odds_draw, odds_away, captured_at_utc,
-                        p_model_h, p_model_d, p_model_a,
-                        updated_at_utc
-                      )
-                      VALUES (
-                        %(event_id)s, %(artifact_filename)s, %(league_id)s, %(season)s,
-                        %(home_team_id)s, %(away_team_id)s, %(kickoff_utc)s,
-                        %(bookmaker)s, %(market)s, %(odds_home)s, %(odds_draw)s, %(odds_away)s, %(captured_at_utc)s,
-                        %(p_model_h)s, %(p_model_d)s, %(p_model_a)s,
-                        now()
-                      )
-                      ON CONFLICT (event_id, artifact_filename, captured_at_utc) DO UPDATE SET
-                        league_id = EXCLUDED.league_id,
-                        season = EXCLUDED.season,
-                        home_team_id = EXCLUDED.home_team_id,
-                        away_team_id = EXCLUDED.away_team_id,
-                        kickoff_utc = EXCLUDED.kickoff_utc,
-                        bookmaker = EXCLUDED.bookmaker,
-                        market = EXCLUDED.market,
-                        odds_home = EXCLUDED.odds_home,
-                        odds_draw = EXCLUDED.odds_draw,
-                        odds_away = EXCLUDED.odds_away,
-                        captured_at_utc = EXCLUDED.captured_at_utc,
-                        p_model_h = EXCLUDED.p_model_h,
-                        p_model_d = EXCLUDED.p_model_d,
-                        p_model_a = EXCLUDED.p_model_a,
-                        updated_at_utc = now()
-                    """
-
-                    cur.execute(
-                        upsert,
-                        {
-                            "event_id": event_id,
-                            "artifact_filename": artifact_filename,
-                            "league_id": int(assume_league_id),
-                            "season": int(assume_season),
-                            "home_team_id": int(home_id),
-                            "away_team_id": int(away_id),
-                            "kickoff_utc": commence_time_utc,
-                            "bookmaker": bookmaker,
-                            "market": market,
-                            "odds_home": odds_home,
-                            "odds_draw": odds_draw,
-                            "odds_away": odds_away,
-                            "captured_at_utc": captured_at_utc,
-                            "p_model_h": float(p["H"]),
-                            "p_model_d": float(p["D"]),
-                            "p_model_a": float(p["A"]),
-                        },
-                    )
-                    inserted += 1
+                    conn.commit()
+                    counts["persisted_ok"] += 1
                 except Exception:
-                    errors += 1
+                    conn.rollback()
+                    counts["persist_error"] += 1
 
-        conn.commit()
+            except Exception as e:
+                counts["model_error"] += 1
+                reason = _classify_model_runtime_error(str(e))
+                if reason == "MISSING_TEAM_STATS_SAME_LEAGUE":
+                    runtime_counts["missing_same_league"] += 1
+                elif reason == "MISSING_TEAM_STATS_EXACT":
+                    runtime_counts["missing_exact"] += 1
+                else:
+                    runtime_counts["other_model_error"] += 1
+
+                try:
+                    _audit_insert_prediction(
+                        conn,
+                        event_id=str(event_id),
+                        sport_key=str(sport_key_db),
+                        kickoff_utc=kickoff_iso,
+                        captured_at_utc=captured_iso,
+                        bookmaker=(str(bookmaker) if bookmaker is not None else None),
+                        market=(str(market) if market is not None else None),
+                        league_id=int(league_id) if league_id is not None else None,
+                        season=int(season) if season is not None else None,
+                        fixture_id=int(fixture_id) if fixture_id is not None else None,
+                        home_team_id=int(home_id),
+                        away_team_id=int(away_id),
+                        match_confidence=(str(match_confidence) if match_confidence is not None else None),
+                        artifact_filename=artifact_filename,
+                        odds_h=oh,
+                        odds_d=od,
+                        odds_a=oa,
+                        p_mkt=p_mkt,
+                        p_model=None,
+                        best_side=None,
+                        best_ev=None,
+                        status="incomplete",
+                        reason=reason,
+                    )
+                    conn.commit()
+                    counts["persisted_incomplete"] += 1
+                except Exception:
+                    conn.rollback()
+                    counts["persist_error"] += 1
 
     return {
         "ok": True,
         "sport_key": sport_key,
         "artifact_filename": artifact_filename,
-        "assume_league_id": assume_league_id,
-        "assume_season": assume_season,
-        "window_hours": hours_ahead,
-        "counts": {"processed": len(rows), "upserted": inserted, "skipped": skipped, "errors": errors},
+        "assume_league_id": int(assume_league_id),
+        "assume_season": int(assume_season),
+        "window_hours_back": int(hours_back),
+        "snapshot_policy": "latest_odds_snapshot_before_kickoff",
+        "counts": counts,
+        "runtime_counts": runtime_counts,
     }
 
 @router.post("/audit/refresh_results")

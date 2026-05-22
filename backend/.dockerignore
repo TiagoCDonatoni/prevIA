@@ -1,10 +1,73 @@
+# =========================
+# Git / metadata
+# =========================
+.git
+.gitignore
+.gcloudignore
+.dockerignore
+
+# =========================
+# Python cache / test cache
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.env
-.venv/
-venv/
-data/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Virtual envs
+# =========================
+.venv/
+venv/
+python-portable/
+
+# =========================
+# Environment / config not needed inside image
+# =========================
+.env
+.env.local
+.env.*.local
+cloudrun.env.yaml
+cloudrun.env.local.yaml
+cloudrun.env.*.local.yaml
+
+# =========================
+# Runtime / local credentials / test files
+# =========================
+COOKIE_JAR
+beta_cookie.txt
+PASS_*
+TEST_*
+BASE_URL
+
+# =========================
+# Local data / artifacts / logs
+# =========================
+data/
+artifacts/
+logs/
+*.log
+backend-run.log
+ingest_error.log
+
+# Generated/test JSON artifacts
+odds_events_after_bookmaker_names.json
+product_sudamericana_after_bookmaker_names.json
+product_sudamericana_oddspapi.json
+pipeline_*_pretty.json
+telemetry-test.json
+
+# =========================
+# Accidental command/output files
+# =========================
+Deploying
+Enabling
+cd
+gcloud
+powershell
+'inputs'

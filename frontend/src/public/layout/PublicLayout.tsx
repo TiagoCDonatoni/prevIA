@@ -19,7 +19,7 @@ import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { ProductAuthModal, type AuthSuccessMeta } from "../../product/auth/ProductAuthModal";
 import { fetchAuthMe } from "../../product/api/auth";
-import { ENABLE_PUBLIC_PRODUCT_LAYER } from "../../config";
+import { ENABLE_PUBLIC_PRODUCT_LAYER, ENABLE_WORLDCUP_POOL } from "../../config";
 
 type FooterSocialId = "instagram" | "x" | "tiktok";
 
@@ -101,10 +101,12 @@ const PUBLIC_FOOTER_COPY = {
     socialTitle: "Redes sociais",
     links: {
       home: "Home",
+      worldCupPool: "Bolão da Copa",
       howItWorks: "Como funciona",
       glossary: "Glossário",
       about: "Sobre",
       contact: "Contato",
+      partners: "Seja parceiro",
     },
     social: [
     {
@@ -135,10 +137,12 @@ const PUBLIC_FOOTER_COPY = {
     socialTitle: "Social",
     links: {
       home: "Home",
+      worldCupPool: "World Cup Pool",
       howItWorks: "How it works",
       glossary: "Glossary",
       about: "About",
       contact: "Contact",
+      partners: "Become a partner",
     },
     social: [
       {
@@ -169,10 +173,12 @@ const PUBLIC_FOOTER_COPY = {
     socialTitle: "Redes sociales",
     links: {
       home: "Home",
+      worldCupPool: "Porra del Mundial",
       howItWorks: "Cómo funciona",
       glossary: "Glosario",
       about: "Sobre",
       contact: "Contacto",
+      partners: "Sé socio",
     },
     social: [
       {
@@ -293,6 +299,15 @@ export function PublicLayout() {
   }, []);
 
   const navItems = [
+    ...(ENABLE_WORLDCUP_POOL
+      ? [
+          {
+            key: "worldcup-pool",
+            to: `/${currentLang}/bolao/copa`,
+            label: copy.nav.worldCupPool,
+          },
+        ]
+      : []),
     {
       key: "how-it-works",
       to: `/${currentLang}/how-it-works`,
@@ -602,6 +617,12 @@ export function PublicLayout() {
                   {footer.links.home}
                 </Link>
 
+                {ENABLE_WORLDCUP_POOL ? (
+                  <Link to={`/${currentLang}/bolao/copa`} className="public-footer-link">
+                    {footer.links.worldCupPool}
+                  </Link>
+                ) : null}
+
                 <Link to={`/${currentLang}/how-it-works`} className="public-footer-link">
                   {footer.links.howItWorks}
                 </Link>
@@ -616,6 +637,18 @@ export function PublicLayout() {
 
                 <Link to={`/${currentLang}/contact`} className="public-footer-link">
                   {footer.links.contact}
+                </Link>
+                <Link
+                  to={
+                    currentLang === "pt"
+                      ? `/${currentLang}/parceiros`
+                      : currentLang === "es"
+                      ? `/${currentLang}/socios`
+                      : `/${currentLang}/partners`
+                  }
+                  className="public-footer-link"
+                >
+                  {footer.links.partners}
                 </Link>
               </div>
             </div>

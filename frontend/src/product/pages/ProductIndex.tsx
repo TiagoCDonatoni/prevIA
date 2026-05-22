@@ -1655,7 +1655,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       lang,
       event_id: eventItem?.event_id != null ? String(eventItem.event_id) : null,
       sport_key: eventItem?.sport_key ?? null,
-      league_name: leagueItem ? getLeagueDisplayName(leagueItem, lang) : null,
+      league_name: leagueItem ? leagueDisplayName(leagueItem, lang) : null,
       home_name: eventItem?.home_name ?? null,
       away_name: eventItem?.away_name ?? null,
       kickoff_utc: eventItem?.commence_time_utc ?? null,

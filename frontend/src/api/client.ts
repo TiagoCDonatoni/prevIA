@@ -40,6 +40,13 @@ import type {
   AdminAccessCampaignsListResponse,
   AdminAccessCampaignUpsertPayload,
   AdminTelemetryAnonymousSummaryResponse,
+  AdminPartnerApplicationDetailResponse,
+  AdminPartnerApplicationsListResponse,
+  AdminPartnerApplicationUpdatePayload,
+  AdminPartnerApplicationConvertPayload,
+  AdminPartnerApplicationConvertResponse,
+  AdminCreatePartnerCampaignLinkPayload,
+  AdminPartnerDetailResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -1227,5 +1234,119 @@ export async function adminPatchAccessCampaignStatus(
     method: "PATCH",
     headers: adminJsonHeaders(),
     body: JSON.stringify({ status }),
+  });
+}
+
+export async function adminListPartnerApplications(params?: {
+  q?: string;
+  status?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<AdminPartnerApplicationsListResponse> {
+  const url = new URL("/admin/partners/applications", API_BASE_URL);
+
+  if (params?.q) url.searchParams.set("q", params.q);
+  if (params?.status) url.searchParams.set("status", params.status);
+  if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+  if (params?.offset != null) url.searchParams.set("offset", String(params.offset));
+
+  return fetchJson<AdminPartnerApplicationsListResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminGetPartnerApplication(
+  applicationId: number
+): Promise<AdminPartnerApplicationDetailResponse> {
+  const url = new URL(`/admin/partners/applications/${applicationId}`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerApplicationDetailResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export async function adminUpdatePartnerApplication(
+  applicationId: number,
+  payload: AdminPartnerApplicationUpdatePayload
+): Promise<AdminPartnerApplicationDetailResponse> {
+  const url = new URL(`/admin/partners/applications/${applicationId}`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerApplicationDetailResponse>(url.toString(), {
+    method: "PATCH",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function adminConvertPartnerApplication(
+  applicationId: number,
+  payload: AdminPartnerApplicationConvertPayload
+): Promise<AdminPartnerApplicationConvertResponse> {
+  const url = new URL(`/admin/partners/applications/${applicationId}/convert`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerApplicationConvertResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function adminGetPartner(partnerId: number): Promise<AdminPartnerDetailResponse> {
+  const url = new URL(`/admin/partners/${partnerId}`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerDetailResponse>(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      ...buildProductRuntimeHeaders(),
+    },
+  });
+}
+
+export async function adminCreatePartnerCampaignLink(
+  partnerId: number,
+  payload: AdminCreatePartnerCampaignLinkPayload
+): Promise<AdminPartnerDetailResponse> {
+  const url = new URL(`/admin/partners/${partnerId}/campaign-links`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerDetailResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function adminActivatePartnerCampaignLink(
+  partnerId: number,
+  linkId: number
+): Promise<AdminPartnerDetailResponse> {
+  const url = new URL(`/admin/partners/${partnerId}/campaign-links/${linkId}/activate`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerDetailResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
+  });
+}
+
+export async function adminPausePartnerCampaignLink(
+  partnerId: number,
+  linkId: number
+): Promise<AdminPartnerDetailResponse> {
+  const url = new URL(`/admin/partners/${partnerId}/campaign-links/${linkId}/pause`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerDetailResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
+  });
+}
+
+export async function adminEndPartnerCampaignLink(
+  partnerId: number,
+  linkId: number
+): Promise<AdminPartnerDetailResponse> {
+  const url = new URL(`/admin/partners/${partnerId}/campaign-links/${linkId}/end`, API_BASE_URL);
+
+  return fetchJson<AdminPartnerDetailResponse>(url.toString(), {
+    method: "POST",
+    headers: adminJsonHeaders(),
   });
 }

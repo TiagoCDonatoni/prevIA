@@ -13,8 +13,14 @@ import { PublicAboutPage } from "./public/pages/PublicAboutPage";
 import { PublicContactPage } from "./public/pages/PublicContactPage";
 import { PublicAnalyticsTracker } from "./public/PublicAnalyticsTracker";
 import { PublicBetaCampaignPage } from "./public/pages/PublicBetaCampaignPage";
+import { WorldCupPoolLandingPage } from "./public/pages/WorldCupPoolLandingPage";
+import { WorldCupPoolJoinPlaceholderPage } from "./public/pages/WorldCupPoolJoinPlaceholderPage";
+import { WorldCupPoolOrganizerPage } from "./public/pages/WorldCupPoolOrganizerPage";
+import { WorldCupPoolParticipantPage } from "./public/pages/WorldCupPoolParticipantPage";
+import { PublicPartnersPage } from "./public/pages/PublicPartnersPage";
+import { PartnerConsolePage } from "./partner/PartnerConsolePage";
 
-import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP } from "./config";
+import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP, ENABLE_WORLDCUP_POOL } from "./config";
 
 export function AppRoutes() {
   return (
@@ -33,8 +39,36 @@ export function AppRoutes() {
           <Route path="glossary/:slug" element={<GlossaryTermPage />} />
           <Route path="about" element={<PublicAboutPage />} />
           <Route path="contact" element={<PublicContactPage />} />
+          <Route path="parceiros" element={<PublicPartnersPage />} />
+          <Route path="partners" element={<PublicPartnersPage />} />
+          <Route path="socios" element={<PublicPartnersPage />} />
+          <Route path="parceiros/painel" element={<PartnerConsolePage />} />
+          <Route path="partners/dashboard" element={<PartnerConsolePage />} />
+          <Route path="socios/panel" element={<PartnerConsolePage />} />
           <Route path="beta/:slug" element={<PublicBetaCampaignPage />} />
           <Route path="campanha/:slug" element={<PublicBetaCampaignPage />} />
+          <Route
+            path="bolao/copa"
+            element={ENABLE_WORLDCUP_POOL ? <WorldCupPoolLandingPage /> : <Navigate to="/pt" replace />}
+          />
+          <Route
+            path="bolao/copa/entrar/:inviteToken"
+            element={
+              ENABLE_WORLDCUP_POOL ? <WorldCupPoolJoinPlaceholderPage /> : <Navigate to="/pt" replace />
+            }
+          />
+          <Route
+            path="bolao/copa/painel/:inviteToken"
+            element={
+              ENABLE_WORLDCUP_POOL ? <WorldCupPoolParticipantPage /> : <Navigate to="/pt" replace />
+            }
+          />
+          <Route
+            path="bolao/copa/admin/:slug"
+            element={
+              ENABLE_WORLDCUP_POOL ? <WorldCupPoolOrganizerPage /> : <Navigate to="/pt" replace />
+            }
+          />
         </Route>
 
         {/* Produto guardado por flag */}

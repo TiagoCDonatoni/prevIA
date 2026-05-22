@@ -1,25 +1,52 @@
 .gcloudignore
 .git
 .gitignore
-.env
-.venv/
-venv/
+
+# Python cache / test cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.env
+.env.local
+.env.*.local
+.venv/
+venv/
+python-portable/
+
+# Local data / artifacts / logs
 data/
 artifacts/
+logs/
+*.log
 ingest_error.log
-BASE_URL
-COOKIE_JAR
-PASS_1
-PASS_2
-TEST_EMAIL
-TEST_NAME
 backend-run.log
-python-portable/
-firebase-api/
-frontend/node_modules/
+
+# Runtime / local credentials / test files
+COOKIE_JAR
+beta_cookie.txt
+PASS_*
+TEST_*
+BASE_URL
+
+# Generated/test JSON artifacts
+odds_events_after_bookmaker_names.json
+product_sudamericana_after_bookmaker_names.json
+product_sudamericana_oddspapi.json
+pipeline_*_pretty.json
+telemetry-test.json
+
+# Accidental command/output files
+Deploying
+Enabling
+cd
+gcloud
+powershell
+'inputs'

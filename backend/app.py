@@ -8,6 +8,7 @@ from src.routes.debug_db import router as debug_db_router
 from src.http.admin_router import admin_router, admin_odds_router
 from src.http.odds_router import router as odds_router
 from src.http.public_router import router as public_router
+from src.http.public_partner_applications_router import router as public_partner_applications_router
 from src.http.admin_odds_router import router as legacy_admin_odds_router
 from src.http.admin_matchup_router import router as admin_matchup_router
 from src.http.admin_catalog_router import router as admin_catalog_router
@@ -22,17 +23,23 @@ from src.http.internal_ops_router import router as internal_ops_router
 from src.http.admin_users_router import router as admin_users_router
 from src.http.billing_router import router as billing_router
 from src.http.admin_access_campaigns_router import router as admin_access_campaigns_router
+from src.http.admin_partner_applications_router import router as admin_partner_applications_router
+from src.http.admin_partners_router import router as admin_partners_router
 from src.http.telemetry_router import router as telemetry_router, admin_router as admin_telemetry_router
-
+from src.http.partner_router import router as partner_router
+from src.http.worldcup_pool_router import router as worldcup_pool_router
 
 def create_app() -> FastAPI:
     settings = load_settings()
 
     if settings.app_env in {"prod", "production"} and settings.admin_dev_bypass_enabled:
         raise RuntimeError("ADMIN_DEV_BYPASS_ENABLED must be false in production.")
-
+        
     if settings.app_env in {"prod", "production"} and settings.product_dev_auto_login_enabled:
         raise RuntimeError("PRODUCT_DEV_AUTO_LOGIN_ENABLED must be false in production.")
+
+    if settings.app_env in {"prod", "production"} and not settings.admin_auth_enabled:
+        raise RuntimeError("ADMIN_AUTH_ENABLED must be true in production.")
 
     if (
         settings.app_env in {"prod", "production"}
@@ -54,10 +61,13 @@ def create_app() -> FastAPI:
     api.include_router(admin_router)
     api.include_router(admin_odds_router)
     api.include_router(public_router)
+    api.include_router(public_partner_applications_router)
     api.include_router(legacy_admin_odds_router)
     api.include_router(admin_matchup_router)
 
-    api.include_router(debug_db_router)
+    if settings.app_env in {"dev", "development", "local", "test"}:
+        api.include_router(debug_db_router)
+
     api.include_router(odds_router)
     api.include_router(access_router)
 
@@ -73,8 +83,13 @@ def create_app() -> FastAPI:
     api.include_router(internal_ops_router)
     api.include_router(admin_users_router)
     api.include_router(admin_access_campaigns_router)
+    api.include_router(admin_partner_applications_router)
+    api.include_router(admin_partners_router)
+    api.include_router(partner_router)
     api.include_router(telemetry_router)
     api.include_router(admin_telemetry_router)
+    if settings.worldcup_pool_enabled:
+        api.include_router(worldcup_pool_router)
 
     @api.get("/", response_class=HTMLResponse)
     def index():
@@ -85,6 +100,9 @@ def create_app() -> FastAPI:
 
     @api.get("/health")
     def health():
+        if settings.app_env in {"prod", "production"}:
+            return {"ok": True}
+
         return {
             "ok": True,
             "db_path": settings.db_path,
@@ -94,6 +112,11 @@ def create_app() -> FastAPI:
             "product_auth_enabled": settings.product_auth_enabled,
             "admin_auth_enabled": settings.admin_auth_enabled,
             "product_manual_analysis_enabled": settings.product_manual_analysis_enabled,
+            "worldcup_pool_enabled": settings.worldcup_pool_enabled,
+            "worldcup_pool_public_create_enabled": settings.worldcup_pool_public_create_enabled,
+            "worldcup_pool_join_enabled": settings.worldcup_pool_join_enabled,
+            "worldcup_pool_predictions_enabled": settings.worldcup_pool_predictions_enabled,
+            "worldcup_pool_readonly_enabled": settings.worldcup_pool_readonly_enabled,
             "product_dev_auto_login_enabled": settings.product_dev_auto_login_enabled,
             "admin_dev_bypass_enabled": settings.admin_dev_bypass_enabled,
             "apifootball_base_url_set": bool(settings.apifootball_base_url),

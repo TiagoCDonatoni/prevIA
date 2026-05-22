@@ -18,6 +18,7 @@ def send_internal_email(
     subject: str,
     text_body: str,
     html_body: Optional[str] = None,
+    to_email: Optional[str] = None,
 ) -> None:
     """
     SMTP simples e provider-agnostic.
@@ -30,7 +31,7 @@ def send_internal_email(
     password = os.getenv("INTERNAL_SMTP_PASSWORD", "").strip()
     from_email = os.getenv("INTERNAL_SMTP_FROM_EMAIL", "").strip()
     from_name = os.getenv("INTERNAL_SMTP_FROM_NAME", "prevIA").strip() or "prevIA"
-    to_email = os.getenv("INTERNAL_NOTIFY_TO_EMAIL", "").strip()
+    recipient_email = (to_email or os.getenv("INTERNAL_NOTIFY_TO_EMAIL", "")).strip()
     use_tls = _bool_env("INTERNAL_SMTP_USE_TLS", True)
     use_ssl = _bool_env("INTERNAL_SMTP_USE_SSL", False)
     timeout_sec = float(os.getenv("INTERNAL_SMTP_TIMEOUT_SEC", "12"))
@@ -39,13 +40,13 @@ def send_internal_email(
         raise ValueError("INTERNAL_SMTP_HOST not configured")
     if not from_email:
         raise ValueError("INTERNAL_SMTP_FROM_EMAIL not configured")
-    if not to_email:
+    if not recipient_email:
         raise ValueError("INTERNAL_NOTIFY_TO_EMAIL not configured")
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"{from_name} <{from_email}>"
-    msg["To"] = to_email
+    msg["To"] = recipient_email
     msg.set_content(text_body)
 
     if html_body:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
+from src.internal_access.guards import require_admin_access
 
 from src.access.admin_campaigns import (
     create_admin_access_campaign,
@@ -11,7 +12,11 @@ from src.access.admin_campaigns import (
     update_admin_access_campaign,
 )
 
-router = APIRouter(prefix="/admin/access-campaigns", tags=["admin-access-campaigns"])
+router = APIRouter(
+    prefix="/admin/access-campaigns",
+    tags=["admin-access-campaigns"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 
 def _error_response(result: dict, fallback_status: int = 400):

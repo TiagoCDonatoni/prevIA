@@ -9,6 +9,7 @@ from fastapi import Request
 from src.auth.sessions import make_session_token_hash, read_product_session_cookie
 from src.core.settings import load_settings
 from src.db.pg import pg_conn
+from src.partnership.attributions import record_partner_attribution_for_campaign_redeem
 
 PLAN_RANK = {
     "FREE": 0,
@@ -661,7 +662,7 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
 
             cur.execute(
                 """
-                SELECT redemption_id, grant_id, status
+                SELECT redemption_id, grant_id, status, redeemed_at_utc
                 FROM access.campaign_redemptions
                 WHERE campaign_id = %(campaign_id)s
                   AND (
@@ -680,6 +681,15 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
             )
             already = cur.fetchone()
             if already is not None:
+                partner_attribution = record_partner_attribution_for_campaign_redeem(
+                    cur,
+                    user_id=user_id,
+                    campaign=campaign,
+                    user=user,
+                    source_redemption_id=int(already[0]),
+                    redeemed_at_utc=already[3],
+                    redemption_status=str(already[2] or ""),
+                )
                 conn.commit()
                 return {
                     "ok": True,
@@ -690,6 +700,7 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                         "grant_id": int(already[1]) if already[1] is not None else None,
                         "status": already[2],
                     },
+                    "partner_attribution": partner_attribution,
                     "auth_refresh_required": True,
                 }
 
@@ -772,7 +783,7 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                         %(email_normalized)s,
                         'pending_approval'
                     )
-                    RETURNING redemption_id
+                    RETURNING redemption_id, redeemed_at_utc
                     """,
                     {
                         "campaign_id": campaign_id,
@@ -780,13 +791,25 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                         "email_normalized": email_normalized,
                     },
                 )
-                redemption_id = int(cur.fetchone()[0])
+                pending_redemption_row = cur.fetchone()
+                redemption_id = int(pending_redemption_row[0])
+                redeemed_at_utc = pending_redemption_row[1]
+                partner_attribution = record_partner_attribution_for_campaign_redeem(
+                    cur,
+                    user_id=user_id,
+                    campaign=campaign,
+                    user=user,
+                    source_redemption_id=redemption_id,
+                    redeemed_at_utc=redeemed_at_utc,
+                    redemption_status="pending_approval",
+                )
                 conn.commit()
                 return {
                     "ok": True,
                     "code": "PENDING_APPROVAL",
                     "message": "campaign redemption pending approval",
                     "redemption": {"redemption_id": redemption_id, "status": "pending_approval"},
+                    "partner_attribution": partner_attribution,
                     "auth_refresh_required": False,
                 }
 
@@ -853,7 +876,7 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                     'redeemed',
                     %(grant_id)s
                 )
-                RETURNING redemption_id
+                RETURNING redemption_id, redeemed_at_utc
                 """,
                 {
                     "campaign_id": campaign_id,
@@ -862,7 +885,9 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                     "grant_id": grant_id,
                 },
             )
-            redemption_id = int(cur.fetchone()[0])
+            redeemed_redemption_row = cur.fetchone()
+            redemption_id = int(redeemed_redemption_row[0])
+            redeemed_at_utc = redeemed_redemption_row[1]
 
             cur.execute(
                 """
@@ -872,6 +897,16 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
                 WHERE campaign_id = %(campaign_id)s
                 """,
                 {"campaign_id": campaign_id},
+            )
+
+            partner_attribution = record_partner_attribution_for_campaign_redeem(
+                cur,
+                user_id=user_id,
+                campaign=campaign,
+                user=user,
+                source_redemption_id=redemption_id,
+                redeemed_at_utc=redeemed_at_utc,
+                redemption_status="redeemed",
             )
 
             offer = _fetch_primary_campaign_offer(cur, campaign_id=campaign_id)
@@ -902,6 +937,7 @@ def redeem_campaign_for_request(*, request: Request, slug: str) -> Dict[str, Any
             "redemption_id": redemption_id,
             "status": "redeemed",
         },
+        "partner_attribution": partner_attribution,
         "discount_eligibility": discount_eligibility,
         "auth_refresh_required": True,
     }
