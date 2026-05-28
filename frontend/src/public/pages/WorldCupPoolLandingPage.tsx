@@ -444,6 +444,7 @@ export function WorldCupPoolLandingPage() {
             <WorldCupPoolCreateForm
               lang={currentLang}
               canCreate={Boolean(status?.public_create_enabled)}
+              scoringModes={status?.scoring_modes ?? []}
             />
           </div>
         </div>

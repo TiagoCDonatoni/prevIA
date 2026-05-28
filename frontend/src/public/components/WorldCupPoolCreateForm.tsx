@@ -3,12 +3,16 @@ import React from "react";
 import type { Lang } from "../../i18n";
 import {
   createWorldCupPool,
+  loginWorldCupPoolOrganizer,
   type WorldCupPoolCreateResponse,
+  type WorldCupPoolScoringMode,
+  type WorldCupPoolScoringModeConfig,
 } from "../api/publicClient";
 
 type Props = {
   lang: Lang;
   canCreate: boolean;
+  scoringModes: WorldCupPoolScoringModeConfig[];
 };
 
 const COPY = {
@@ -53,9 +57,25 @@ const COPY = {
     whatsAppText:
       "Criei o bolão {poolName} para a Copa 2026. Entra pelo link e deixa seus palpites: {inviteUrl}",
     openAdmin: "Ir para o painel",
+    openAdminLoading: "Entrando...",
     linkNote: "Guarde o PIN que você acabou de criar. Ele não será exibido novamente.",
     error: "Não foi possível criar o bolão agora. Confira os dados e tente novamente.",
     pinHelp: "Use apenas números. Esse PIN será usado para você voltar ao painel do organizador.",
+    scoringModeTitle: "Pontuação do bolão",
+    scoringModeBody: "Escolha como os palpites serão pontuados. A Clássica é o padrão e todos os jogos valem igual.",
+    scoringClassicTitle: "Clássica",
+    scoringClassicBody: "Todos os jogos valem a mesma pontuação. Mais simples para grupos casuais.",
+    scoringWeightedTitle: "Emoção até a final",
+    scoringWeightedBody: "Jogos das fases finais valem mais pontos para manter a disputa viva.",
+    scoringDefaultBadge: "Padrão",
+    scoringDetailsLink: "Ver diferenças",
+    scoringDetailsTitle: "Diferenças de pontuação",
+    scoringDetailsBody: "Compare os modos antes de criar o bolão. A regra escolhida será usada no ranking desse bolão.",
+    scoringTablePhase: "Fase",
+    scoringTableExact: "Placar exato",
+    scoringTableOutcome: "Resultado correto",
+    scoringTableTeamGoal: "Gol exato de um time",
+    scoringTableMax: "Máximo",
   },
   en: {
     title: "Create your free pool",
@@ -98,9 +118,25 @@ const COPY = {
     whatsAppText:
       "I created the {poolName} World Cup 2026 pool. Join through the link and add your predictions: {inviteUrl}",
     openAdmin: "Go to dashboard",
+    openAdminLoading: "Opening...",
     linkNote: "Keep the PIN you just created. It will not be shown again.",
     error: "Could not create the pool right now. Check the fields and try again.",
     pinHelp: "Use numbers only. This PIN will let you return to the organizer panel.",
+    scoringModeTitle: "Pool scoring",
+    scoringModeBody: "Choose how predictions will be scored. Classic is the default and every match is worth the same.",
+    scoringClassicTitle: "Classic",
+    scoringClassicBody: "Every match uses the same scoring table. Simpler for casual groups.",
+    scoringWeightedTitle: "Drama until the final",
+    scoringWeightedBody: "Final-stage matches are worth more points to keep the race alive.",
+    scoringDefaultBadge: "Default",
+    scoringDetailsLink: "See differences",
+    scoringDetailsTitle: "Scoring differences",
+    scoringDetailsBody: "Compare the modes before creating the pool. The selected rule will be used for this pool leaderboard.",
+    scoringTablePhase: "Stage",
+    scoringTableExact: "Exact score",
+    scoringTableOutcome: "Correct outcome",
+    scoringTableTeamGoal: "Exact team score",
+    scoringTableMax: "Max",
   },
   es: {
     title: "Crea tu porra gratis",
@@ -143,29 +179,56 @@ const COPY = {
     whatsAppText:
       "Creé la porra {poolName} para el Mundial 2026. Entra por el enlace y deja tus pronósticos: {inviteUrl}",
     openAdmin: "Ir al panel",
+    openAdminLoading: "Entrando...",
     linkNote: "Guarda el PIN que acabas de crear. No se mostrará nuevamente.",
     error: "No fue posible crear la porra ahora. Revisa los datos e inténtalo nuevamente.",
     pinHelp: "Usa solo números. Este PIN te permitirá volver al panel del organizador.",
+    scoringModeTitle: "Puntuación de la porra",
+    scoringModeBody: "Elige cómo se puntuarán los pronósticos. La Clásica es el estándar y todos los partidos valen igual.",
+    scoringClassicTitle: "Clásica",
+    scoringClassicBody: "Todos los partidos usan la misma puntuación. Más simple para grupos casuales.",
+    scoringWeightedTitle: "Emoción hasta la final",
+    scoringWeightedBody: "Los partidos de las fases finales valen más puntos para mantener la disputa viva.",
+    scoringDefaultBadge: "Estándar",
+    scoringDetailsLink: "Ver diferencias",
+    scoringDetailsTitle: "Diferencias de puntuación",
+    scoringDetailsBody: "Compara los modos antes de crear la porra. La regla elegida se usará en el ranking de esta porra.",
+    scoringTablePhase: "Fase",
+    scoringTableExact: "Marcador exacto",
+    scoringTableOutcome: "Resultado correcto",
+    scoringTableTeamGoal: "Gol exacto de un equipo",
+    scoringTableMax: "Máximo",
   },
 } as const;
 
-export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
+export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props) {
   const copy = COPY[lang] ?? COPY.pt;
 
   const [poolName, setPoolName] = React.useState("");
   const [organizerName, setOrganizerName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [pin, setPin] = React.useState("");
+  const [scoringMode, setScoringMode] = React.useState<WorldCupPoolScoringMode>("classic");
   const [termsAccepted, setTermsAccepted] = React.useState(false);
   const [marketingOptIn, setMarketingOptIn] = React.useState(false);
   const [termsModalOpen, setTermsModalOpen] = React.useState(false);
+  const [scoringModalOpen, setScoringModalOpen] = React.useState(false);
 
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [created, setCreated] = React.useState<WorldCupPoolCreateResponse | null>(null);
   const [copied, setCopied] = React.useState(false);
+  const [adminOpening, setAdminOpening] = React.useState(false);
 
   const pinIsValid = /^\d{4}$/.test(pin);
+
+  const visibleScoringModes = React.useMemo(() => {
+    const order: WorldCupPoolScoringMode[] = ["classic", "weighted_by_stage"];
+
+    return [...scoringModes]
+      .filter((item) => order.includes(item.mode))
+      .sort((a, b) => order.indexOf(a.mode) - order.indexOf(b.mode));
+  }, [scoringModes]);
 
   const disabled =
     !canCreate ||
@@ -189,6 +252,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
     setError("");
     setCreated(null);
     setCopied(false);
+    setAdminOpening(false);
 
     try {
       const response = await createWorldCupPool({
@@ -197,6 +261,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
         organizer_email: email.trim(),
         organizer_pin: pin,
         lang,
+        scoring_mode: scoringMode,
         terms_accepted: termsAccepted,
         marketing_opt_in: marketingOptIn,
       });
@@ -207,6 +272,24 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
       setError(copy.error);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function openOrganizerPanelAfterCreate() {
+    if (!created?.pool.slug || !created.pool.admin_url || adminOpening) return;
+
+    setAdminOpening(true);
+
+    try {
+      await loginWorldCupPoolOrganizer(created.pool.slug, {
+        email: email.trim(),
+        pin,
+      });
+    } catch {
+      // O endpoint de criação já tentou criar a sessão do organizador.
+      // Se este refresh silencioso falhar, a página do painel ainda mostra o login normal.
+    } finally {
+      window.location.assign(created.pool.admin_url);
     }
   }
 
@@ -274,9 +357,14 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
         </div>
 
         <div className="worldcup-pool-created-actions worldcup-pool-created-actions-four">
-          <a className="public-btn public-btn-primary" href={created.pool.admin_url}>
-            {copy.openAdmin}
-          </a>
+          <button
+            type="button"
+            className="public-btn public-btn-primary"
+            onClick={openOrganizerPanelAfterCreate}
+            disabled={adminOpening}
+          >
+            {adminOpening ? copy.openAdminLoading : copy.openAdmin}
+          </button>
 
           <a
             className="public-btn public-btn-secondary"
@@ -359,6 +447,61 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
 
       <p className="worldcup-pool-pin-help">{copy.pinHelp}</p>
 
+      <section className="worldcup-pool-scoring-choice" aria-labelledby="worldcup-pool-scoring-choice-title">
+        <div className="worldcup-pool-scoring-choice-head">
+          <div>
+            <h4 id="worldcup-pool-scoring-choice-title">{copy.scoringModeTitle}</h4>
+            <p>{copy.scoringModeBody}</p>
+          </div>
+
+          {visibleScoringModes.length > 0 ? (
+            <button
+              type="button"
+              className="worldcup-pool-scoring-details-button"
+              onClick={() => setScoringModalOpen(true)}
+              disabled={!canCreate || busy}
+            >
+              {copy.scoringDetailsLink}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="worldcup-pool-scoring-choice-options" role="radiogroup" aria-label={copy.scoringModeTitle}>
+          <button
+            type="button"
+            className={`worldcup-pool-scoring-choice-option${
+              scoringMode === "classic" ? " is-selected" : ""
+            }`}
+            role="radio"
+            aria-checked={scoringMode === "classic"}
+            onClick={() => setScoringMode("classic")}
+            disabled={!canCreate || busy}
+          >
+            <span>
+              <strong>{copy.scoringClassicTitle}</strong>
+              <em>{copy.scoringDefaultBadge}</em>
+            </span>
+            <small>{copy.scoringClassicBody}</small>
+          </button>
+
+          <button
+            type="button"
+            className={`worldcup-pool-scoring-choice-option${
+              scoringMode === "weighted_by_stage" ? " is-selected" : ""
+            }`}
+            role="radio"
+            aria-checked={scoringMode === "weighted_by_stage"}
+            onClick={() => setScoringMode("weighted_by_stage")}
+            disabled={!canCreate || busy}
+          >
+            <span>
+              <strong>{copy.scoringWeightedTitle}</strong>
+            </span>
+            <small>{copy.scoringWeightedBody}</small>
+          </button>
+        </div>
+      </section>
+
       <div className="worldcup-pool-consents">
         <div className="worldcup-pool-consent-row">
           <input
@@ -432,6 +575,83 @@ export function WorldCupPoolCreateForm({ lang, canCreate }: Props) {
               type="button"
               className="public-btn public-btn-primary"
               onClick={() => setTermsModalOpen(false)}
+            >
+              {copy.termsModalClose}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {scoringModalOpen ? (
+        <div
+          className="worldcup-pool-modal-backdrop"
+          role="presentation"
+          onClick={() => setScoringModalOpen(false)}
+        >
+          <div
+            className="worldcup-pool-modal worldcup-pool-scoring-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="worldcup-pool-scoring-details-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="worldcup-pool-modal-head">
+              <h4 id="worldcup-pool-scoring-details-title">{copy.scoringDetailsTitle}</h4>
+              <button
+                type="button"
+                className="worldcup-pool-modal-close"
+                aria-label={copy.termsModalClose}
+                onClick={() => setScoringModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="worldcup-pool-modal-body">
+              <p>{copy.scoringDetailsBody}</p>
+
+              <div className="worldcup-pool-scoring-modal-list">
+                {visibleScoringModes.map((modeConfig) => (
+                  <section className="worldcup-pool-scoring-modal-card" key={modeConfig.mode}>
+                    <div className="worldcup-pool-scoring-modal-card-head">
+                      <strong>{modeConfig.title[lang] ?? modeConfig.title.pt}</strong>
+                      <p>{modeConfig.summary[lang] ?? modeConfig.summary.pt}</p>
+                    </div>
+
+                    <div className="worldcup-pool-scoring-table-wrap">
+                      <table className="worldcup-pool-scoring-table">
+                        <thead>
+                          <tr>
+                            <th>{copy.scoringTablePhase}</th>
+                            <th>{copy.scoringTableExact}</th>
+                            <th>{copy.scoringTableOutcome}</th>
+                            <th>{copy.scoringTableTeamGoal}</th>
+                            <th>{copy.scoringTableMax}</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {modeConfig.phases.map((phaseConfig) => (
+                            <tr key={`${modeConfig.mode}-${phaseConfig.phase_key}`}>
+                              <td>{phaseConfig.phase_label[lang] ?? phaseConfig.phase_label.pt}</td>
+                              <td>{phaseConfig.exact_score_points}</td>
+                              <td>{phaseConfig.outcome_points}</td>
+                              <td>{phaseConfig.exact_team_score_bonus}</td>
+                              <td>{phaseConfig.max_points_per_match}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="public-btn public-btn-primary"
+              onClick={() => setScoringModalOpen(false)}
             >
               {copy.termsModalClose}
             </button>

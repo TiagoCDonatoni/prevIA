@@ -7,7 +7,9 @@ import { coercePublicLang } from "../lib/publicLang";
 import {
   createWorldCupPoolOrganizerParticipantSession,
   fetchWorldCupPoolOrganizerDashboard,
+  fetchWorldCupPoolOrganizerSessionStatus,
   loginWorldCupPoolOrganizer,
+  logoutWorldCupPoolOrganizer,
   requestWorldCupPoolPinReset,
   removeWorldCupPoolParticipant,
   type WorldCupPoolOrganizerDashboardResponse,
@@ -39,6 +41,9 @@ const COPY = {
     myPredictions: "Acessar meus palpites",
     myPredictionsLoading: "Abrindo palpites...",
     myPredictionsError: "Não foi possível abrir seus palpites agora.",
+    logout: "Sair",
+    logoutLoading: "Saindo...",
+    logoutError: "Não foi possível sair agora. Tente novamente.",
     eyebrow: "Painel do organizador",
     inviteLink: "Link de convite",
     copyLink: "Copiar link",
@@ -89,6 +94,9 @@ const COPY = {
     myPredictions: "Open my predictions",
     myPredictionsLoading: "Opening predictions...",
     myPredictionsError: "Could not open your predictions right now.",
+    logout: "Log out",
+    logoutLoading: "Logging out...",
+    logoutError: "Could not log out now. Try again.",
     eyebrow: "Organizer dashboard",
     inviteLink: "Invite link",
     copyLink: "Copy link",
@@ -139,6 +147,9 @@ const COPY = {
     myPredictions: "Acceder a mis pronósticos",
     myPredictionsLoading: "Abriendo pronósticos...",
     myPredictionsError: "No fue posible abrir tus pronósticos ahora.",
+    logout: "Salir",
+    logoutLoading: "Saliendo...",
+    logoutError: "No fue posible salir ahora. Inténtalo nuevamente.",
     eyebrow: "Panel del organizador",
     inviteLink: "Enlace de invitación",
     copyLink: "Copiar enlace",
@@ -177,6 +188,15 @@ function formatDate(value: string | null | undefined) {
   return date.toLocaleString();
 }
 
+function isExpectedOrganizerAuthError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+
+  return (
+    message.includes("ORGANIZER_SESSION_REQUIRED") ||
+    message.includes("INVALID_ORGANIZER_SESSION")
+  );
+}
+
 export function WorldCupPoolOrganizerPage() {
   const { lang, slug } = useParams<{ lang: string; slug: string }>();
   const currentLang = coercePublicLang(lang) as Lang;
@@ -200,6 +220,8 @@ export function WorldCupPoolOrganizerPage() {
   const [pinResetError, setPinResetError] = React.useState("");
   const [myPredictionsLoading, setMyPredictionsLoading] = React.useState(false);
   const [myPredictionsError, setMyPredictionsError] = React.useState("");
+  const [logoutLoading, setLogoutLoading] = React.useState(false);
+  const [logoutError, setLogoutError] = React.useState("");
 
   const loadDashboard = React.useCallback(async () => {
     if (!poolSlug) {
@@ -219,7 +241,11 @@ export function WorldCupPoolOrganizerPage() {
       });
       setData(response);
     } catch (err) {
-      console.error("failed to load organizer dashboard", err);
+      if (!isExpectedOrganizerAuthError(err)) {
+        console.error("failed to load organizer dashboard", err);
+      }
+
+      setData(null);
       setLoadError(true);
     } finally {
       setLoading(false);
@@ -227,8 +253,47 @@ export function WorldCupPoolOrganizerPage() {
   }, [poolSlug, page, query]);
 
   React.useEffect(() => {
-    void loadDashboard();
-  }, [loadDashboard]);
+    let active = true;
+
+    async function bootstrapOrganizerSession() {
+      if (!poolSlug) {
+        setLoadError(true);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setLoadError(false);
+
+      try {
+        const session = await fetchWorldCupPoolOrganizerSessionStatus(poolSlug);
+
+        if (!active) return;
+
+        if (!session.authenticated) {
+          setData(null);
+          setLoadError(true);
+          setLoading(false);
+          return;
+        }
+
+        await loadDashboard();
+      } catch (err) {
+        if (active) {
+          console.error("failed to check organizer session", err);
+          setData(null);
+          setLoadError(true);
+          setLoading(false);
+        }
+      }
+    }
+
+    void bootstrapOrganizerSession();
+
+    return () => {
+      active = false;
+    };
+  }, [poolSlug, loadDashboard]);
 
   async function openMyPredictions() {
     if (!data?.pool.slug) return;
@@ -260,6 +325,27 @@ export function WorldCupPoolOrganizerPage() {
       setMyPredictionsError(copy.myPredictionsError);
     } finally {
       setMyPredictionsLoading(false);
+    }
+  }
+
+  async function onOrganizerLogout() {
+    if (!data?.pool.slug || logoutLoading) return;
+
+    setLogoutLoading(true);
+    setLogoutError("");
+
+    try {
+      await logoutWorldCupPoolOrganizer(data.pool.slug);
+
+      setData(null);
+      setLoadError(true);
+      setLoginPin("");
+      setMyPredictionsError("");
+    } catch (err) {
+      console.error("failed to logout organizer", err);
+      setLogoutError(copy.logoutError);
+    } finally {
+      setLogoutLoading(false);
     }
   }
 
@@ -511,10 +597,23 @@ export function WorldCupPoolOrganizerPage() {
               >
                 {myPredictionsLoading ? copy.myPredictionsLoading : copy.myPredictions}
               </button>
+
+              <button
+                type="button"
+                className="public-btn public-btn-secondary"
+                onClick={onOrganizerLogout}
+                disabled={logoutLoading}
+              >
+                {logoutLoading ? copy.logoutLoading : copy.logout}
+              </button>
             </div>
 
             {myPredictionsError ? (
               <p className="worldcup-pool-form-error">{myPredictionsError}</p>
+            ) : null}
+
+            {logoutError ? (
+              <p className="worldcup-pool-form-error">{logoutError}</p>
             ) : null}
           </div>
         </div>

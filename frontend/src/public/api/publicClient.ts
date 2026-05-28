@@ -124,6 +124,7 @@ export async function submitPartnerApplication(
 }
 
 export type WorldCupPoolLang = "pt" | "en" | "es";
+export type WorldCupPoolScoringMode = "classic" | "weighted_by_stage";
 
 export type WorldCupPoolStatusCopy = {
   title: string;
@@ -139,6 +140,18 @@ export type WorldCupPoolScoringConfig = {
   max_points_per_match: number;
 };
 
+export type WorldCupPoolScoringPhaseConfig = WorldCupPoolScoringConfig & {
+  phase_key: string;
+  phase_label: Record<WorldCupPoolLang, string>;
+};
+
+export type WorldCupPoolScoringModeConfig = {
+  mode: WorldCupPoolScoringMode;
+  title: Record<WorldCupPoolLang, string>;
+  summary: Record<WorldCupPoolLang, string>;
+  phases: WorldCupPoolScoringPhaseConfig[];
+};
+
 export type WorldCupPoolStatusResponse = {
   ok: boolean;
   enabled: boolean;
@@ -148,6 +161,8 @@ export type WorldCupPoolStatusResponse = {
   readonly_enabled: boolean;
   supported_langs: WorldCupPoolLang[];
   scoring: WorldCupPoolScoringConfig;
+  scoring_mode_default: WorldCupPoolScoringMode;
+  scoring_modes: WorldCupPoolScoringModeConfig[];
   copy: Record<WorldCupPoolLang, WorldCupPoolStatusCopy>;
 };
 
@@ -168,6 +183,7 @@ export type WorldCupPoolCreatePayload = {
   organizer_email: string;
   organizer_pin: string;
   lang: WorldCupPoolLang;
+  scoring_mode?: WorldCupPoolScoringMode;
   marketing_opt_in: boolean;
   terms_accepted: boolean;
 };
@@ -177,6 +193,7 @@ export type WorldCupPoolCreatedPool = {
   slug: string;
   name: string;
   lang: WorldCupPoolLang;
+  scoring_mode: WorldCupPoolScoringMode;
   invite_token: string;
   invite_url: string;
   admin_url: string;
@@ -218,6 +235,7 @@ export type WorldCupPoolInvitePool = {
   slug: string;
   name: string;
   lang: WorldCupPoolLang;
+  scoring_mode: WorldCupPoolScoringMode;
   status: string;
   participant_count: number;
 };
@@ -280,6 +298,8 @@ export type WorldCupPoolParticipantDashboardResponse = {
   pool: WorldCupPoolInvitePool;
   participant: WorldCupPoolDashboardParticipant;
   scoring: WorldCupPoolScoringConfig;
+  scoring_mode: WorldCupPoolScoringMode;
+  scoring_rules: WorldCupPoolScoringModeConfig;
 };
 
 export type WorldCupPoolMatchFilter = "all" | "pending" | "predicted" | "locked";
@@ -444,6 +464,23 @@ export async function loginWorldCupPoolParticipant(
   });
 }
 
+export async function logoutWorldCupPoolParticipant(
+  inviteToken: string
+): Promise<WorldCupPoolLogoutResponse> {
+  const url = new URL(
+    `/public/worldcup-pool/invites/${encodeURIComponent(inviteToken)}/participant/logout`,
+    API_BASE_URL
+  );
+
+  return fetchJson<WorldCupPoolLogoutResponse>(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+}
+
 export async function fetchWorldCupPoolParticipantDashboard(
   inviteToken: string
 ): Promise<WorldCupPoolParticipantDashboardResponse> {
@@ -541,6 +578,7 @@ export type WorldCupPoolOrganizerPool = {
   slug: string;
   name: string;
   lang: WorldCupPoolLang;
+  scoring_mode: WorldCupPoolScoringMode;
   status: string;
   invite_token: string;
   invite_url: string;
@@ -589,6 +627,12 @@ export type WorldCupPoolOrganizerLoginResponse = {
   organizer_session_created: boolean;
 };
 
+export type WorldCupPoolOrganizerSessionStatusResponse = {
+  ok: boolean;
+  authenticated: boolean;
+  pool?: WorldCupPoolOrganizerPool | null;
+};
+
 export type WorldCupPoolOrganizerParticipantSessionResponse = {
   ok: boolean;
   participant_url: string;
@@ -602,6 +646,27 @@ export type WorldCupPoolRemoveParticipantResponse = {
   participant_id: number;
   status: string;
 };
+
+export type WorldCupPoolLogoutResponse = {
+  ok: boolean;
+};
+
+export async function fetchWorldCupPoolOrganizerSessionStatus(
+  slug: string
+): Promise<WorldCupPoolOrganizerSessionStatusResponse> {
+  const url = new URL(
+    `/public/worldcup-pool/pools/${encodeURIComponent(slug)}/organizer/session`,
+    API_BASE_URL
+  );
+
+  return fetchJson<WorldCupPoolOrganizerSessionStatusResponse>(url.toString(), {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+}
 
 export async function loginWorldCupPoolOrganizer(
   slug: string,
@@ -620,6 +685,23 @@ export async function loginWorldCupPoolOrganizer(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+  });
+}
+
+export async function logoutWorldCupPoolOrganizer(
+  slug: string
+): Promise<WorldCupPoolLogoutResponse> {
+  const url = new URL(
+    `/public/worldcup-pool/pools/${encodeURIComponent(slug)}/organizer/logout`,
+    API_BASE_URL
+  );
+
+  return fetchJson<WorldCupPoolLogoutResponse>(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
   });
 }
 

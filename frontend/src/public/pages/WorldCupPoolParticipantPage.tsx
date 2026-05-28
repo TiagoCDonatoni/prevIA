@@ -6,6 +6,7 @@ import type { Lang } from "../../i18n";
 import { coercePublicLang } from "../lib/publicLang";
 import {
   fetchWorldCupPoolParticipantDashboard,
+  logoutWorldCupPoolParticipant,
   type WorldCupPoolParticipantDashboardResponse,
 } from "../api/publicClient";
 import { WorldCupPoolPredictionsPanel } from "../components/WorldCupPoolPredictionsPanel";
@@ -37,6 +38,9 @@ const COPY = {
     teamScoreBonus: "Bônus por gols de um time",
     maxPerMatch: "Máximo por jogo",
     invite: "Voltar ao convite",
+    logout: "Sair",
+    logoutLoading: "Saindo...",
+    logoutError: "Não foi possível sair agora. Tente novamente.",
   },
   en: {
     loading: "Loading your dashboard...",
@@ -63,6 +67,9 @@ const COPY = {
     teamScoreBonus: "Team score bonus",
     maxPerMatch: "Maximum per match",
     invite: "Back to invite",
+    logout: "Log out",
+    logoutLoading: "Logging out...",
+    logoutError: "Could not log out now. Try again.",
   },
   es: {
     loading: "Cargando tu panel...",
@@ -89,6 +96,9 @@ const COPY = {
     teamScoreBonus: "Bono por goles de un equipo",
     maxPerMatch: "Máximo por partido",
     invite: "Volver a la invitación",
+    logout: "Salir",
+    logoutLoading: "Saliendo...",
+    logoutError: "No fue posible salir ahora. Inténtalo nuevamente.",
   },
 } as const;
 
@@ -101,6 +111,8 @@ export function WorldCupPoolParticipantPage() {
   const [data, setData] = React.useState<WorldCupPoolParticipantDashboardResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(false);
+  const [logoutLoading, setLogoutLoading] = React.useState(false);
+  const [logoutError, setLogoutError] = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
@@ -140,6 +152,23 @@ export function WorldCupPoolParticipantPage() {
   }, [token]);
 
   const invitePath = `/${currentLang}/bolao/copa/entrar/${encodeURIComponent(token)}`;
+
+  async function onParticipantLogout() {
+    if (!token || logoutLoading) return;
+
+    setLogoutLoading(true);
+    setLogoutError("");
+
+    try {
+      await logoutWorldCupPoolParticipant(token);
+      window.location.assign(invitePath);
+    } catch (err) {
+      console.error("failed to logout participant", err);
+      setLogoutError(copy.logoutError);
+    } finally {
+      setLogoutLoading(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -236,7 +265,20 @@ export function WorldCupPoolParticipantPage() {
           <Link className="public-btn public-btn-secondary" to={invitePath}>
             {copy.invite}
           </Link>
+
+          <button
+            type="button"
+            className="public-btn public-btn-secondary"
+            onClick={onParticipantLogout}
+            disabled={logoutLoading}
+          >
+            {logoutLoading ? copy.logoutLoading : copy.logout}
+          </button>
         </div>
+
+        {logoutError ? (
+          <p className="worldcup-pool-form-error">{logoutError}</p>
+        ) : null}
       </section>
     </div>
   );

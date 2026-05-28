@@ -478,6 +478,113 @@
   color: #64748b;
 }
 
+.worldcup-pool-scoring-choice {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(11, 47, 138, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    radial-gradient(circle at top right, rgba(11, 47, 138, 0.08), transparent 34%),
+    #f8fafc;
+}
+
+.worldcup-pool-scoring-choice-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worldcup-pool-scoring-choice-head h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+}
+
+.worldcup-pool-scoring-choice-head p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.worldcup-pool-scoring-choice-options {
+  display: grid;
+  gap: 10px;
+}
+
+.worldcup-pool-scoring-choice-option {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 16px;
+  padding: 12px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.worldcup-pool-scoring-choice-option:hover:not(:disabled) {
+  border-color: rgba(11, 47, 138, 0.34);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.worldcup-pool-scoring-choice-option.is-selected {
+  border-color: rgba(11, 47, 138, 0.72);
+  background: linear-gradient(180deg, #ffffff 0%, #eef4ff 100%);
+  box-shadow: 0 12px 30px rgba(11, 47, 138, 0.12);
+}
+
+.worldcup-pool-scoring-choice-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.worldcup-pool-scoring-choice-option span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.worldcup-pool-scoring-choice-option strong {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 850;
+}
+
+.worldcup-pool-scoring-choice-option em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(11, 47, 138, 0.10);
+  color: var(--public-brand);
+  font-size: 10px;
+  line-height: 1;
+  font-style: normal;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.worldcup-pool-scoring-choice-option small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .worldcup-pool-checkbox,
 .worldcup-pool-checkbox-row {
   display: grid;
@@ -2634,5 +2741,123 @@ label.worldcup-pool-consent-text {
   .worldcup-pool-created-actions-four,
   .worldcup-pool-create-success .worldcup-pool-created-actions-four {
     grid-template-columns: 1fr;
+  }
+}
+
+.worldcup-pool-scoring-details-button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(11, 47, 138, 0.18);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: #ffffff;
+  color: var(--public-brand);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+}
+
+.worldcup-pool-scoring-details-button:hover:not(:disabled) {
+  border-color: rgba(11, 47, 138, 0.36);
+  background: #eef4ff;
+}
+
+.worldcup-pool-scoring-details-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.worldcup-pool-scoring-modal {
+  width: min(100%, 760px);
+  max-height: min(86vh, 760px);
+  overflow: auto;
+}
+
+.worldcup-pool-scoring-modal-list {
+  display: grid;
+  gap: 14px;
+}
+
+.worldcup-pool-scoring-modal-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(11, 47, 138, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.worldcup-pool-scoring-modal-card-head {
+  display: grid;
+  gap: 4px;
+}
+
+.worldcup-pool-scoring-modal-card-head strong {
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 900;
+}
+
+.worldcup-pool-scoring-modal-card-head p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.worldcup-pool-scoring-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.worldcup-pool-scoring-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+}
+
+.worldcup-pool-scoring-table th,
+.worldcup-pool-scoring-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.worldcup-pool-scoring-table th {
+  color: #475569;
+  font-weight: 900;
+  background: #f8fafc;
+}
+
+.worldcup-pool-scoring-table td {
+  color: #0f172a;
+  font-weight: 750;
+}
+
+.worldcup-pool-scoring-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.worldcup-pool-scoring-table td:not(:first-child),
+.worldcup-pool-scoring-table th:not(:first-child) {
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .worldcup-pool-scoring-choice-head {
+    flex-direction: column;
+  }
+
+  .worldcup-pool-scoring-details-button {
+    width: 100%;
+    justify-content: center;
   }
 }
