@@ -17,6 +17,7 @@ import { WorldCupPoolLandingPage } from "./public/pages/WorldCupPoolLandingPage"
 import { WorldCupPoolJoinPlaceholderPage } from "./public/pages/WorldCupPoolJoinPlaceholderPage";
 import { WorldCupPoolOrganizerPage } from "./public/pages/WorldCupPoolOrganizerPage";
 import { WorldCupPoolParticipantPage } from "./public/pages/WorldCupPoolParticipantPage";
+import { WorldCupPoolMyPoolsPage } from "./public/pages/WorldCupPoolMyPoolsPage";
 import { PublicPartnersPage } from "./public/pages/PublicPartnersPage";
 import { PartnerConsolePage } from "./partner/PartnerConsolePage";
 
@@ -55,6 +56,12 @@ export function AppRoutes() {
             path="bolao/copa/entrar/:inviteToken"
             element={
               ENABLE_WORLDCUP_POOL ? <WorldCupPoolJoinPlaceholderPage /> : <Navigate to="/pt" replace />
+            }
+          />
+          <Route
+            path="bolao/copa/meus-boloes"
+            element={
+              ENABLE_WORLDCUP_POOL ? <WorldCupPoolMyPoolsPage /> : <Navigate to="/pt" replace />
             }
           />
           <Route

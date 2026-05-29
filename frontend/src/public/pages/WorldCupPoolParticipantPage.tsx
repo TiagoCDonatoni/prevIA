@@ -37,10 +37,15 @@ const COPY = {
     outcome: "Resultado correto",
     teamScoreBonus: "Bônus por gols de um time",
     maxPerMatch: "Máximo por jogo",
+    scoringClassicMode: "Clássica",
+    scoringWeightedMode: "Emoção até a final",
+    scoringClassicHint: "Todos os jogos valem igual.",
+    scoringWeightedHint: "Base da fase de grupos. Fase extra e mata-mata valem mais.",
     invite: "Voltar ao convite",
     logout: "Sair",
     logoutLoading: "Saindo...",
     logoutError: "Não foi possível sair agora. Tente novamente.",
+    changePool: "Trocar bolão",
   },
   en: {
     loading: "Loading your dashboard...",
@@ -66,10 +71,15 @@ const COPY = {
     outcome: "Correct outcome",
     teamScoreBonus: "Team score bonus",
     maxPerMatch: "Maximum per match",
+    scoringClassicMode: "Classic",
+    scoringWeightedMode: "Drama until the final",
+    scoringClassicHint: "Every match is worth the same.",
+    scoringWeightedHint: "Group-stage base. Extra round and knockout matches are worth more.",
     invite: "Back to invite",
     logout: "Log out",
     logoutLoading: "Logging out...",
     logoutError: "Could not log out now. Try again.",
+    changePool: "Switch pool",
   },
   es: {
     loading: "Cargando tu panel...",
@@ -95,10 +105,15 @@ const COPY = {
     outcome: "Resultado correcto",
     teamScoreBonus: "Bono por goles de un equipo",
     maxPerMatch: "Máximo por partido",
+    scoringClassicMode: "Clásica",
+    scoringWeightedMode: "Emoción hasta la final",
+    scoringClassicHint: "Todos los partidos valen igual.",
+    scoringWeightedHint: "Base de la fase de grupos. Ronda extra y eliminatorias valen más.",
     invite: "Volver a la invitación",
     logout: "Salir",
     logoutLoading: "Saliendo...",
     logoutError: "No fue posible salir ahora. Inténtalo nuevamente.",
+    changePool: "Cambiar porra",
   },
 } as const;
 
@@ -204,6 +219,18 @@ export function WorldCupPoolParticipantPage() {
     );
   }
 
+  const scoringModeTitle =
+    data.scoring_rules?.title?.[currentLang] ??
+    data.scoring_rules?.title?.pt ??
+    (data.scoring_mode === "weighted_by_stage"
+      ? copy.scoringWeightedMode
+      : copy.scoringClassicMode);
+
+  const scoringModeHint =
+    data.scoring_mode === "weighted_by_stage"
+      ? copy.scoringWeightedHint
+      : copy.scoringClassicHint;
+
   return (
     <div className="worldcup-pool-page">
       <section className="worldcup-pool-participant-shell">
@@ -234,10 +261,23 @@ export function WorldCupPoolParticipantPage() {
             <WorldCupPoolRankingPanel lang={currentLang} inviteToken={token} />
           </div>
 
-          <article className="worldcup-pool-participant-card worldcup-pool-participant-card-wide">
-            <div>
-              <span>{copy.rulesTitle}</span>
-              <h2>{copy.rulesTitle}</h2>
+          <article className="worldcup-pool-participant-card worldcup-pool-participant-card-wide worldcup-pool-scoring-card">
+            <div className="worldcup-pool-scoring-card-head">
+              <div>
+                <span>{copy.rulesTitle}</span>
+                <h2>{copy.rulesTitle}</h2>
+              </div>
+
+              <div className="worldcup-pool-scoring-mode-summary">
+                <strong
+                  className={`worldcup-pool-scoring-mode-pill ${
+                    data.scoring_mode === "weighted_by_stage" ? "is-weighted" : "is-classic"
+                  }`}
+                >
+                  {scoringModeTitle}
+                </strong>
+                <small>{scoringModeHint}</small>
+              </div>
             </div>
 
             <dl className="worldcup-pool-scoring-list">
@@ -264,6 +304,10 @@ export function WorldCupPoolParticipantPage() {
         <div className="worldcup-pool-participant-actions">
           <Link className="public-btn public-btn-secondary" to={invitePath}>
             {copy.invite}
+          </Link>
+
+          <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
+            {copy.changePool}
           </Link>
 
           <button

@@ -573,6 +573,45 @@ export async function fetchWorldCupPoolParticipantRanking(
   });
 }
 
+export type WorldCupPoolAccessRole = "organizer" | "participant";
+
+export type WorldCupPoolMyPool = {
+  id: number;
+  slug: string;
+  name: string;
+  lang: WorldCupPoolLang;
+  scoring_mode: WorldCupPoolScoringMode;
+  status: string;
+  invite_token: string;
+  invite_url: string;
+  admin_url: string;
+  participant_url: string;
+  participant_count: number;
+  roles: WorldCupPoolAccessRole[];
+  primary_role: WorldCupPoolAccessRole;
+  participant_id?: number | null;
+  participant_display_name?: string | null;
+  predictions_count: number;
+  available_matches: number;
+};
+
+export type WorldCupPoolMyPoolsResponse = {
+  ok: boolean;
+  pools: WorldCupPoolMyPool[];
+};
+
+export async function fetchWorldCupPoolMyPools(): Promise<WorldCupPoolMyPoolsResponse> {
+  const url = new URL("/public/worldcup-pool/me/pools", API_BASE_URL);
+
+  return fetchJson<WorldCupPoolMyPoolsResponse>(url.toString(), {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+}
+
 export type WorldCupPoolOrganizerPool = {
   id: number;
   slug: string;

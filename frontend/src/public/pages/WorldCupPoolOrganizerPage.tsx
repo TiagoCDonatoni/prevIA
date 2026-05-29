@@ -1,11 +1,12 @@
 import React from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import "../worldcup-pool.css";
 
 import type { Lang } from "../../i18n";
 import { coercePublicLang } from "../lib/publicLang";
 import {
   createWorldCupPoolOrganizerParticipantSession,
+  fetchWorldCupPoolMyPools,
   fetchWorldCupPoolOrganizerDashboard,
   fetchWorldCupPoolOrganizerSessionStatus,
   loginWorldCupPoolOrganizer,
@@ -50,6 +51,11 @@ const COPY = {
     copied: "Link copiado",
     activeParticipants: "participantes ativos",
     availableMatches: "jogos liberados",
+    scoringModeLabel: "Pontuação",
+    scoringClassicMode: "Clássica",
+    scoringWeightedMode: "Emoção até a final",
+    scoringClassicHint: "Todos os jogos valem igual.",
+    scoringWeightedHint: "Fase extra e mata-mata valem mais pontos.",
     rankingTitle: "Ranking geral",
     rankingBody: "Veja a classificação do bolão e o progresso de palpites de cada participante.",
     searchLabel: "Filtrar por nome",
@@ -70,6 +76,7 @@ const COPY = {
     previous: "Anterior",
     next: "Próxima",
     backToLanding: "Voltar para página do bolão",
+    changePool: "Trocar bolão",
   },
   en: {
     loading: "Loading dashboard...",
@@ -103,6 +110,11 @@ const COPY = {
     copied: "Link copied",
     activeParticipants: "active participants",
     availableMatches: "available matches",
+    scoringModeLabel: "Scoring",
+    scoringClassicMode: "Classic",
+    scoringWeightedMode: "Drama until the final",
+    scoringClassicHint: "Every match is worth the same.",
+    scoringWeightedHint: "Extra round and knockout matches are worth more points.",
     rankingTitle: "Overall ranking",
     rankingBody: "See the pool standings and each participant's prediction progress.",
     searchLabel: "Filter by name",
@@ -123,6 +135,7 @@ const COPY = {
     previous: "Previous",
     next: "Next",
     backToLanding: "Back to pool page",
+    changePool: "Switch pool",
   },
   es: {
     loading: "Cargando panel...",
@@ -156,6 +169,11 @@ const COPY = {
     copied: "Enlace copiado",
     activeParticipants: "participantes activos",
     availableMatches: "partidos disponibles",
+    scoringModeLabel: "Puntuación",
+    scoringClassicMode: "Clásica",
+    scoringWeightedMode: "Emoción hasta la final",
+    scoringClassicHint: "Todos los partidos valen igual.",
+    scoringWeightedHint: "Ronda extra y eliminatorias valen más puntos.",
     rankingTitle: "Ranking general",
     rankingBody: "Consulta la clasificación de la porra y el progreso de pronósticos de cada participante.",
     searchLabel: "Filtrar por nombre",
@@ -176,6 +194,7 @@ const COPY = {
     previous: "Anterior",
     next: "Siguiente",
     backToLanding: "Volver a la página de la porra",
+    changePool: "Cambiar porra",
   },
 } as const;
 
@@ -199,6 +218,7 @@ function isExpectedOrganizerAuthError(error: unknown) {
 
 export function WorldCupPoolOrganizerPage() {
   const { lang, slug } = useParams<{ lang: string; slug: string }>();
+  const navigate = useNavigate();
   const currentLang = coercePublicLang(lang) as Lang;
   const copy = COPY[currentLang] ?? COPY.pt;
   const poolSlug = String(slug || "").trim();
@@ -409,6 +429,14 @@ export function WorldCupPoolOrganizerPage() {
       });
 
       setLoadError(false);
+
+      const myPools = await fetchWorldCupPoolMyPools();
+
+      if (myPools.pools.length > 1) {
+        navigate(`/${currentLang}/bolao/copa/meus-boloes`, { replace: true });
+        return;
+      }
+
       await loadDashboard();
     } catch (err) {
       console.error("failed to login organizer", err);
@@ -554,6 +582,15 @@ export function WorldCupPoolOrganizerPage() {
   const canGoPrevious = page > 1;
   const canGoNext = totalPages > 0 && page < totalPages;
   const hasSearch = query.trim().length > 0;
+  const isWeightedScoring = data.pool.scoring_mode === "weighted_by_stage";
+
+  const scoringModeTitle = isWeightedScoring
+    ? copy.scoringWeightedMode
+    : copy.scoringClassicMode;
+
+  const scoringModeHint = isWeightedScoring
+    ? copy.scoringWeightedHint
+    : copy.scoringClassicHint;
 
   return (
     <div className="worldcup-pool-page">
@@ -573,6 +610,18 @@ export function WorldCupPoolOrganizerPage() {
                 <strong>{data.summary.available_matches}</strong>
                 <span>{copy.availableMatches}</span>
               </div>
+            </div>
+
+            <div className="worldcup-pool-admin-scoring-summary">
+              <span>{copy.scoringModeLabel}</span>
+              <strong
+                className={`worldcup-pool-admin-scoring-pill ${
+                  isWeightedScoring ? "is-weighted" : "is-classic"
+                }`}
+              >
+                {scoringModeTitle}
+              </strong>
+              <small>{scoringModeHint}</small>
             </div>
           </div>
 
@@ -597,6 +646,10 @@ export function WorldCupPoolOrganizerPage() {
               >
                 {myPredictionsLoading ? copy.myPredictionsLoading : copy.myPredictions}
               </button>
+
+              <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
+                {copy.changePool}
+              </Link>
 
               <button
                 type="button"

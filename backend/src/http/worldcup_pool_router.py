@@ -35,8 +35,10 @@ POOL_CREATE_EMAIL_MAX_ATTEMPTS = 3
 POOL_CREATE_GLOBAL_WINDOW_MINUTES = 10
 POOL_CREATE_GLOBAL_MAX_ATTEMPTS = 50
 
-WORLDCUP_POOL_ORGANIZER_COOKIE_PATH = "/public/worldcup-pool/pools"
-WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH = "/public/worldcup-pool/invites"
+WORLDCUP_POOL_COOKIE_PATH = "/public/worldcup-pool"
+WORLDCUP_POOL_ORGANIZER_COOKIE_PATH = WORLDCUP_POOL_COOKIE_PATH
+WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH = WORLDCUP_POOL_COOKIE_PATH
+WORLDCUP_POOL_SESSION_COOKIE_MAX_TOKENS = 24
 
 
 class WorldCupPoolScoringConfig(BaseModel):
@@ -351,6 +353,33 @@ class WorldCupPoolRemoveParticipantResponse(BaseModel):
 
 class WorldCupPoolLogoutResponse(BaseModel):
     ok: bool = True
+
+WorldCupPoolAccessRole = Literal["organizer", "participant"]
+
+
+class WorldCupPoolMyPool(BaseModel):
+    id: int
+    slug: str
+    name: str
+    lang: Lang
+    scoring_mode: WorldCupPoolScoringMode
+    status: str
+    invite_token: str
+    invite_url: str
+    admin_url: str
+    participant_url: str
+    participant_count: int
+    roles: list[WorldCupPoolAccessRole]
+    primary_role: WorldCupPoolAccessRole
+    participant_id: Optional[int] = None
+    participant_display_name: Optional[str] = None
+    predictions_count: int = 0
+    available_matches: int = 0
+
+
+class WorldCupPoolMyPoolsResponse(BaseModel):
+    ok: bool = True
+    pools: list[WorldCupPoolMyPool]
 
 CLASSIC_SCORING = WorldCupPoolScoringConfig(
     exact_score_points=5,
@@ -980,7 +1009,7 @@ def _iso(value) -> Optional[str]:
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     return str(value)
-    
+
 def _pool_invite_from_row(row) -> WorldCupPoolInvitePool:
     return WorldCupPoolInvitePool(
         id=int(row[0]),
@@ -1033,7 +1062,7 @@ def _require_participant_context(
         p.lang,
         p.status,
         p.scoring_mode,
-        COUNT(active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
+        COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
         participant.id,
         participant.display_name,
         participant.email,
@@ -1138,6 +1167,14 @@ def _require_participant_context(
 
     return pool, participant
 
+def _split_worldcup_session_cookie_value(raw_value: str | None) -> list[str]:
+    values: list[str] = []
+    for item in str(raw_value or "").split("."):
+        token = item.strip()
+        if token and token not in values:
+            values.append(token)
+    return values
+
 def _get_worldcup_pool_session_token_candidates(
     *,
     request: Request,
@@ -1149,15 +1186,54 @@ def _get_worldcup_pool_session_token_candidates(
     for part in raw_cookie.split(";"):
         name, sep, value = part.strip().partition("=")
         if sep and name == cookie_name:
-            clean_value = value.strip()
-            if clean_value and clean_value not in values:
-                values.append(clean_value)
+            for token in _split_worldcup_session_cookie_value(value.strip()):
+                if token not in values:
+                    values.append(token)
 
     parsed_value = request.cookies.get(cookie_name)
-    if parsed_value and parsed_value not in values:
-        values.append(parsed_value)
+    for token in _split_worldcup_session_cookie_value(parsed_value):
+        if token not in values:
+            values.append(token)
 
     return values
+
+
+def _write_worldcup_pool_session_cookie_value(
+    *,
+    response: Response,
+    cookie_name: str,
+    tokens: list[str],
+    max_age_seconds: int,
+    path: str,
+) -> None:
+    settings = load_settings()
+    clean_tokens: list[str] = []
+
+    for token in tokens:
+        clean_token = str(token or "").strip()
+        if clean_token and clean_token not in clean_tokens:
+            clean_tokens.append(clean_token)
+
+    clean_tokens = clean_tokens[-WORLDCUP_POOL_SESSION_COOKIE_MAX_TOKENS:]
+
+    if not clean_tokens:
+        _clear_worldcup_pool_session_cookie(
+            response=response,
+            cookie_name=cookie_name,
+            path=path,
+        )
+        return
+
+    response.set_cookie(
+        key=cookie_name,
+        value=".".join(clean_tokens),
+        max_age=max_age_seconds,
+        httponly=True,
+        secure=settings.product_session_cookie_secure,
+        samesite=settings.product_session_cookie_samesite,
+        domain=settings.product_session_cookie_domain or None,
+        path=path,
+    )
 
 
 def _set_worldcup_pool_session_cookie(
@@ -1167,17 +1243,54 @@ def _set_worldcup_pool_session_cookie(
     token: str,
     max_age_seconds: int,
     path: str,
+    request: Optional[Request] = None,
 ) -> None:
-    settings = load_settings()
+    tokens = (
+        _get_worldcup_pool_session_token_candidates(
+            request=request,
+            cookie_name=cookie_name,
+        )
+        if request is not None
+        else []
+    )
 
-    response.set_cookie(
-        key=cookie_name,
-        value=token,
-        max_age=max_age_seconds,
-        httponly=True,
-        secure=settings.product_session_cookie_secure,
-        samesite=settings.product_session_cookie_samesite,
-        domain=settings.product_session_cookie_domain,
+    tokens = [existing for existing in tokens if existing != token] + [token]
+
+    _write_worldcup_pool_session_cookie_value(
+        response=response,
+        cookie_name=cookie_name,
+        tokens=tokens,
+        max_age_seconds=max_age_seconds,
+        path=path,
+    )
+
+
+def _remove_worldcup_pool_session_tokens_from_cookie(
+    *,
+    request: Request,
+    response: Response,
+    cookie_name: str,
+    revoked_token_hashes: set[str],
+    max_age_seconds: int,
+    path: str,
+) -> None:
+    if not revoked_token_hashes:
+        return
+
+    remaining_tokens = [
+        token
+        for token in _get_worldcup_pool_session_token_candidates(
+            request=request,
+            cookie_name=cookie_name,
+        )
+        if _hash_session_token(token) not in revoked_token_hashes
+    ]
+
+    _write_worldcup_pool_session_cookie_value(
+        response=response,
+        cookie_name=cookie_name,
+        tokens=remaining_tokens,
+        max_age_seconds=max_age_seconds,
         path=path,
     )
 
@@ -1189,23 +1302,277 @@ def _clear_worldcup_pool_session_cookie(
 ) -> None:
     settings = load_settings()
 
-    if settings.product_session_cookie_domain:
+    paths = [path]
+    legacy_paths = [
+        "/public/worldcup-pool/pools",
+        "/public/worldcup-pool/invites",
+    ]
+
+    for legacy_path in legacy_paths:
+        if legacy_path not in paths:
+            paths.append(legacy_path)
+
+    for cookie_path in paths:
+        if settings.product_session_cookie_domain:
+            response.delete_cookie(
+                key=cookie_name,
+                path=cookie_path,
+                domain=settings.product_session_cookie_domain,
+                secure=settings.product_session_cookie_secure,
+                httponly=True,
+                samesite=settings.product_session_cookie_samesite,
+            )
+
         response.delete_cookie(
             key=cookie_name,
-            path=path,
-            domain=settings.product_session_cookie_domain,
+            path=cookie_path,
             secure=settings.product_session_cookie_secure,
             httponly=True,
             samesite=settings.product_session_cookie_samesite,
         )
 
-    response.delete_cookie(
-        key=cookie_name,
-        path=path,
-        secure=settings.product_session_cookie_secure,
-        httponly=True,
-        samesite=settings.product_session_cookie_samesite,
+@router.get("/me/pools", response_model=WorldCupPoolMyPoolsResponse)
+def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse:
+    settings = load_settings()
+
+    if not settings.worldcup_pool_enabled:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "ok": False,
+                "code": "WORLDCUP_POOL_DISABLED",
+                "message": "World Cup Pool is disabled.",
+            },
+        )
+
+    participant_tokens = _get_worldcup_pool_session_token_candidates(
+        request=request,
+        cookie_name=settings.worldcup_pool_participant_session_cookie_name,
     )
+    organizer_tokens = _get_worldcup_pool_session_token_candidates(
+        request=request,
+        cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
+    )
+
+    participant_token_hashes = [
+        _hash_session_token(token) for token in participant_tokens
+    ]
+    organizer_token_hashes = [
+        _hash_session_token(token) for token in organizer_tokens
+    ]
+
+    if not participant_token_hashes and not organizer_token_hashes:
+        return WorldCupPoolMyPoolsResponse(ok=True, pools=[])
+
+    participant_sql = """
+      SELECT
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
+        pt.id AS participant_id,
+        pt.display_name AS participant_display_name,
+        COUNT(DISTINCT pr.id)::int AS predictions_count,
+        (
+          SELECT COUNT(*)::int
+          FROM worldcup_pool.matches m
+          WHERE m.competition_key = 'fifa_world_cup_2026'
+            AND m.status <> 'cancelled'
+        ) AS available_matches,
+        MAX(s.session_token_hash) AS session_token_hash
+      FROM worldcup_pool.sessions s
+      JOIN worldcup_pool.pools p
+        ON p.id = s.pool_id
+      JOIN worldcup_pool.participants pt
+        ON pt.id = s.participant_id
+       AND pt.pool_id = p.id
+      LEFT JOIN worldcup_pool.participants active_pt
+        ON active_pt.pool_id = p.id
+      LEFT JOIN worldcup_pool.predictions pr
+        ON pr.pool_id = p.id
+       AND pr.participant_id = pt.id
+      WHERE s.session_token_hash = ANY(%s)
+        AND s.owner_type = 'participant'
+        AND s.revoked_at_utc IS NULL
+        AND s.expires_at_utc > NOW()
+        AND p.status = 'active'
+        AND pt.status = 'active'
+      GROUP BY
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        pt.id,
+        pt.display_name
+    """
+
+    organizer_sql = """
+      SELECT
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
+        NULL::bigint AS participant_id,
+        NULL::text AS participant_display_name,
+        0::int AS predictions_count,
+        (
+          SELECT COUNT(*)::int
+          FROM worldcup_pool.matches m
+          WHERE m.competition_key = 'fifa_world_cup_2026'
+            AND m.status <> 'cancelled'
+        ) AS available_matches,
+        MAX(s.session_token_hash) AS session_token_hash
+      FROM worldcup_pool.sessions s
+      JOIN worldcup_pool.pools p
+        ON p.id = s.pool_id
+      LEFT JOIN worldcup_pool.participants active_pt
+        ON active_pt.pool_id = p.id
+      WHERE s.session_token_hash = ANY(%s)
+        AND s.owner_type = 'organizer'
+        AND s.revoked_at_utc IS NULL
+        AND s.expires_at_utc > NOW()
+        AND p.status = 'active'
+      GROUP BY
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token
+    """
+
+    update_seen_sql = """
+      UPDATE worldcup_pool.sessions
+      SET last_seen_at_utc = NOW()
+      WHERE session_token_hash = ANY(%s)
+    """
+
+    merged: dict[int, dict] = {}
+    seen_hashes: set[str] = set()
+
+    def merge_row(row, role: WorldCupPoolAccessRole) -> None:
+        pool_id = int(row[0])
+        item = merged.get(pool_id)
+
+        if not item:
+            invite_url = _build_invite_url(
+                origin=settings.product_public_origin,
+                lang=str(row[3]),
+                invite_token=str(row[6]),
+            )
+            admin_url = _build_admin_url(
+                origin=settings.product_public_origin,
+                lang=str(row[3]),
+                slug=str(row[1]),
+            )
+            participant_url = _build_participant_panel_url(
+                origin=settings.product_public_origin,
+                lang=str(row[3]),
+                invite_token=str(row[6]),
+            )
+
+            item = {
+                "id": pool_id,
+                "slug": str(row[1]),
+                "name": str(row[2]),
+                "lang": row[3],
+                "status": str(row[4]),
+                "scoring_mode": _normalize_worldcup_scoring_mode(row[5]),
+                "invite_token": str(row[6]),
+                "invite_url": invite_url,
+                "admin_url": admin_url,
+                "participant_url": participant_url,
+                "participant_count": int(row[7] or 0),
+                "roles": [],
+                "participant_id": None,
+                "participant_display_name": None,
+                "predictions_count": 0,
+                "available_matches": int(row[11] or 0),
+            }
+            merged[pool_id] = item
+
+        if role not in item["roles"]:
+            item["roles"].append(role)
+
+        if role == "participant" and row[8] is not None:
+            item["participant_id"] = int(row[8])
+            item["participant_display_name"] = str(row[9]) if row[9] is not None else None
+            item["predictions_count"] = int(row[10] or 0)
+
+        if row[12] is not None:
+            seen_hashes.add(str(row[12]))
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                if participant_token_hashes:
+                    cur.execute(participant_sql, (participant_token_hashes,))
+                    for row in cur.fetchall():
+                        merge_row(row, "participant")
+
+                if organizer_token_hashes:
+                    cur.execute(organizer_sql, (organizer_token_hashes,))
+                    for row in cur.fetchall():
+                        merge_row(row, "organizer")
+
+                if seen_hashes:
+                    cur.execute(update_seen_sql, (list(seen_hashes),))
+
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "ok": False,
+                "code": "WORLDCUP_POOL_MY_POOLS_FAILED",
+                "message": f"Failed to list authenticated pools: {e}",
+            },
+        )
+
+    pools = []
+
+    for item in merged.values():
+        roles = item["roles"]
+        roles.sort(key=lambda role: 0 if role == "organizer" else 1)
+        primary_role: WorldCupPoolAccessRole = "organizer" if "organizer" in roles else "participant"
+
+        pools.append(
+            WorldCupPoolMyPool(
+                id=item["id"],
+                slug=item["slug"],
+                name=item["name"],
+                lang=item["lang"],
+                scoring_mode=item["scoring_mode"],
+                status=item["status"],
+                invite_token=item["invite_token"],
+                invite_url=item["invite_url"],
+                admin_url=item["admin_url"],
+                participant_url=item["participant_url"],
+                participant_count=item["participant_count"],
+                roles=roles,
+                primary_role=primary_role,
+                participant_id=item["participant_id"],
+                participant_display_name=item["participant_display_name"],
+                predictions_count=item["predictions_count"],
+                available_matches=item["available_matches"],
+            )
+        )
+
+    pools.sort(key=lambda pool: (pool.name.lower(), pool.id))
+
+    return WorldCupPoolMyPoolsResponse(ok=True, pools=pools)
 
 @router.get("/status", response_model=WorldCupPoolStatusResponse)
 def get_worldcup_pool_status() -> WorldCupPoolStatusResponse:
@@ -1543,6 +1910,7 @@ def create_worldcup_pool(
         token=organizer_session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
+        request=request,
     )
 
     _send_worldcup_pool_access_email_safely(
@@ -1559,6 +1927,7 @@ def create_worldcup_pool(
         token=participant_session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+        request=request,
     )
 
     return WorldCupPoolCreateResponse(
@@ -2190,6 +2559,7 @@ def join_worldcup_pool(
         token=session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+        request=request,
     )
 
     # Atualiza participant_count em +1 apenas quando novo participante entrou.
@@ -2472,6 +2842,7 @@ def login_worldcup_pool_participant(
         token=session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+        request=request,
     )
 
     return WorldCupPoolJoinResponse(
@@ -2521,10 +2892,21 @@ def logout_worldcup_pool_participant(
                             AND s.session_token_hash = ANY(%s)
                             AND s.owner_type = 'participant'
                             AND p.invite_token = %s
+                          RETURNING s.session_token_hash
                         """,
                         (session_token_hashes, token),
                     )
+                    revoked_hashes = {str(row[0]) for row in cur.fetchall()}
                 conn.commit()
+
+            _remove_worldcup_pool_session_tokens_from_cookie(
+                request=request,
+                response=response,
+                cookie_name=settings.worldcup_pool_participant_session_cookie_name,
+                revoked_token_hashes=revoked_hashes,
+                max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
+                path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -2534,12 +2916,6 @@ def logout_worldcup_pool_participant(
                     "message": f"Failed to logout participant: {e}",
                 },
             )
-
-    _clear_worldcup_pool_session_cookie(
-        response=response,
-        cookie_name=settings.worldcup_pool_participant_session_cookie_name,
-        path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
-    )
 
     return WorldCupPoolLogoutResponse(ok=True)
 
@@ -2988,7 +3364,7 @@ def get_worldcup_pool_participant_ranking(
           pt.id AS participant_id,
           pt.display_name,
           COALESCE(SUM(pr.points), 0)::int AS points,
-          COUNT(pr.id)::int AS predictions_count,
+          COUNT(DISTINCT pr.id)::int AS predictions_count,
           MAX(pr.updated_at_utc) AS last_prediction_at_utc,
           ROW_NUMBER() OVER (
             ORDER BY
@@ -3560,6 +3936,7 @@ def login_worldcup_pool_organizer(
         token=session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
+        request=request,
     )
 
     return WorldCupPoolOrganizerLoginResponse(
@@ -3613,10 +3990,20 @@ def logout_worldcup_pool_organizer(
                             AND s.session_token_hash = ANY(%s)
                             AND s.owner_type = 'organizer'
                             AND p.slug = %s
+                          RETURNING s.session_token_hash
                         """,
                         (session_token_hashes, clean_slug),
                     )
+                    revoked_hashes = {str(row[0]) for row in cur.fetchall()}
                 conn.commit()
+            _remove_worldcup_pool_session_tokens_from_cookie(
+                request=request,
+                response=response,
+                cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
+                revoked_token_hashes=revoked_hashes,
+                max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
+                path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -3626,12 +4013,6 @@ def logout_worldcup_pool_organizer(
                     "message": f"Failed to logout organizer: {e}",
                 },
             )
-
-    _clear_worldcup_pool_session_cookie(
-        response=response,
-        cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
-        path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
-    )
 
     return WorldCupPoolLogoutResponse(ok=True)
 
@@ -3801,6 +4182,7 @@ def create_worldcup_pool_organizer_participant_session(
         token=session_token,
         max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
         path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+        request=request,
     )
 
     invite_url = _build_invite_url(
@@ -3876,7 +4258,7 @@ def get_worldcup_pool_organizer_dashboard(
           pt.last_seen_at_utc,
           pt.removed_at_utc,
           COALESCE(SUM(pr.points), 0)::int AS points,
-          COUNT(pr.id)::int AS predictions_count,
+          COUNT(DISTINCT pr.id)::int AS predictions_count,
           MAX(pr.updated_at_utc) AS last_prediction_at_utc,
           ROW_NUMBER() OVER (
             ORDER BY

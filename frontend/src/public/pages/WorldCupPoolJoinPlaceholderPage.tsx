@@ -6,6 +6,7 @@ import type { Lang } from "../../i18n";
 import { coercePublicLang } from "../lib/publicLang";
 import {
   fetchWorldCupPoolInvite,
+  fetchWorldCupPoolMyPools, 
   joinWorldCupPool,
   loginWorldCupPoolParticipant,
   requestWorldCupPoolPinReset,
@@ -321,6 +322,14 @@ export function WorldCupPoolJoinPlaceholderPage() {
             });
 
       setJoined(response);
+
+      const myPools = await fetchWorldCupPoolMyPools();
+
+      if (myPools.pools.length > 1) {
+        navigate(`/${currentLang}/bolao/copa/meus-boloes`, { replace: true });
+        return;
+      }
+      
       navigate(`/${currentLang}/bolao/copa/painel/${encodeURIComponent(token)}`, { replace: true });
     } catch (err) {
       console.error("failed to access world cup pool", err);
