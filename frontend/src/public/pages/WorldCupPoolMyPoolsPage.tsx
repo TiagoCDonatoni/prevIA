@@ -5,6 +5,7 @@ import "../worldcup-pool.css";
 import type { Lang } from "../../i18n";
 import { coercePublicLang } from "../lib/publicLang";
 import {
+  createWorldCupPoolOrganizerParticipantSession,
   fetchWorldCupPoolMyPools,
   type WorldCupPoolMyPool,
 } from "../api/publicClient";
@@ -27,6 +28,7 @@ const COPY = {
     predictions: "palpites feitos",
     openAdmin: "Gerenciar bolão",
     openPredictions: "Ver meus palpites",
+    openingPredictions: "Abrindo palpites...",
     backToLanding: "Voltar para página do bolão",
   },
   en: {
@@ -46,6 +48,7 @@ const COPY = {
     predictions: "predictions saved",
     openAdmin: "Manage pool",
     openPredictions: "Open predictions",
+    openingPredictions: "Opening predictions...",
     backToLanding: "Back to pool page",
   },
   es: {
@@ -65,6 +68,7 @@ const COPY = {
     predictions: "pronósticos hechos",
     openAdmin: "Gestionar porra",
     openPredictions: "Ver mis pronósticos",
+    openingPredictions: "Abriendo pronósticos...",
     backToLanding: "Volver a la página de la porra",
   },
 } as const;
@@ -86,6 +90,7 @@ export function WorldCupPoolMyPoolsPage() {
   const [pools, setPools] = React.useState<WorldCupPoolMyPool[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(false);
+  const [openingPoolId, setOpeningPoolId] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -131,6 +136,24 @@ export function WorldCupPoolMyPoolsPage() {
       cancelled = true;
     };
   }, [currentLang, navigate]);
+
+  async function openParticipantPool(pool: WorldCupPoolMyPool) {
+    const destination = participantPath(currentLang, pool);
+
+    if (pool.roles.includes("organizer")) {
+      setOpeningPoolId(pool.id);
+
+      try {
+        await createWorldCupPoolOrganizerParticipantSession(pool.slug);
+      } catch (err) {
+        console.error("failed to create organizer participant session before opening predictions", err);
+      } finally {
+        setOpeningPoolId(null);
+      }
+    }
+
+    navigate(destination);
+  }
 
   if (loading) {
     return (
@@ -237,12 +260,14 @@ export function WorldCupPoolMyPoolsPage() {
                   ) : null}
 
                   {isParticipant ? (
-                    <Link
+                    <button
+                      type="button"
                       className="public-btn public-btn-secondary"
-                      to={participantPath(currentLang, pool)}
+                      onClick={() => void openParticipantPool(pool)}
+                      disabled={openingPoolId === pool.id}
                     >
-                      {copy.openPredictions}
-                    </Link>
+                      {openingPoolId === pool.id ? copy.openingPredictions : copy.openPredictions}
+                    </button>
                   ) : null}
                 </div>
               </article>

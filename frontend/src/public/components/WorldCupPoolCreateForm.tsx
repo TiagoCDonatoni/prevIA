@@ -3,7 +3,8 @@ import React from "react";
 import type { Lang } from "../../i18n";
 import {
   createWorldCupPool,
-  loginWorldCupPoolOrganizer,
+  loginWorldCupPoolAccess,
+  resetWorldCupPoolAccessSession,
   type WorldCupPoolCreateResponse,
   type WorldCupPoolScoringMode,
   type WorldCupPoolScoringModeConfig,
@@ -281,9 +282,11 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
     setAdminOpening(true);
 
     try {
-      await loginWorldCupPoolOrganizer(created.pool.slug, {
+      await resetWorldCupPoolAccessSession();
+      await loginWorldCupPoolAccess({
         email: email.trim(),
         pin,
+        invite_token: created.pool.invite_token,
       });
     } catch {
       // O endpoint de criação já tentou criar a sessão do organizador.

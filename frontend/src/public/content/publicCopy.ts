@@ -31,10 +31,15 @@ type PublicCopy = {
       body: string;
       primaryCta: string;
       secondaryCta: string;
+      microcopy: string;
       sideKicker: string;
       sideTitle: string;
       sideBody: string;
       sidePoints: string[];
+      sideFeatures: Array<{
+        title: string;
+        body: string;
+      }>;
     };
     trustBar: string[];
     leagueCoverage: {
@@ -144,23 +149,31 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     home: {
       hero: {
         eyebrow: "Teste grátis disponível",
-        title: "Compare odds, entenda preço justo e encontre valor com mais clareza.",
-        body: "O prevIA organiza odds, probabilidade e contexto em uma leitura prática para quem quer apostar com mais critério desde o primeiro clique.",
-        primaryCta: "Testar grátis agora",
+        title: "Compare odds e probabilidades antes de apostar em futebol",
+        body: "O prevIA organiza jogos, odds, probabilidades e preço justo em uma leitura prática para quem quer apostar com mais critério desde o primeiro clique.",
+        primaryCta: "Ver análises grátis",
         secondaryCta: "Como funciona",
+        microcopy: "3 consultas grátis por dia · Sem cartão de crédito",
         sideKicker: "Comece em segundos",
-        sideTitle: "Teste real na própria landing",
-        sideBody: "Veja jogos, abra análises e entenda melhor preço, valor e contexto antes de decidir se quer avançar com conta e planos.",
+        sideTitle: "Veja uma análise real em segundos",
+        sideBody: "Veja jogos, abra análises e entenda melhor odds, probabilidade, preço justo e valor antes de decidir se quer avançar com conta e planos.",
         sidePoints: [
           "Sem login para o primeiro uso",
           "3 consultas grátis por dia",
           "Crie conta grátis se quiser aprofundar",
         ],
+        sideFeatures: [
+          { title: "Odds", body: "Linhas das casas" },
+          { title: "Probabilidades", body: "Chance por mercado" },
+          { title: "Preço justo", body: "Estimativa do modelo" },
+          { title: "Valor", body: "Diferença vs mercado" },
+        ],
       },
       trustBar: [
-        "Odds, probabilidade e preço justo",
-        "Sem login para começar",
-        "Leitura clara em pt, en e es",
+        "Probabilidade vs odds",
+        "Preço justo",
+        "50+ ligas",
+        "PT, EN e ES",
       ],
 
       leagueCoverage: {
@@ -217,15 +230,15 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         ],
       },
       freeAnonEmbed: {
-        eyebrow: "Teste grátis",
-        title: "Faça 3 consultas grátis por dia",
-        body: "Veja jogos, compare odds e entenda a leitura do mercado. Use hoje e volte amanhã para mais 3 consultas grátis.",
+        eyebrow: "Teste real, sem conta",
+        title: "Veja odds, probabilidades e preço justo em um jogo real",
+        body: "Escolha um jogo abaixo e veja como o prevIA organiza mercado, modelo e valor em uma análise prática. Você pode fazer até 3 consultas grátis por dia, sem cartão de crédito.",
       },
       plans: {
         eyebrow: "Planos e benefícios",
-        title: "Escolha a profundidade certa para o seu momento.",
-        body: "Comece no grátis, compare os níveis e avance quando fizer sentido para o seu uso.",
-        selectedLabel: "Em destaque",
+        title: "Comece grátis. Avance quando fizer sentido.",
+        body: "Compare os planos, limites e recursos disponíveis. Comece sem cartão e escolha um nível maior quando precisar de mais uso.",
+        selectedLabel: "Plano em foco",
         recommendedLabel: "Recomendado",
         items: [
           {
@@ -261,7 +274,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Menos interrupção entre análises",
               "Bom começo para uso recorrente",
             ],
-            cta: "Assinar agora",
+            cta: "Escolher Basic",
           },
           {
             planId: "LIGHT",
@@ -273,7 +286,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Fair odds, edge e mais contexto",
               "Camada mais equilibrada da jornada",
             ],
-            cta: "Assinar agora",
+            cta: "Escolher Light",
             recommended: true,
           },
           {
@@ -286,7 +299,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Mais profundidade analítica",
               "Camada mais completa do produto",
             ],
-            cta: "Assinar agora",
+            cta: "Escolher Pro",
           },
         ],
       },
@@ -375,23 +388,31 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     home: {
       hero: {
         eyebrow: "Free trial available",
-        title: "Compare odds, understand fair price, and spot value more clearly.",
-        body: "prevIA turns odds, probability, and context into practical reading for people who want a more disciplined betting routine from the first click.",
-        primaryCta: "Try it free now",
+        title: "Compare odds and probabilities before betting on football",
+        body: "prevIA organizes matches, odds, probabilities, and fair price into a practical reading for people who want to bet with more discipline from the first click.",
+        primaryCta: "See free analyses",
         secondaryCta: "How it works",
+        microcopy: "3 free checks per day · No credit card required",
         sideKicker: "Start in seconds",
-        sideTitle: "Real product test on the landing page",
-        sideBody: "Browse matches, open analyses, and understand price, value, and context before deciding whether you want to continue with an account and plans.",
+        sideTitle: "See a real analysis in seconds",
+        sideBody: "Browse matches, open analyses, and understand odds, probability, fair price, and value before deciding whether you want to continue with an account and plans.",
         sidePoints: [
           "No login required for the first use",
           "3 free checks per day",
           "Create a free account if you want more depth",
         ],
+        sideFeatures: [
+          { title: "Odds", body: "Bookmaker lines" },
+          { title: "Probabilities", body: "Chance by market" },
+          { title: "Fair price", body: "Model estimate" },
+          { title: "Value", body: "Gap vs market" },
+        ],
       },
       trustBar: [
-        "Odds, probability, and fair price",
-        "No login to get started",
-        "Clear reading in pt, en, and es",
+        "Probability vs odds",
+        "Fair price",
+        "50+ leagues",
+        "PT, EN and ES",
       ],
       leagueCoverage: {
         kicker: "Coverage",
@@ -447,15 +468,15 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         ],
       },
       freeAnonEmbed: {
-        eyebrow: "Free trial",
-        title: "Get 3 free checks per day",
-        body: "Browse matches, compare odds, and understand the market reading. Use it today and come back tomorrow for 3 more free checks.",
+        eyebrow: "Real test, no account",
+        title: "See odds, probabilities, and fair price in a real match",
+        body: "Choose a match below and see how prevIA organizes market, model, and value into a practical analysis. You can make up to 3 free checks per day, with no credit card required.",
       },
       plans: {
         eyebrow: "Plans and benefits",
-        title: "Pick the level of depth that matches your stage.",
-        body: "Start free, compare the tiers, and move up when it makes sense for your usage.",
-        selectedLabel: "Highlighted",
+        title: "Start free. Move up when it makes sense.",
+        body: "Compare plans, limits, and available features. Start without a card and choose a higher tier when you need more usage.",
+        selectedLabel: "Plan in focus",
         recommendedLabel: "Recommended",
         items: [
           {
@@ -492,7 +513,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Fewer interruptions",
               "Good starting point for recurring use",
             ],
-            cta: "Subscribe now",
+            cta: "Choose Basic",
           },
           {
             planId: "LIGHT",
@@ -504,7 +525,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Fair odds, edge, and more context",
               "Most balanced step in the journey",
             ],
-            cta: "Subscribe now",
+            cta: "Choose Light",
             recommended: true,
           },
           {
@@ -517,7 +538,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Deeper analytical layer",
               "Most complete plan in the product",
             ],
-            cta: "Subscribe now",
+            cta: "Choose Pro",
           },
         ],
       },
@@ -605,23 +626,31 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
     home: {
       hero: {
         eyebrow: "Prueba gratis disponible",
-        title: "Compara cuotas, entiende el precio justo y detecta valor con más claridad.",
-        body: "prevIA organiza cuotas, probabilidad y contexto en una lectura práctica para quien quiere apostar con más criterio desde el primer clic.",
-        primaryCta: "Probar gratis ahora",
+        title: "Compara cuotas y probabilidades antes de apostar en fútbol",
+        body: "prevIA organiza partidos, cuotas, probabilidades y precio justo en una lectura práctica para quien quiere apostar con más criterio desde el primer clic.",
+        primaryCta: "Ver análisis gratis",
         secondaryCta: "Cómo funciona",
+        microcopy: "3 consultas gratis por día · Sin tarjeta de crédito",
         sideKicker: "Empieza en segundos",
-        sideTitle: "Prueba real del producto en la landing",
-        sideBody: "Mira partidos, abre análisis y entiende mejor precio, valor y contexto antes de decidir si quieres avanzar con cuenta y planes.",
+        sideTitle: "Ve un análisis real en segundos",
+        sideBody: "Mira partidos, abre análisis y entiende mejor cuotas, probabilidad, precio justo y valor antes de decidir si quieres avanzar con cuenta y planes.",
         sidePoints: [
           "Sin login en el primer uso",
           "3 consultas gratis por día",
           "Crea una cuenta gratis si quieres más profundidad",
         ],
+        sideFeatures: [
+          { title: "Cuotas", body: "Líneas de casas" },
+          { title: "Probabilidades", body: "Chance por mercado" },
+          { title: "Precio justo", body: "Estimación del modelo" },
+          { title: "Valor", body: "Diferencia vs mercado" },
+        ],
       },
       trustBar: [
-        "Cuotas, probabilidad y precio justo",
-        "Sin login para empezar",
-        "Lectura clara en pt, en y es",
+        "Probabilidad vs cuotas",
+        "Precio justo",
+        "50+ ligas",
+        "PT, EN y ES",
       ],
       leagueCoverage: {
         kicker: "Cobertura",
@@ -677,15 +706,15 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
         ],
       },
       freeAnonEmbed: {
-        eyebrow: "Prueba gratis",
-        title: "Haz 3 consultas gratis por día",
-        body: "Mira partidos, compara cuotas y entiende la lectura del mercado. Úsalo hoy y vuelve mañana para 3 consultas gratis más.",
+        eyebrow: "Prueba real, sin cuenta",
+        title: "Ve cuotas, probabilidades y precio justo en un partido real",
+        body: "Elige un partido abajo y mira cómo prevIA organiza mercado, modelo y valor en un análisis práctico. Puedes hacer hasta 3 consultas gratis por día, sin tarjeta de crédito.",
       },
       plans: {
         eyebrow: "Planes y beneficios",
-        title: "Elige la profundidad adecuada para tu momento.",
-        body: "Empieza gratis, compara los niveles y avanza cuando tenga sentido para tu uso.",
-        selectedLabel: "Destacado",
+        title: "Empieza gratis. Avanza cuando tenga sentido.",
+        body: "Compara planes, límites y recursos disponibles. Empieza sin tarjeta y elige un nivel mayor cuando necesites más uso.",
+        selectedLabel: "Plan en foco",
         recommendedLabel: "Recomendado",
         items: [
           {
@@ -722,7 +751,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Menos interrupciones",
               "Buen inicio para uso recurrente",
             ],
-            cta: "Suscribirse ahora",
+            cta: "Elegir Basic",
           },
           {
             planId: "LIGHT",
@@ -734,7 +763,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Fair odds, edge y más contexto",
               "La capa más equilibrada del recorrido",
             ],
-            cta: "Suscribirse ahora",
+            cta: "Elegir Light",
             recommended: true,
           },
           {
@@ -747,7 +776,7 @@ export const PUBLIC_COPY: Record<Lang, PublicCopy> = {
               "Más profundidad analítica",
               "La capa más completa del producto",
             ],
-            cta: "Suscribirse ahora",
+            cta: "Elegir Pro",
           },
         ],
       },

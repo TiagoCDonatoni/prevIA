@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 
 import { ProductApp } from "./product/ProductApp";
 import { AdminApp } from "./admin/AdminApp";
@@ -22,6 +22,26 @@ import { PublicPartnersPage } from "./public/pages/PublicPartnersPage";
 import { PartnerConsolePage } from "./partner/PartnerConsolePage";
 
 import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP, ENABLE_WORLDCUP_POOL } from "./config";
+
+function WorldCupPoolParticipantRouteElement() {
+  const { inviteToken } = useParams<{ inviteToken: string }>();
+
+  return ENABLE_WORLDCUP_POOL ? (
+    <WorldCupPoolParticipantPage key={inviteToken || "participant"} />
+  ) : (
+    <Navigate to="/pt" replace />
+  );
+}
+
+function WorldCupPoolOrganizerRouteElement() {
+  const { slug } = useParams<{ slug: string }>();
+
+  return ENABLE_WORLDCUP_POOL ? (
+    <WorldCupPoolOrganizerPage key={slug || "organizer"} />
+  ) : (
+    <Navigate to="/pt" replace />
+  );
+}
 
 export function AppRoutes() {
   return (
@@ -66,15 +86,11 @@ export function AppRoutes() {
           />
           <Route
             path="bolao/copa/painel/:inviteToken"
-            element={
-              ENABLE_WORLDCUP_POOL ? <WorldCupPoolParticipantPage /> : <Navigate to="/pt" replace />
-            }
+            element={<WorldCupPoolParticipantRouteElement />}
           />
           <Route
             path="bolao/copa/admin/:slug"
-            element={
-              ENABLE_WORLDCUP_POOL ? <WorldCupPoolOrganizerPage /> : <Navigate to="/pt" replace />
-            }
+            element={<WorldCupPoolOrganizerRouteElement />}
           />
         </Route>
 

@@ -6,6 +6,7 @@ import { coercePublicLang } from "../lib/publicLang";
 
 import { BetaLeadForm } from "../components/BetaLeadForm";
 
+import heroProductPreviewImg from "../assets/previews/landing-hero-product.png";
 import previewMainImg from "../assets/previews/landing-main.png";
 import previewMarketImg from "../assets/previews/landing-market.png";
 import previewAnalyticsImg from "../assets/previews/landing-analytics.png";
@@ -32,6 +33,111 @@ const PREVIEW_IMAGES = [
   previewMarketImg,
   previewAnalyticsImg,
 ] as const;
+
+type LandingHeroIconName =
+  | "chart"
+  | "target"
+  | "globe"
+  | "language"
+  | "odds"
+  | "probability"
+  | "fairPrice"
+  | "value";
+
+const HERO_TRUST_ICONS: LandingHeroIconName[] = [
+  "chart",
+  "target",
+  "globe",
+  "language",
+];
+
+const HERO_FEATURE_ICONS: LandingHeroIconName[] = [
+  "odds",
+  "probability",
+  "fairPrice",
+  "value",
+];
+
+function LandingHeroIcon({ name }: { name: LandingHeroIconName }) {
+  if (name === "chart") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 19V10M12 19V5M19 19v-7" />
+      </svg>
+    );
+  }
+
+  if (name === "target") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21a9 9 0 1 0-9-9" />
+        <path d="M12 17a5 5 0 1 0-5-5" />
+        <path d="M12 13l7-7" />
+        <path d="M16 6h3V3" />
+      </svg>
+    );
+  }
+
+  if (name === "globe") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21" />
+        <path d="M12 3c-2.4 2.5-3.6 5.5-3.6 9S9.6 18.5 12 21" />
+      </svg>
+    );
+  }
+
+  if (name === "language") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h9" />
+        <path d="M8.5 3v2" />
+        <path d="M6 9c1.2 2 3.4 3.8 6 5" />
+        <path d="M12 5c-.8 3.4-2.7 6-6 8" />
+        <path d="M14 21l4-9 4 9" />
+        <path d="M15.5 18h5" />
+      </svg>
+    );
+  }
+
+  if (name === "probability") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 18L18 6" />
+        <circle cx="8" cy="8" r="2.2" />
+        <circle cx="16" cy="16" r="2.2" />
+      </svg>
+    );
+  }
+
+  if (name === "fairPrice") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v18" />
+        <path d="M7 7h7.5a3 3 0 0 1 0 6H9.5a3 3 0 0 0 0 6H17" />
+      </svg>
+    );
+  }
+
+  if (name === "value") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 16l5-5 4 4 7-8" />
+        <path d="M14 7h6v6" />
+        <path d="M5 20h14" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 16l5-5 4 4 7-8" />
+      <path d="M20 7v6h-6" />
+    </svg>
+  );
+}
 
 type LandingLang = "pt" | "en" | "es";
 
@@ -225,16 +331,19 @@ function getUnifiedFreePlanMeta(lang: LandingLang) {
 function getUnifiedFreePlanFlowCopy(lang: LandingLang) {
   return {
     pt: {
-      summary: "Comece sem login. Quando os créditos acabarem, continue grátis com conta.",
-      card: "Comece sem login e continue grátis com conta quando os créditos acabarem.",
+      summary:
+        "Teste sem conta disponível na landing. Criando uma conta grátis, você continua explorando dentro dos limites do plano Free.",
+      card: "Teste direto na landing e continue grátis com conta quando quiser mais continuidade.",
     },
     en: {
-      summary: "Start without login. When credits end, continue for free with an account.",
-      card: "Start without login and continue for free with an account when credits run out.",
+      summary:
+        "A no-account trial is available on the landing page. With a free account, you can keep exploring within the Free plan limits.",
+      card: "Try it directly on the landing page and continue for free with an account when you want more continuity.",
     },
     es: {
-      summary: "Empieza sin login. Cuando se terminen los créditos, continúa gratis con cuenta.",
-      card: "Empieza sin login y continúa gratis con cuenta cuando se terminen los créditos.",
+      summary:
+        "La prueba sin cuenta está disponible en la landing. Con una cuenta gratis, puedes seguir explorando dentro de los límites del plan Free.",
+      card: "Prueba directo en la landing y continúa gratis con cuenta cuando quieras más continuidad.",
     },
   }[lang];
 }
@@ -582,9 +691,8 @@ export function PublicHomePage() {
     landingLang,
     showPublicFreeAnon,
   );
+  const selectedPlanMetaItems = buildLandingPlanMeta(selectedLandingPlan, landingLang);
   const heroVisualTitle = copy.home.preview.items[0]?.title ?? copy.home.hero.sideTitle;
-  const heroOverlayTopLabel = copy.home.preview.items[1]?.badge ?? copy.home.trustBar[0];
-  const heroOverlayBottomLabel = copy.home.freeAnonEmbed.eyebrow;
   const previewItems = copy.home.preview.items.slice(0, 3);
 
   const SEO = {
@@ -622,8 +730,11 @@ export function PublicHomePage() {
             <p className="public-body">{copy.home.hero.body}</p>
 
             <div className="landing-chip-row landing-chip-row-hero">
-              {copy.home.trustBar.map((item) => (
-                <span key={item} className="landing-chip">
+              {copy.home.trustBar.map((item, index) => (
+                <span key={item} className="landing-chip landing-chip-with-icon">
+                  <span className="landing-chip-icon" aria-hidden="true">
+                    <LandingHeroIcon name={HERO_TRUST_ICONS[index] ?? "chart"} />
+                  </span>
                   {item}
                 </span>
               ))}
@@ -662,29 +773,44 @@ export function PublicHomePage() {
                 {copy.home.hero.secondaryCta}
               </Link>
             </div>
+
+            <div className="public-hero-microcopy">
+              <span aria-hidden="true">◇</span>
+              {copy.home.hero.microcopy}
+            </div>
           </div>
 
-          <aside className="public-hero-sidecard" aria-label={copy.home.hero.sideTitle}>
-            <div className="public-hero-sidecard-kicker">{copy.home.hero.sideKicker}</div>
+          <aside
+            className="public-hero-sidecard public-hero-product-card"
+            aria-label={copy.home.hero.sideTitle}
+          >
+            <div className="public-hero-sidecard-kicker">
+              <span aria-hidden="true">↗</span>
+              {copy.home.hero.sideKicker}
+            </div>
             <div className="public-hero-sidecard-title">{copy.home.hero.sideTitle}</div>
 
             <div className="public-hero-visual-stage">
               <img
-                src={previewMainImg}
+                src={heroProductPreviewImg}
                 alt={heroVisualTitle}
                 className="public-hero-visual-image"
                 loading="eager"
               />
+            </div>
 
-              <div className="public-hero-overlay-card public-hero-overlay-card-top">
-                <span className="public-hero-overlay-label">{heroOverlayTopLabel}</span>
-                <strong>{copy.home.trustBar[0]}</strong>
-              </div>
-
-              <div className="public-hero-overlay-card public-hero-overlay-card-bottom">
-                <span className="public-hero-overlay-label">{heroOverlayBottomLabel}</span>
-                <strong>{copy.home.freeAnonEmbed.title}</strong>
-              </div>
+            <div className="public-hero-feature-grid" aria-label={copy.home.hero.sideTitle}>
+              {copy.home.hero.sideFeatures.map((feature, index) => (
+                <div key={feature.title} className="public-hero-feature-card">
+                  <span className="public-hero-feature-icon" aria-hidden="true">
+                    <LandingHeroIcon name={HERO_FEATURE_ICONS[index] ?? "odds"} />
+                  </span>
+                  <span>
+                    <strong>{feature.title}</strong>
+                    <small>{feature.body}</small>
+                  </span>
+                </div>
+              ))}
             </div>
 
             <p className="public-hero-sidecard-body">{copy.home.hero.sideBody}</p>
@@ -727,6 +853,16 @@ export function PublicHomePage() {
             </div>
 
             <div className="landing-plan-selected-body">{selectedPlanCard.body}</div>
+
+            <div className="landing-plan-selected-meta">
+              {selectedPlanMetaItems.map((meta) => (
+                <span key={`selected-${meta}`} className="landing-plan-selected-meta-chip">
+                  {meta}
+                </span>
+              ))}
+            </div>
+
+            <div className="landing-plan-free-bridge">{freeFlowCopy.summary}</div>
           </div>
 
           <div className="landing-plan-controls-panel">

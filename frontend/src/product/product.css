@@ -768,6 +768,17 @@
   min-width: 0;
 }
 
+.pi-empty-list {
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 18px;
+  text-align: center;
+}
+
 .pi-row {
   width: 100%;
   min-height: 72px;

@@ -600,11 +600,45 @@ export type WorldCupPoolMyPoolsResponse = {
   pools: WorldCupPoolMyPool[];
 };
 
+export type WorldCupPoolAccessLoginPayload = {
+  email: string;
+  pin: string;
+  invite_token?: string;
+};
+
 export async function fetchWorldCupPoolMyPools(): Promise<WorldCupPoolMyPoolsResponse> {
   const url = new URL("/public/worldcup-pool/me/pools", API_BASE_URL);
 
   return fetchJson<WorldCupPoolMyPoolsResponse>(url.toString(), {
     method: "GET",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+}
+
+export async function loginWorldCupPoolAccess(
+  payload: WorldCupPoolAccessLoginPayload
+): Promise<WorldCupPoolMyPoolsResponse> {
+  const url = new URL("/public/worldcup-pool/access/login", API_BASE_URL);
+
+  return fetchJson<WorldCupPoolMyPoolsResponse>(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function resetWorldCupPoolAccessSession(): Promise<WorldCupPoolLogoutResponse> {
+  const url = new URL("/public/worldcup-pool/access/reset-session", API_BASE_URL);
+
+  return fetchJson<WorldCupPoolLogoutResponse>(url.toString(), {
+    method: "POST",
     credentials: "include",
     headers: {
       Accept: "application/json",
@@ -655,17 +689,6 @@ export type WorldCupPoolOrganizerDashboardResponse = {
   pagination: WorldCupPoolPagination;
 };
 
-export type WorldCupPoolOrganizerLoginPayload = {
-  email: string;
-  pin: string;
-};
-
-export type WorldCupPoolOrganizerLoginResponse = {
-  ok: boolean;
-  pool: WorldCupPoolOrganizerPool;
-  organizer_session_created: boolean;
-};
-
 export type WorldCupPoolOrganizerSessionStatusResponse = {
   ok: boolean;
   authenticated: boolean;
@@ -704,26 +727,6 @@ export async function fetchWorldCupPoolOrganizerSessionStatus(
     headers: {
       Accept: "application/json",
     },
-  });
-}
-
-export async function loginWorldCupPoolOrganizer(
-  slug: string,
-  payload: WorldCupPoolOrganizerLoginPayload
-): Promise<WorldCupPoolOrganizerLoginResponse> {
-  const url = new URL(
-    `/public/worldcup-pool/pools/${encodeURIComponent(slug)}/organizer-login`,
-    API_BASE_URL
-  );
-
-  return fetchJson<WorldCupPoolOrganizerLoginResponse>(url.toString(), {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
   });
 }
 

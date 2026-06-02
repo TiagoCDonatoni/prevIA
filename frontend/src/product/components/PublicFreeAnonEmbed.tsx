@@ -15,48 +15,52 @@ const EMBED_COPY: Record<
     authenticatedText: string;
     loadingTitle: string;
     loadingBody: string;
+    statusPills: string[];
   }
 > = {
   pt: {
-    guestLabel: "Modo gratuito",
+    guestLabel: "Teste gratuito ativo",
     authLabel: "Conta conectada",
     remainingText: (remaining, limit) =>
-      `Você ainda tem ${remaining} de ${limit} consultas grátis hoje. Crie sua conta grátis e ganhe +2 consultas por dia para continuar explorando.`,
+      `Você tem ${remaining} de ${limit} consultas grátis hoje. Abra uma análise agora ou crie uma conta grátis para continuar explorando com mais limite diário.`,
     exhaustedText: (limit) =>
-      `Suas ${limit} consultas grátis de hoje terminaram. Crie sua conta grátis agora e ganhe +2 consultas por dia para continuar, ou assine um plano para desbloquear ainda mais análises.`,
+      `Suas ${limit} consultas grátis de hoje terminaram. Crie sua conta grátis para continuar explorando ou assine um plano para desbloquear mais análises.`,
     authenticatedText:
-      "Sua conta está ativa. Agora você tem mais consultas por dia para continuar explorando.",
-    loadingTitle: "Carregando teste grátis",
+      "Sua conta está ativa. Agora você pode continuar explorando com os limites do seu plano.",
+    loadingTitle: "Preparando teste gratuito",
     loadingBody:
-      "O embed do produto será montado quando esta seção entrar em foco, evitando fan-out pesado na landing.",
+      "O produto será carregado quando esta seção entrar em foco para manter a landing rápida.",
+    statusPills: ["Sem conta para começar", "3 consultas grátis por dia", "Sem cartão de crédito"],
   },
 
   en: {
-    guestLabel: "Free mode",
+    guestLabel: "Free test active",
     authLabel: "Signed-in account",
     remainingText: (remaining, limit) =>
-      `You still have ${remaining} of ${limit} free checks today. Create your free account and get +2 checks per day to keep exploring.`,
+      `You have ${remaining} of ${limit} free checks today. Open an analysis now or create a free account to keep exploring with a higher daily limit.`,
     exhaustedText: (limit) =>
-      `Your ${limit} free checks for today are over. Create your free account now and get +2 checks per day to continue, or upgrade your plan to unlock even more analysis.`,
+      `Your ${limit} free checks for today are over. Create a free account to keep exploring or upgrade your plan to unlock more analyses.`,
     authenticatedText:
-      "Your account is active. You now have more checks per day to keep exploring.",
-    loadingTitle: "Loading free preview",
+      "Your account is active. You can now keep exploring within your plan limits.",
+    loadingTitle: "Preparing free test",
     loadingBody:
-      "The product embed will mount only when this section comes into view, avoiding heavy fan-out on the landing page.",
+      "The product will load when this section comes into view to keep the landing page fast.",
+    statusPills: ["No account to start", "3 free checks per day", "No credit card required"],
   },
 
   es: {
-    guestLabel: "Modo gratuito",
+    guestLabel: "Prueba gratuita activa",
     authLabel: "Cuenta conectada",
     remainingText: (remaining, limit) =>
-      `Todavía tienes ${remaining} de ${limit} consultas gratis hoy. Crea tu cuenta gratis y consigue +2 consultas por día para seguir explorando.`,
+      `Tienes ${remaining} de ${limit} consultas gratis hoy. Abre un análisis ahora o crea una cuenta gratis para seguir explorando con más límite diario.`,
     exhaustedText: (limit) =>
-      `Tus ${limit} consultas gratis de hoy ya terminaron. Crea tu cuenta gratis ahora y consigue +2 consultas por día para continuar, o mejora tu plan para desbloquear todavía más análisis.`,
+      `Tus ${limit} consultas gratis de hoy ya terminaron. Crea una cuenta gratis para seguir explorando o mejora tu plan para desbloquear más análisis.`,
     authenticatedText:
-      "Tu cuenta está activa. Ahora tienes más consultas por día para seguir explorando.",
-    loadingTitle: "Cargando prueba gratis",
+      "Tu cuenta está activa. Ahora puedes seguir explorando con los límites de tu plan.",
+    loadingTitle: "Preparando prueba gratuita",
     loadingBody:
-      "El embed del producto se montará solo cuando esta sección entre en foco, evitando fan-out pesado en la landing.",
+      "El producto se cargará cuando esta sección entre en foco para mantener la landing rápida.",
+    statusPills: ["Sin cuenta para empezar", "3 consultas gratis por día", "Sin tarjeta de crédito"],
   },
 };
 
@@ -95,9 +99,17 @@ function PublicFreeAnonEmbedInner({ lang }: { lang: Lang }) {
   return (
     <div className="public-product-embed-card">
       <div className="public-product-embed-toolbar">
-        <div>
+        <div className="public-product-embed-toolbar-copy">
           <div className="public-product-embed-kicker">{kicker}</div>
           <div className="public-product-embed-caption">{caption}</div>
+        </div>
+
+        <div className="public-product-embed-toolbar-pills" aria-label={kicker}>
+          {copy.statusPills.map((pill) => (
+            <span key={pill} className="public-product-embed-pill">
+              {pill}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -172,9 +184,17 @@ export function PublicFreeAnonEmbed({
       ) : (
         <div className="public-product-embed-card">
           <div className="public-product-embed-toolbar">
-            <div>
+            <div className="public-product-embed-toolbar-copy">
               <div className="public-product-embed-kicker">{copy.loadingTitle}</div>
               <div className="public-product-embed-caption">{copy.loadingBody}</div>
+            </div>
+
+            <div className="public-product-embed-toolbar-pills" aria-label={copy.loadingTitle}>
+              {copy.statusPills.map((pill) => (
+                <span key={pill} className="public-product-embed-pill">
+                  {pill}
+                </span>
+              ))}
             </div>
           </div>
 

@@ -157,6 +157,13 @@ class WorldCupPoolOrganizerLoginRequest(BaseModel):
     email: EmailStr
     pin: str = Field(..., min_length=4, max_length=4)
 
+
+class WorldCupPoolAccessLoginRequest(BaseModel):
+    email: EmailStr
+    pin: str = Field(..., min_length=4, max_length=4)
+    invite_token: Optional[str] = Field(default=None, max_length=120)
+
+
 class WorldCupPoolPinResetRequest(BaseModel):
     email: EmailStr
     pool_slug: Optional[str] = Field(default=None, max_length=120)
@@ -821,24 +828,23 @@ def _build_worldcup_pool_access_email(
     lang_key = _coerce_worldcup_email_lang(lang)
     safe_pool_name = escape(pool_name)
     safe_invite_url = escape(invite_url)
-    safe_admin_url = escape(admin_url or "")
 
     if lang_key == "en":
         subject = f"Your access to {pool_name} - prevIA World Cup Pool"
         text_body = (
             f"Hello!\n\n"
             f"Your access to the pool \"{pool_name}\" is ready.\n\n"
-            f"Pool access link:\n{invite_url}\n\n"
-            + (f"Organizer dashboard:\n{admin_url}\n\n" if admin_url else "")
-            + "Keep this email so you can find your pool link later.\n"
+            f"Pool link:\n{invite_url}\n\n"
+            f"Use this same link to manage the pool if you are the organizer, or to make your predictions if you are a participant.\n\n"
+            f"Keep this email so you can find your pool link later.\n"
         )
         html_body = f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #111;">
             <p>Hello!</p>
             <p>Your access to the pool <strong>{safe_pool_name}</strong> is ready.</p>
-            <p><strong>Pool access link:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
-            {f'<p><strong>Organizer dashboard:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
+            <p><strong>Pool link:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
+            <p>Use this same link to manage the pool if you are the organizer, or to make your predictions if you are a participant.</p>
             <p>Keep this email so you can find your pool link later.</p>
           </body>
         </html>
@@ -850,17 +856,17 @@ def _build_worldcup_pool_access_email(
         text_body = (
             f"¡Hola!\n\n"
             f"Tu acceso a la porra \"{pool_name}\" está listo.\n\n"
-            f"Enlace para entrar en la porra:\n{invite_url}\n\n"
-            + (f"Panel del organizador:\n{admin_url}\n\n" if admin_url else "")
-            + "Guarda este email para encontrar el enlace de la porra más tarde.\n"
+            f"Enlace de la porra:\n{invite_url}\n\n"
+            f"Usa este mismo enlace para gestionar la porra si eres el organizador, o para hacer tus pronósticos si eres participante.\n\n"
+            f"Guarda este email para encontrar el enlace de la porra más tarde.\n"
         )
         html_body = f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #111;">
             <p>¡Hola!</p>
             <p>Tu acceso a la porra <strong>{safe_pool_name}</strong> está listo.</p>
-            <p><strong>Enlace para entrar en la porra:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
-            {f'<p><strong>Panel del organizador:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
+            <p><strong>Enlace de la porra:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
+            <p>Usa este mismo enlace para gestionar la porra si eres el organizador, o para hacer tus pronósticos si eres participante.</p>
             <p>Guarda este email para encontrar el enlace de la porra más tarde.</p>
           </body>
         </html>
@@ -871,17 +877,17 @@ def _build_worldcup_pool_access_email(
     text_body = (
         f"Olá!\n\n"
         f"Seu acesso ao bolão \"{pool_name}\" está pronto.\n\n"
-        f"Link para entrar no bolão:\n{invite_url}\n\n"
-        + (f"Painel do organizador:\n{admin_url}\n\n" if admin_url else "")
-        + "Guarde este e-mail para encontrar o link do bolão depois.\n"
+        f"Link do bolão:\n{invite_url}\n\n"
+        f"Use esse mesmo link para gerenciar o bolão se você for o organizador, ou para fazer seus palpites se você for participante.\n\n"
+        f"Guarde este e-mail para encontrar o link do bolão depois.\n"
     )
     html_body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; color: #111;">
         <p>Olá!</p>
         <p>Seu acesso ao bolão <strong>{safe_pool_name}</strong> está pronto.</p>
-        <p><strong>Link para entrar no bolão:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
-        {f'<p><strong>Painel do organizador:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
+        <p><strong>Link do bolão:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>
+        <p>Use esse mesmo link para gerenciar o bolão se você for o organizador, ou para fazer seus palpites se você for participante.</p>
         <p>Guarde este e-mail para encontrar o link do bolão depois.</p>
       </body>
     </html>
@@ -901,7 +907,6 @@ def _build_worldcup_pool_pin_reset_email(
     safe_pool_name = escape(pool_name)
     safe_pin = escape(new_pin)
     safe_invite_url = escape(invite_url or "")
-    safe_admin_url = escape(admin_url or "")
 
     if lang_key == "en":
         subject = "Your new World Cup Pool PIN"
@@ -909,9 +914,9 @@ def _build_worldcup_pool_pin_reset_email(
             f"Hello!\n\n"
             f"We received a request to recover access to the pool \"{pool_name}\".\n\n"
             f"Your new PIN is: {new_pin}\n\n"
-            + (f"Pool access link:\n{invite_url}\n\n" if invite_url else "")
-            + (f"Organizer dashboard:\n{admin_url}\n\n" if admin_url else "")
-            + "Use this PIN with your email to access the pool. If you did not request this, you can ignore this email.\n"
+            + (f"Pool link:\n{invite_url}\n\n" if invite_url else "")
+            + "Use this PIN with your email. The same pool link opens the organizer dashboard or the prediction screen according to your access.\n\n"
+            + "If you did not request this, you can ignore this email.\n"
         )
         html_body = f"""
         <html>
@@ -919,9 +924,9 @@ def _build_worldcup_pool_pin_reset_email(
             <p>Hello!</p>
             <p>We received a request to recover access to the pool <strong>{safe_pool_name}</strong>.</p>
             <p style="font-size: 20px;"><strong>Your new PIN is: {safe_pin}</strong></p>
-            {f'<p><strong>Pool access link:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
-            {f'<p><strong>Organizer dashboard:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
-            <p>Use this PIN with your email to access the pool. If you did not request this, you can ignore this email.</p>
+            {f'<p><strong>Pool link:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
+            <p>Use this PIN with your email. The same pool link opens the organizer dashboard or the prediction screen according to your access.</p>
+            <p>If you did not request this, you can ignore this email.</p>
           </body>
         </html>
         """.strip()
@@ -933,9 +938,9 @@ def _build_worldcup_pool_pin_reset_email(
             f"¡Hola!\n\n"
             f"Recibimos una solicitud para recuperar el acceso a la porra \"{pool_name}\".\n\n"
             f"Tu nuevo PIN es: {new_pin}\n\n"
-            + (f"Enlace para entrar en la porra:\n{invite_url}\n\n" if invite_url else "")
-            + (f"Panel del organizador:\n{admin_url}\n\n" if admin_url else "")
-            + "Usa este PIN con tu email para acceder. Si no solicitaste esto, puedes ignorar este email.\n"
+            + (f"Enlace de la porra:\n{invite_url}\n\n" if invite_url else "")
+            + "Usa este PIN con tu email. El mismo enlace abre el panel del organizador o la pantalla de pronósticos según tu acceso.\n\n"
+            + "Si no solicitaste esto, puedes ignorar este email.\n"
         )
         html_body = f"""
         <html>
@@ -943,9 +948,9 @@ def _build_worldcup_pool_pin_reset_email(
             <p>¡Hola!</p>
             <p>Recibimos una solicitud para recuperar el acceso a la porra <strong>{safe_pool_name}</strong>.</p>
             <p style="font-size: 20px;"><strong>Tu nuevo PIN es: {safe_pin}</strong></p>
-            {f'<p><strong>Enlace para entrar en la porra:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
-            {f'<p><strong>Panel del organizador:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
-            <p>Usa este PIN con tu email para acceder. Si no solicitaste esto, puedes ignorar este email.</p>
+            {f'<p><strong>Enlace de la porra:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
+            <p>Usa este PIN con tu email. El mismo enlace abre el panel del organizador o la pantalla de pronósticos según tu acceso.</p>
+            <p>Si no solicitaste esto, puedes ignorar este email.</p>
           </body>
         </html>
         """.strip()
@@ -956,9 +961,9 @@ def _build_worldcup_pool_pin_reset_email(
         f"Olá!\n\n"
         f"Recebemos uma solicitação para recuperar o acesso ao bolão \"{pool_name}\".\n\n"
         f"Seu novo PIN é: {new_pin}\n\n"
-        + (f"Link para entrar no bolão:\n{invite_url}\n\n" if invite_url else "")
-        + (f"Painel do organizador:\n{admin_url}\n\n" if admin_url else "")
-        + "Use este PIN junto com seu e-mail para acessar. Se você não solicitou isso, ignore este e-mail.\n"
+        + (f"Link do bolão:\n{invite_url}\n\n" if invite_url else "")
+        + "Use este PIN junto com seu e-mail. O mesmo link abre o painel do organizador ou a tela de palpites conforme seu acesso.\n\n"
+        + "Se você não solicitou isso, ignore este e-mail.\n"
     )
     html_body = f"""
     <html>
@@ -966,9 +971,9 @@ def _build_worldcup_pool_pin_reset_email(
         <p>Olá!</p>
         <p>Recebemos uma solicitação para recuperar o acesso ao bolão <strong>{safe_pool_name}</strong>.</p>
         <p style="font-size: 20px;"><strong>Seu novo PIN é: {safe_pin}</strong></p>
-        {f'<p><strong>Link para entrar no bolão:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
-        {f'<p><strong>Painel do organizador:</strong><br /><a href="{safe_admin_url}">{safe_admin_url}</a></p>' if admin_url else ''}
-        <p>Use este PIN junto com seu e-mail para acessar. Se você não solicitou isso, ignore este e-mail.</p>
+        {f'<p><strong>Link do bolão:</strong><br /><a href="{safe_invite_url}">{safe_invite_url}</a></p>' if invite_url else ''}
+        <p>Use este PIN junto com seu e-mail. O mesmo link abre o painel do organizador ou a tela de palpites conforme seu acesso.</p>
+        <p>Se você não solicitou isso, ignore este e-mail.</p>
       </body>
     </html>
     """.strip()
@@ -1265,6 +1270,36 @@ def _set_worldcup_pool_session_cookie(
     )
 
 
+def _append_worldcup_pool_session_tokens_to_cookie(
+    *,
+    request: Request,
+    response: Response,
+    cookie_name: str,
+    tokens: list[str],
+    max_age_seconds: int,
+    path: str,
+) -> None:
+    existing_tokens = _get_worldcup_pool_session_token_candidates(
+        request=request,
+        cookie_name=cookie_name,
+    )
+
+    merged_tokens = [token for token in existing_tokens]
+    for token in tokens:
+        clean_token = str(token or "").strip()
+        if clean_token:
+            merged_tokens = [existing for existing in merged_tokens if existing != clean_token]
+            merged_tokens.append(clean_token)
+
+    _write_worldcup_pool_session_cookie_value(
+        response=response,
+        cookie_name=cookie_name,
+        tokens=merged_tokens,
+        max_age_seconds=max_age_seconds,
+        path=path,
+    )
+
+
 def _remove_worldcup_pool_session_tokens_from_cookie(
     *,
     request: Request,
@@ -1302,34 +1337,48 @@ def _clear_worldcup_pool_session_cookie(
 ) -> None:
     settings = load_settings()
 
-    paths = [path]
-    legacy_paths = [
+    # O bolão usa o cookie reservado __session por causa do Firebase Hosting.
+    # Em produção já tivemos cookies legados com paths/domínios diferentes.
+    # Para apagar cookie no browser, Path e Domain precisam bater exatamente;
+    # por isso limpamos o escopo atual e os legados conhecidos antes de gravar
+    # uma sessão nova.
+    paths: list[str] = []
+    for cookie_path in [
+        path,
+        WORLDCUP_POOL_COOKIE_PATH,
+        "/",
+        "/public",
         "/public/worldcup-pool/pools",
         "/public/worldcup-pool/invites",
-    ]
+    ]:
+        clean_path = str(cookie_path or "").strip() or "/"
+        if clean_path not in paths:
+            paths.append(clean_path)
 
-    for legacy_path in legacy_paths:
-        if legacy_path not in paths:
-            paths.append(legacy_path)
+    domains: list[Optional[str]] = [None]
+    for cookie_domain in [
+        settings.product_session_cookie_domain,
+        ".previa.bet",
+        "previa.bet",
+        "api.previa.bet",
+    ]:
+        clean_domain = str(cookie_domain or "").strip()
+        if clean_domain and clean_domain not in domains:
+            domains.append(clean_domain)
 
     for cookie_path in paths:
-        if settings.product_session_cookie_domain:
-            response.delete_cookie(
-                key=cookie_name,
-                path=cookie_path,
-                domain=settings.product_session_cookie_domain,
-                secure=settings.product_session_cookie_secure,
-                httponly=True,
-                samesite=settings.product_session_cookie_samesite,
-            )
+        for cookie_domain in domains:
+            kwargs = {
+                "key": cookie_name,
+                "path": cookie_path,
+                "secure": settings.product_session_cookie_secure,
+                "httponly": True,
+                "samesite": settings.product_session_cookie_samesite,
+            }
+            if cookie_domain is not None:
+                kwargs["domain"] = cookie_domain
 
-        response.delete_cookie(
-            key=cookie_name,
-            path=cookie_path,
-            secure=settings.product_session_cookie_secure,
-            httponly=True,
-            samesite=settings.product_session_cookie_samesite,
-        )
+            response.delete_cookie(**kwargs)
 
 @router.get("/me/pools", response_model=WorldCupPoolMyPoolsResponse)
 def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse:
@@ -1423,9 +1472,9 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
         p.scoring_mode,
         p.invite_token,
         COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
-        NULL::bigint AS participant_id,
-        NULL::text AS participant_display_name,
-        0::int AS predictions_count,
+        own_pt.id AS participant_id,
+        own_pt.display_name AS participant_display_name,
+        COUNT(DISTINCT pr.id)::int AS predictions_count,
         (
           SELECT COUNT(*)::int
           FROM worldcup_pool.matches m
@@ -1438,6 +1487,13 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
         ON p.id = s.pool_id
       LEFT JOIN worldcup_pool.participants active_pt
         ON active_pt.pool_id = p.id
+      LEFT JOIN worldcup_pool.participants own_pt
+        ON own_pt.pool_id = p.id
+       AND lower(own_pt.email) = lower(p.organizer_email)
+       AND own_pt.status = 'active'
+      LEFT JOIN worldcup_pool.predictions pr
+        ON pr.pool_id = p.id
+       AND pr.participant_id = own_pt.id
       WHERE s.session_token_hash = ANY(%s)
         AND s.owner_type = 'organizer'
         AND s.revoked_at_utc IS NULL
@@ -1450,7 +1506,9 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
         p.lang,
         p.status,
         p.scoring_mode,
-        p.invite_token
+        p.invite_token,
+        own_pt.id,
+        own_pt.display_name
     """
 
     update_seen_sql = """
@@ -1506,7 +1564,10 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
         if role not in item["roles"]:
             item["roles"].append(role)
 
-        if role == "participant" and row[8] is not None:
+        if role == "organizer" and row[8] is not None and "participant" not in item["roles"]:
+            item["roles"].append("participant")
+
+        if row[8] is not None:
             item["participant_id"] = int(row[8])
             item["participant_display_name"] = str(row[9]) if row[9] is not None else None
             item["predictions_count"] = int(row[10] or 0)
@@ -1546,6 +1607,442 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
     for item in merged.values():
         roles = item["roles"]
         roles.sort(key=lambda role: 0 if role == "organizer" else 1)
+        primary_role: WorldCupPoolAccessRole = "organizer" if "organizer" in roles else "participant"
+
+        pools.append(
+            WorldCupPoolMyPool(
+                id=item["id"],
+                slug=item["slug"],
+                name=item["name"],
+                lang=item["lang"],
+                scoring_mode=item["scoring_mode"],
+                status=item["status"],
+                invite_token=item["invite_token"],
+                invite_url=item["invite_url"],
+                admin_url=item["admin_url"],
+                participant_url=item["participant_url"],
+                participant_count=item["participant_count"],
+                roles=roles,
+                primary_role=primary_role,
+                participant_id=item["participant_id"],
+                participant_display_name=item["participant_display_name"],
+                predictions_count=item["predictions_count"],
+                available_matches=item["available_matches"],
+            )
+        )
+
+    pools.sort(key=lambda pool: (pool.name.lower(), pool.id))
+
+    return WorldCupPoolMyPoolsResponse(ok=True, pools=pools)
+
+@router.post("/access/reset-session", response_model=WorldCupPoolLogoutResponse)
+def reset_worldcup_pool_access_session(response: Response) -> WorldCupPoolLogoutResponse:
+    settings = load_settings()
+
+    for cookie_name in {
+        settings.worldcup_pool_organizer_session_cookie_name,
+        settings.worldcup_pool_participant_session_cookie_name,
+    }:
+        _clear_worldcup_pool_session_cookie(
+            response=response,
+            cookie_name=cookie_name,
+            path=WORLDCUP_POOL_COOKIE_PATH,
+        )
+
+    return WorldCupPoolLogoutResponse(ok=True)
+
+@router.post("/access/login", response_model=WorldCupPoolMyPoolsResponse)
+def login_worldcup_pool_access(
+    req: WorldCupPoolAccessLoginRequest,
+    request: Request,
+    response: Response,
+) -> WorldCupPoolMyPoolsResponse:
+    settings = load_settings()
+
+    if not settings.worldcup_pool_enabled:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "ok": False,
+                "code": "WORLDCUP_POOL_DISABLED",
+                "message": "World Cup Pool is disabled.",
+            },
+        )
+
+    _validate_pin(req.pin)
+
+    for cookie_name in {
+        settings.worldcup_pool_organizer_session_cookie_name,
+        settings.worldcup_pool_participant_session_cookie_name,
+    }:
+        _clear_worldcup_pool_session_cookie(
+            response=response,
+            cookie_name=cookie_name,
+            path=WORLDCUP_POOL_COOKIE_PATH,
+        )
+
+    email = str(req.email).strip().lower()
+    pin = str(req.pin or "")
+    invite_token = str(req.invite_token or "").strip()
+    session_cookie_max_age_seconds = settings.worldcup_pool_session_ttl_days * 24 * 60 * 60
+    expires_at_utc = _now_utc() + timedelta(days=settings.worldcup_pool_session_ttl_days)
+    user_agent: Optional[str] = request.headers.get("user-agent")
+    safe_user_agent = user_agent[:500] if user_agent else None
+
+    candidate_sql = """
+      SELECT
+        'organizer' AS role,
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        p.organizer_email AS login_email,
+        p.organizer_pin_hash AS pin_hash,
+        own_pt.id AS participant_id,
+        own_pt.display_name AS participant_display_name,
+        COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
+        COUNT(DISTINCT pr.id)::int AS predictions_count,
+        (
+          SELECT COUNT(*)::int
+          FROM worldcup_pool.matches m
+          WHERE m.competition_key = 'fifa_world_cup_2026'
+            AND m.status <> 'cancelled'
+        ) AS available_matches
+      FROM worldcup_pool.pools p
+      LEFT JOIN worldcup_pool.participants active_pt
+        ON active_pt.pool_id = p.id
+      LEFT JOIN worldcup_pool.participants own_pt
+        ON own_pt.pool_id = p.id
+       AND lower(own_pt.email) = lower(p.organizer_email)
+       AND own_pt.status = 'active'
+      LEFT JOIN worldcup_pool.predictions pr
+        ON pr.pool_id = p.id
+       AND pr.participant_id = own_pt.id
+      WHERE lower(p.organizer_email) = lower(%s)
+        AND p.status = 'active'
+        AND (%s = '' OR p.invite_token = %s)
+      GROUP BY
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        p.organizer_email,
+        p.organizer_pin_hash,
+        own_pt.id,
+        own_pt.display_name
+
+      UNION ALL
+
+      SELECT
+        'participant' AS role,
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        pt.email AS login_email,
+        pt.pin_hash AS pin_hash,
+        pt.id AS participant_id,
+        pt.display_name AS participant_display_name,
+        COUNT(DISTINCT active_pt.id) FILTER (WHERE active_pt.status = 'active') AS participant_count,
+        COUNT(DISTINCT pr.id)::int AS predictions_count,
+        (
+          SELECT COUNT(*)::int
+          FROM worldcup_pool.matches m
+          WHERE m.competition_key = 'fifa_world_cup_2026'
+            AND m.status <> 'cancelled'
+        ) AS available_matches
+      FROM worldcup_pool.participants pt
+      JOIN worldcup_pool.pools p
+        ON p.id = pt.pool_id
+      LEFT JOIN worldcup_pool.participants active_pt
+        ON active_pt.pool_id = p.id
+      LEFT JOIN worldcup_pool.predictions pr
+        ON pr.pool_id = p.id
+       AND pr.participant_id = pt.id
+      WHERE lower(pt.email) = lower(%s)
+        AND pt.status = 'active'
+        AND p.status = 'active'
+        AND (%s = '' OR p.invite_token = %s)
+      GROUP BY
+        p.id,
+        p.slug,
+        p.name,
+        p.lang,
+        p.status,
+        p.scoring_mode,
+        p.invite_token,
+        pt.email,
+        pt.pin_hash,
+        pt.id,
+        pt.display_name
+    """
+
+    insert_session_sql = """
+      INSERT INTO worldcup_pool.sessions (
+        pool_id,
+        participant_id,
+        owner_type,
+        session_token_hash,
+        user_agent,
+        expires_at_utc
+      )
+      VALUES (%s, %s, %s, %s, %s, %s)
+    """
+
+    update_participant_seen_sql = """
+      UPDATE worldcup_pool.participants
+      SET last_seen_at_utc = NOW()
+      WHERE id = %s
+    """
+
+    insert_event_sql = """
+      INSERT INTO worldcup_pool.events (
+        pool_id,
+        participant_id,
+        actor_type,
+        actor_id,
+        event_name,
+        payload
+      )
+      VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+    """
+
+    matched_rows: list[tuple[tuple, WorldCupPoolAccessRole]] = []
+    session_tokens_by_cookie: dict[str, dict[str, object]] = {}
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    candidate_sql,
+                    (
+                        email,
+                        invite_token,
+                        invite_token,
+                        email,
+                        invite_token,
+                        invite_token,
+                    ),
+                )
+                candidate_rows = cur.fetchall()
+
+                for row in candidate_rows:
+                    role: WorldCupPoolAccessRole = "organizer" if str(row[0]) == "organizer" else "participant"
+                    if _verify_pin(pin, str(row[9])):
+                        matched_rows.append((row, role))
+
+                if not matched_rows:
+                    for row in candidate_rows:
+                        role = "organizer" if str(row[0]) == "organizer" else "participant"
+                        pool_id = int(row[1])
+                        _assert_worldcup_pin_attempt_allowed(
+                            cur,
+                            pool_id=pool_id,
+                            owner_type=role,
+                            email=email,
+                        )
+                        _record_worldcup_pin_attempt(
+                            cur,
+                            pool_id=pool_id,
+                            owner_type=role,
+                            email=email,
+                            request=request,
+                            success=False,
+                            failure_code="invalid_access_login",
+                        )
+
+                    conn.commit()
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "ok": False,
+                            "code": "INVALID_WORLDCUP_POOL_ACCESS_LOGIN",
+                            "message": "No active pool was found for this email and PIN.",
+                        },
+                    )
+
+                for row, role in matched_rows:
+                    pool_id = int(row[1])
+                    participant_id = int(row[10]) if role == "participant" and row[10] is not None else None
+
+                    _assert_worldcup_pin_attempt_allowed(
+                        cur,
+                        pool_id=pool_id,
+                        owner_type=role,
+                        email=email,
+                    )
+                    _clear_worldcup_pin_failures(
+                        cur,
+                        pool_id=pool_id,
+                        owner_type=role,
+                        email=email,
+                    )
+                    _record_worldcup_pin_attempt(
+                        cur,
+                        pool_id=pool_id,
+                        owner_type=role,
+                        email=email,
+                        request=request,
+                        success=True,
+                    )
+
+                    if participant_id is not None:
+                        cur.execute(update_participant_seen_sql, (participant_id,))
+
+                    session_token = secrets.token_urlsafe(32)
+                    session_token_hash = _hash_session_token(session_token)
+
+                    cur.execute(
+                        insert_session_sql,
+                        (
+                            pool_id,
+                            participant_id,
+                            role,
+                            session_token_hash,
+                            safe_user_agent,
+                            expires_at_utc,
+                        ),
+                    )
+
+                    cur.execute(
+                        insert_event_sql,
+                        (
+                            pool_id,
+                            participant_id,
+                            role,
+                            participant_id if participant_id is not None else pool_id,
+                            "participant_logged_in" if role == "participant" else "organizer_logged_in",
+                            json.dumps(
+                                {
+                                    "email": email,
+                                    "source": "public_worldcup_pool_access_login",
+                                }
+                            ),
+                        ),
+                    )
+
+                    if role == "organizer":
+                        cookie_name = settings.worldcup_pool_organizer_session_cookie_name
+                        cookie_path = WORLDCUP_POOL_ORGANIZER_COOKIE_PATH
+                    else:
+                        cookie_name = settings.worldcup_pool_participant_session_cookie_name
+                        cookie_path = WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH
+
+                    if (
+                        settings.worldcup_pool_organizer_session_cookie_name
+                        == settings.worldcup_pool_participant_session_cookie_name
+                    ):
+                        cookie_path = WORLDCUP_POOL_COOKIE_PATH
+
+                    grouped = session_tokens_by_cookie.setdefault(
+                        cookie_name,
+                        {
+                            "path": cookie_path,
+                            "tokens": [],
+                        },
+                    )
+                    grouped_tokens = grouped["tokens"]
+                    if isinstance(grouped_tokens, list):
+                        grouped_tokens.append(session_token)
+
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "ok": False,
+                "code": "WORLDCUP_POOL_ACCESS_LOGIN_FAILED",
+                "message": f"Failed to login to World Cup Pool access: {e}",
+            },
+        )
+
+    for cookie_name, grouped in session_tokens_by_cookie.items():
+        tokens = grouped.get("tokens") if isinstance(grouped, dict) else []
+        cookie_path = grouped.get("path") if isinstance(grouped, dict) else WORLDCUP_POOL_COOKIE_PATH
+
+        # Login global é uma reautenticação explícita do usuário.
+        # Por isso, ele deve substituir tokens antigos do bolão em vez de anexar
+        # indefinidamente ao __session. Isso evita cookies legados/parciais
+        # impedindo acesso a bolões recém-logados.
+        _write_worldcup_pool_session_cookie_value(
+            response=response,
+            cookie_name=cookie_name,
+            tokens=tokens if isinstance(tokens, list) else [],
+            max_age_seconds=session_cookie_max_age_seconds,
+            path=str(cookie_path or WORLDCUP_POOL_COOKIE_PATH),
+        )
+
+    merged: dict[int, dict] = {}
+
+    for row, role in matched_rows:
+        pool_id = int(row[1])
+        item = merged.get(pool_id)
+
+        if not item:
+            invite_url = _build_invite_url(
+                origin=settings.product_public_origin,
+                lang=str(row[4]),
+                invite_token=str(row[7]),
+            )
+            admin_url = _build_admin_url(
+                origin=settings.product_public_origin,
+                lang=str(row[4]),
+                slug=str(row[2]),
+            )
+            participant_url = _build_participant_panel_url(
+                origin=settings.product_public_origin,
+                lang=str(row[4]),
+                invite_token=str(row[7]),
+            )
+
+            item = {
+                "id": pool_id,
+                "slug": str(row[2]),
+                "name": str(row[3]),
+                "lang": row[4],
+                "status": str(row[5]),
+                "scoring_mode": _normalize_worldcup_scoring_mode(row[6]),
+                "invite_token": str(row[7]),
+                "invite_url": invite_url,
+                "admin_url": admin_url,
+                "participant_url": participant_url,
+                "participant_count": int(row[12] or 0),
+                "roles": [],
+                "participant_id": None,
+                "participant_display_name": None,
+                "predictions_count": 0,
+                "available_matches": int(row[14] or 0),
+            }
+            merged[pool_id] = item
+
+        if role not in item["roles"]:
+            item["roles"].append(role)
+
+        if role == "organizer" and row[10] is not None and "participant" not in item["roles"]:
+            item["roles"].append("participant")
+
+        if row[10] is not None:
+            item["participant_id"] = int(row[10])
+            item["participant_display_name"] = str(row[11]) if row[11] is not None else None
+            item["predictions_count"] = int(row[13] or 0)
+
+    pools: list[WorldCupPoolMyPool] = []
+
+    for item in merged.values():
+        roles = item["roles"]
+        roles.sort(key=lambda item_role: 0 if item_role == "organizer" else 1)
         primary_role: WorldCupPoolAccessRole = "organizer" if "organizer" in roles else "participant"
 
         pools.append(
@@ -1904,14 +2401,34 @@ def create_worldcup_pool(
         slug=str(slug),
     )
 
-    _set_worldcup_pool_session_cookie(
-        response=response,
-        cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
-        token=organizer_session_token,
-        max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
-        path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
-        request=request,
-    )
+    session_cookie_max_age_seconds = settings.worldcup_pool_session_ttl_days * 24 * 60 * 60
+
+    if settings.worldcup_pool_organizer_session_cookie_name == settings.worldcup_pool_participant_session_cookie_name:
+        _append_worldcup_pool_session_tokens_to_cookie(
+            request=request,
+            response=response,
+            cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
+            tokens=[organizer_session_token, participant_session_token],
+            max_age_seconds=session_cookie_max_age_seconds,
+            path=WORLDCUP_POOL_COOKIE_PATH,
+        )
+    else:
+        _set_worldcup_pool_session_cookie(
+            response=response,
+            cookie_name=settings.worldcup_pool_organizer_session_cookie_name,
+            token=organizer_session_token,
+            max_age_seconds=session_cookie_max_age_seconds,
+            path=WORLDCUP_POOL_ORGANIZER_COOKIE_PATH,
+            request=request,
+        )
+        _set_worldcup_pool_session_cookie(
+            response=response,
+            cookie_name=settings.worldcup_pool_participant_session_cookie_name,
+            token=participant_session_token,
+            max_age_seconds=session_cookie_max_age_seconds,
+            path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
+            request=request,
+        )
 
     _send_worldcup_pool_access_email_safely(
         to_email=organizer_email,
@@ -1919,15 +2436,6 @@ def create_worldcup_pool(
         pool_name=str(name),
         invite_url=invite_url,
         admin_url=admin_url,
-    )
-
-    _set_worldcup_pool_session_cookie(
-        response=response,
-        cookie_name=settings.worldcup_pool_participant_session_cookie_name,
-        token=participant_session_token,
-        max_age_seconds=settings.worldcup_pool_session_ttl_days * 24 * 60 * 60,
-        path=WORLDCUP_POOL_PARTICIPANT_COOKIE_PATH,
-        request=request,
     )
 
     return WorldCupPoolCreateResponse(
@@ -2158,8 +2666,8 @@ def request_worldcup_pool_pin_reset(
             lang=str(pool_row[3]),
             pool_name=str(pool_row[2]),
             new_pin=new_pin,
-            invite_url=invite_url if is_participant else None,
-            admin_url=admin_url if is_organizer else None,
+            invite_url=invite_url if (is_participant or is_organizer) else None,
+            admin_url=None,
         )
 
         try:
@@ -3530,14 +4038,32 @@ def _require_organizer_pool(slug: str, request: Request) -> WorldCupPoolOrganize
       FROM worldcup_pool.sessions s
       JOIN worldcup_pool.pools p
         ON p.id = s.pool_id
+      LEFT JOIN worldcup_pool.participants session_pt
+        ON session_pt.id = s.participant_id
+       AND session_pt.pool_id = p.id
       LEFT JOIN worldcup_pool.participants pt
         ON pt.pool_id = p.id
       WHERE s.session_token_hash = ANY(%s)
-        AND s.owner_type = 'organizer'
         AND s.revoked_at_utc IS NULL
         AND s.expires_at_utc > NOW()
         AND p.slug = %s
         AND p.status = 'active'
+        AND (
+          s.owner_type = 'organizer'
+          OR (
+            s.owner_type = 'participant'
+            AND session_pt.status = 'active'
+            AND lower(session_pt.email) = lower(p.organizer_email)
+          )
+        )
+        AND (
+          s.owner_type = 'organizer'
+          OR (
+            s.owner_type = 'participant'
+            AND session_pt.status = 'active'
+            AND lower(session_pt.email) = lower(p.organizer_email)
+          )
+        )
       GROUP BY p.id, p.slug, p.name, p.lang, p.status, p.scoring_mode, p.invite_token, s.session_token_hash
       LIMIT 1
     """
@@ -3649,14 +4175,24 @@ def get_worldcup_pool_organizer_session_status(
       FROM worldcup_pool.sessions s
       JOIN worldcup_pool.pools p
         ON p.id = s.pool_id
+      LEFT JOIN worldcup_pool.participants session_pt
+        ON session_pt.id = s.participant_id
+       AND session_pt.pool_id = p.id
       LEFT JOIN worldcup_pool.participants pt
         ON pt.pool_id = p.id
       WHERE s.session_token_hash = ANY(%s)
-        AND s.owner_type = 'organizer'
         AND s.revoked_at_utc IS NULL
         AND s.expires_at_utc > NOW()
         AND p.slug = %s
         AND p.status = 'active'
+        AND (
+          s.owner_type = 'organizer'
+          OR (
+            s.owner_type = 'participant'
+            AND session_pt.status = 'active'
+            AND lower(session_pt.email) = lower(p.organizer_email)
+          )
+        )
       GROUP BY p.id, p.slug, p.name, p.lang, p.status, p.scoring_mode, p.invite_token, s.session_token_hash
       LIMIT 1
     """

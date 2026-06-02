@@ -9,7 +9,7 @@ import {
   fetchWorldCupPoolMyPools,
   fetchWorldCupPoolOrganizerDashboard,
   fetchWorldCupPoolOrganizerSessionStatus,
-  loginWorldCupPoolOrganizer,
+  loginWorldCupPoolAccess,
   logoutWorldCupPoolOrganizer,
   requestWorldCupPoolPinReset,
   removeWorldCupPoolParticipant,
@@ -240,6 +240,7 @@ export function WorldCupPoolOrganizerPage() {
   const [pinResetError, setPinResetError] = React.useState("");
   const [myPredictionsLoading, setMyPredictionsLoading] = React.useState(false);
   const [myPredictionsError, setMyPredictionsError] = React.useState("");
+  const [canSwitchPool, setCanSwitchPool] = React.useState(false);
   const [logoutLoading, setLogoutLoading] = React.useState(false);
   const [logoutError, setLogoutError] = React.useState("");
 
@@ -314,6 +315,37 @@ export function WorldCupPoolOrganizerPage() {
       active = false;
     };
   }, [poolSlug, loadDashboard]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadPoolSwitcherState() {
+      if (!data?.pool?.id) {
+        setCanSwitchPool(false);
+        return;
+      }
+
+      try {
+        const myPools = await fetchWorldCupPoolMyPools();
+
+        if (!cancelled) {
+          setCanSwitchPool(myPools.pools.length > 1);
+        }
+      } catch (err) {
+        console.error("failed to load world cup pool switcher state", err);
+
+        if (!cancelled) {
+          setCanSwitchPool(false);
+        }
+      }
+    }
+
+    void loadPoolSwitcherState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.pool?.id]);
 
   async function openMyPredictions() {
     if (!data?.pool.slug) return;
@@ -423,20 +455,20 @@ export function WorldCupPoolOrganizerPage() {
     setLoginError("");
 
     try {
-      await loginWorldCupPoolOrganizer(poolSlug, {
+      const access = await loginWorldCupPoolAccess({
         email: loginEmail.trim(),
         pin: loginPin,
       });
 
-      setLoadError(false);
+      const currentPool = access.pools.find(
+        (pool) => pool.slug === poolSlug && pool.roles.includes("organizer")
+      );
 
-      const myPools = await fetchWorldCupPoolMyPools();
-
-      if (myPools.pools.length > 1) {
-        navigate(`/${currentLang}/bolao/copa/meus-boloes`, { replace: true });
-        return;
+      if (!currentPool) {
+        throw new Error("Current pool was not found for organizer access login.");
       }
 
+      setLoadError(false);
       await loadDashboard();
     } catch (err) {
       console.error("failed to login organizer", err);
@@ -647,9 +679,11 @@ export function WorldCupPoolOrganizerPage() {
                 {myPredictionsLoading ? copy.myPredictionsLoading : copy.myPredictions}
               </button>
 
-              <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
-                {copy.changePool}
-              </Link>
+              {canSwitchPool ? (
+                <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
+                  {copy.changePool}
+                </Link>
+              ) : null}
 
               <button
                 type="button"

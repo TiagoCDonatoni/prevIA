@@ -5,6 +5,7 @@ import "../worldcup-pool.css";
 import type { Lang } from "../../i18n";
 import { coercePublicLang } from "../lib/publicLang";
 import {
+  fetchWorldCupPoolMyPools,
   fetchWorldCupPoolParticipantDashboard,
   logoutWorldCupPoolParticipant,
   type WorldCupPoolParticipantDashboardResponse,
@@ -46,6 +47,7 @@ const COPY = {
     logoutLoading: "Saindo...",
     logoutError: "Não foi possível sair agora. Tente novamente.",
     changePool: "Trocar bolão",
+    openAdmin: "Ver painel",
   },
   en: {
     loading: "Loading your dashboard...",
@@ -80,6 +82,7 @@ const COPY = {
     logoutLoading: "Logging out...",
     logoutError: "Could not log out now. Try again.",
     changePool: "Switch pool",
+    openAdmin: "Manage pool",
   },
   es: {
     loading: "Cargando tu panel...",
@@ -114,6 +117,7 @@ const COPY = {
     logoutLoading: "Saliendo...",
     logoutError: "No fue posible salir ahora. Inténtalo nuevamente.",
     changePool: "Cambiar porra",
+    openAdmin: "Gestionar porra",
   },
 } as const;
 
@@ -126,6 +130,8 @@ export function WorldCupPoolParticipantPage() {
   const [data, setData] = React.useState<WorldCupPoolParticipantDashboardResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(false);
+  const [canSwitchPool, setCanSwitchPool] = React.useState(false);
+  const [organizerPoolSlug, setOrganizerPoolSlug] = React.useState("");
   const [logoutLoading, setLogoutLoading] = React.useState(false);
   const [logoutError, setLogoutError] = React.useState("");
 
@@ -166,7 +172,50 @@ export function WorldCupPoolParticipantPage() {
     };
   }, [token]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadPoolSwitcherState() {
+      if (!data?.pool?.id) {
+        setCanSwitchPool(false);
+        setOrganizerPoolSlug("");
+        return;
+      }
+
+      try {
+        const myPools = await fetchWorldCupPoolMyPools();
+
+        if (!cancelled) {
+          const currentPool = myPools.pools.find(
+            (pool) => pool.id === data.pool.id || pool.invite_token === token
+          );
+
+          setCanSwitchPool(myPools.pools.length > 1);
+          setOrganizerPoolSlug(
+            currentPool?.roles.includes("organizer") ? currentPool.slug : ""
+          );
+        }
+      } catch (err) {
+        console.error("failed to load world cup pool switcher state", err);
+
+        if (!cancelled) {
+          setCanSwitchPool(false);
+          setOrganizerPoolSlug("");
+        }
+      }
+    }
+
+    void loadPoolSwitcherState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.pool?.id, token]);
+
   const invitePath = `/${currentLang}/bolao/copa/entrar/${encodeURIComponent(token)}`;
+  const organizerPath = organizerPoolSlug
+    ? `/${currentLang}/bolao/copa/admin/${encodeURIComponent(organizerPoolSlug)}`
+    : "";
 
   async function onParticipantLogout() {
     if (!token || logoutLoading) return;
@@ -306,9 +355,17 @@ export function WorldCupPoolParticipantPage() {
             {copy.invite}
           </Link>
 
-          <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
-            {copy.changePool}
-          </Link>
+          {organizerPath ? (
+            <Link className="public-btn public-btn-primary" to={organizerPath}>
+              {copy.openAdmin}
+            </Link>
+          ) : null}
+
+          {canSwitchPool ? (
+            <Link className="public-btn public-btn-secondary" to={`/${currentLang}/bolao/copa/meus-boloes`}>
+              {copy.changePool}
+            </Link>
+          ) : null}
 
           <button
             type="button"

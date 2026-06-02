@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { PRODUCT_AUTH_ENABLED } from "../../config";
 
 import type {
   ProductEdgeSummary,
@@ -58,6 +59,8 @@ type ProductIndexProps = {
 
 const MOBILE_ANALYSIS_BREAKPOINT = 980;
 const UPCOMING_WINDOW_HOURS = 24;
+const UPCOMING_FALLBACK_7D_HOURS = 7 * 24;
+const UPCOMING_FALLBACK_30D_HOURS = 30 * 24;
 const UPCOMING_FALLBACK_MAX_LEAGUES = 12;
 const OPPORTUNITY_EDGE_THRESHOLD = 0.12;
 const OPPORTUNITY_EV_THRESHOLD = 0.10;
@@ -880,6 +883,44 @@ function hasUsableAnalysisStatus(status: string | null | undefined) {
   );
 }
 
+function getPublicEmbedEmptyAnalysisCopy(lang: Lang) {
+  return {
+    pt: {
+      eyebrow: "Análise grátis",
+      title: "Abra sua primeira análise grátis",
+      body: "Clique em um jogo da lista para ver probabilidades, odds, preço justo e valor do confronto.",
+      bullets: [
+        "Probabilidades estimadas",
+        "Odds e preço justo",
+        "Diferença entre modelo e mercado",
+      ],
+      note: "A consulta só é usada quando você abrir a análise.",
+    },
+    en: {
+      eyebrow: "Free analysis",
+      title: "Open your first free analysis",
+      body: "Click a match from the list to see probabilities, odds, fair price, and value for the matchup.",
+      bullets: [
+        "Estimated probabilities",
+        "Odds and fair price",
+        "Gap between model and market",
+      ],
+      note: "A check is only used when you open the analysis.",
+    },
+    es: {
+      eyebrow: "Análisis gratis",
+      title: "Abre tu primer análisis gratis",
+      body: "Haz clic en un partido de la lista para ver probabilidades, cuotas, precio justo y valor del encuentro.",
+      bullets: [
+        "Probabilidades estimadas",
+        "Cuotas y precio justo",
+        "Diferencia entre modelo y mercado",
+      ],
+      note: "La consulta solo se usa cuando abres el análisis.",
+    },
+  }[lang];
+}
+
 export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const store = useProductStore();
   const isPublicEmbed = mode === "public_embed";
@@ -1034,6 +1075,27 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
     return items;
   }, [activeLeagueSportKeys, leaguesBySportKey, isPublicEmbed]);
+
+  const upcomingFallbackFetchLeagues = useMemo(() => {
+    const nowMs = Date.now();
+
+    const items = leagues.filter((item) => {
+      const kickoffRaw = item.next_kickoff_utc;
+      if (!kickoffRaw) return false;
+
+      const kickoffMs = new Date(kickoffRaw).getTime();
+      if (!Number.isFinite(kickoffMs)) return false;
+      if (kickoffMs + ACTIVE_EVENT_GRACE_MS < nowMs) return false;
+
+      return true;
+    });
+
+    if (isPublicEmbed) {
+      return items.slice(0, PUBLIC_EMBED_MAX_LEAGUES);
+    }
+
+    return items.slice(0, UPCOMING_FALLBACK_MAX_LEAGUES);
+  }, [leagues, isPublicEmbed]);
 
   const hasActiveFilters =
     selectedCountryCodes.length > 0 ||
@@ -1438,7 +1500,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     const requestSeq = ++eventsRequestSeqRef.current;
 
     try {
-      if (!fetchLeagues.length) {
+      const baseFetchLeagues =
+        windowMode === "UPCOMING" ? upcomingFallbackFetchLeagues : fetchLeagues;
+
+      if (!baseFetchLeagues.length) {
         if (requestSeq !== eventsRequestSeqRef.current) return;
 
         setEvents([]);
@@ -1454,82 +1519,105 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
       setLoadingEvents(true);
       setEventsError("");
 
-      const hoursAhead = getFetchHoursAheadForWindowMode(windowMode);
-      const fetchLeagueKeys = fetchLeagues.map((item) => item.sport_key);
       const includeRevealed = !isPublicEmbed && store.backendUsage.is_ready;
       const revealedKeys = includeRevealed ? store.backendUsage.revealed_fixture_keys : [];
-
-      const cacheKey = buildEventsCacheKey({
-        productMode: mode,
-        hoursAhead,
-        leagueKeys: fetchLeagueKeys,
-        includeRevealed,
-        revealedKeys,
-      });
       const cacheTtlMs = isPublicEmbed ? PUBLIC_EMBED_EVENTS_CACHE_TTL_MS : EVENTS_CACHE_TTL_MS;
-      const cached = eventsCacheRef.current[cacheKey] ?? readStoredEventsCache(cacheKey);
+      const hoursAheadAttempts =
+        windowMode === "UPCOMING"
+          ? [UPCOMING_WINDOW_HOURS, UPCOMING_FALLBACK_7D_HOURS, UPCOMING_FALLBACK_30D_HOURS]
+          : [getFetchHoursAheadForWindowMode(windowMode)];
 
-      if (cached && Date.now() - cached.createdAt <= cacheTtlMs) {
-        if (requestSeq !== eventsRequestSeqRef.current) return;
+      let nextEvents: ProductOddsEvent[] = [];
+      let loadedAt = Date.now();
+      let firstAttemptError: any = null;
 
-        setEvents(cached.events);
-        setLastLoadedAt(cached.createdAt);
-        setLoadingEvents(false);
-        setHasLoadedEventsOnce(true);
-        return;
-      }
+      for (const hoursAhead of hoursAheadAttempts) {
+        const fetchLeagueKeys = baseFetchLeagues.map((item) => item.sport_key);
+        const cacheKey = buildEventsCacheKey({
+          productMode: mode,
+          hoursAhead,
+          leagueKeys: fetchLeagueKeys,
+          includeRevealed,
+          revealedKeys,
+        });
+        const cached = eventsCacheRef.current[cacheKey] ?? readStoredEventsCache(cacheKey);
 
-      const settled = await mapWithConcurrency(
-        fetchLeagues,
-        EVENT_FETCH_CONCURRENCY,
-        async (cfg) => {
-          const res = await productListOddsEvents({
-            sport_key: cfg.sport_key,
-            hours_ahead: hoursAhead,
-            limit: UI_DEFAULTS.limit,
-            assume_league_id: cfg.league_id,
-            assume_season: cfg.assume_season,
-            artifact_filename: cfg.artifact_filename ?? undefined,
-            include_revealed: includeRevealed,
-          });
+        if (cached && Date.now() - cached.createdAt <= cacheTtlMs) {
+          if (requestSeq !== eventsRequestSeqRef.current) return;
 
-          return res?.events ?? [];
-        }
-      );
+          nextEvents = cached.events;
+          loadedAt = cached.createdAt;
+        } else {
+          const settled = await mapWithConcurrency(
+            baseFetchLeagues,
+            EVENT_FETCH_CONCURRENCY,
+            async (cfg) => {
+              const res = await productListOddsEvents({
+                sport_key: cfg.sport_key,
+                hours_ahead: hoursAhead,
+                limit: UI_DEFAULTS.limit,
+                assume_league_id: cfg.league_id,
+                assume_season: cfg.assume_season,
+                artifact_filename: cfg.artifact_filename ?? undefined,
+                include_revealed: includeRevealed,
+              });
 
-      if (requestSeq !== eventsRequestSeqRef.current) return;
+              return res?.events ?? [];
+            }
+          );
 
-      const merged = new Map<string, ProductOddsEvent>();
-      let fulfilledCount = 0;
-      let firstError: any = null;
+          if (requestSeq !== eventsRequestSeqRef.current) return;
 
-      for (const result of settled) {
-        if (result.status === "fulfilled") {
-          fulfilledCount += 1;
-          for (const item of result.value) {
-            merged.set(String(item.event_id), item);
+          const merged = new Map<string, ProductOddsEvent>();
+          let fulfilledCount = 0;
+          let firstError: any = null;
+
+          for (const result of settled) {
+            if (result.status === "fulfilled") {
+              fulfilledCount += 1;
+              for (const item of result.value) {
+                merged.set(String(item.event_id), item);
+              }
+              continue;
+            }
+
+            firstError = firstError ?? result.reason;
+            console.warn("[product/index] failed to load one league batch", result.reason);
           }
-          continue;
+
+          if (fulfilledCount === 0 && firstError) {
+            firstAttemptError = firstAttemptError ?? firstError;
+
+            if (windowMode !== "UPCOMING") {
+              throw firstError;
+            }
+
+            continue;
+          }
+
+          nextEvents = Array.from(merged.values());
+          loadedAt = Date.now();
+
+          const cacheEntry: ProductEventsCacheEntry = {
+            createdAt: loadedAt,
+            events: nextEvents,
+          };
+
+          eventsCacheRef.current[cacheKey] = cacheEntry;
+          writeStoredEventsCache(cacheKey, cacheEntry);
         }
 
-        firstError = firstError ?? result.reason;
-        console.warn("[product/index] failed to load one league batch", result.reason);
+        const hasUsableEvents = nextEvents.some((item) => hasUsableAnalysisStatus(item.match_status));
+        const isLastAttempt = hoursAhead === hoursAheadAttempts[hoursAheadAttempts.length - 1];
+
+        if (windowMode !== "UPCOMING" || hasUsableEvents || isLastAttempt) {
+          break;
+        }
       }
 
-      if (fulfilledCount === 0 && firstError) {
-        throw firstError;
+      if (!nextEvents.length && firstAttemptError) {
+        throw firstAttemptError;
       }
-
-      const nextEvents = Array.from(merged.values());
-      const loadedAt = Date.now();
-
-      const cacheEntry: ProductEventsCacheEntry = {
-        createdAt: loadedAt,
-        events: nextEvents,
-      };
-
-      eventsCacheRef.current[cacheKey] = cacheEntry;
-      writeStoredEventsCache(cacheKey, cacheEntry);
 
       setEvents(nextEvents);
       setLastLoadedAt(loadedAt);
@@ -1554,6 +1642,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     }
   }, [
     fetchLeagues,
+    upcomingFallbackFetchLeagues,
     windowMode,
     hasLoadedLeaguesOnce,
     isPublicEmbed,
@@ -1786,13 +1875,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     setAnalysisOpening(true);
 
     try {
-      const isAuthenticatedProductUser =
-        !isPublicEmbed &&
-        store.bootstrap.is_ready &&
-        store.bootstrap.user_id != null;
-
       const isAuthBootstrapPending =
-        !isPublicEmbed &&
+        PRODUCT_AUTH_ENABLED &&
         !store.bootstrap.is_ready;
 
       if (isAuthBootstrapPending) {
@@ -1805,6 +1889,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         );
         return;
       }
+
+      const isAuthenticatedProductUser =
+        store.bootstrap.is_ready &&
+        store.bootstrap.user_id != null;
 
       if (isAuthenticatedProductUser) {
         if (store.backendUsage.is_ready && store.isRevealed(fixtureKey)) {
@@ -2269,7 +2357,31 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
     return (
       <>
         {!selected ? (
-          <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
+          isPublicEmbed ? (
+            <div className="pi-embed-empty-analysis">
+              {(() => {
+                const emptyCopy = getPublicEmbedEmptyAnalysisCopy(lang);
+
+                return (
+                  <>
+                    <div className="pi-embed-empty-eyebrow">{emptyCopy.eyebrow}</div>
+                    <h3>{emptyCopy.title}</h3>
+                    <p>{emptyCopy.body}</p>
+
+                    <ul>
+                      {emptyCopy.bullets.map((bullet) => (
+                        <li key={bullet}>{bullet}</li>
+                      ))}
+                    </ul>
+
+                    <div className="pi-embed-empty-note">{emptyCopy.note}</div>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="pi-muted">{t(lang, "odds.selectHint")}</div>
+          )
         ) : (
           <div className="pi-detail">
             <div className="pi-detail-head">
@@ -3435,6 +3547,10 @@ return (
         {eventsError ? <div className="pi-error">{eventsError}</div> : null}
 
         <div className="pi-list" aria-label={t(lang, "odds.listAria")}>
+          {!loadingEvents && !eventsError && visibleEvents.length === 0 ? (
+            <div className="pi-empty-list">{t(lang, "product.empty_list")}</div>
+          ) : null}
+
           {visibleEvents.map((e) => {
             const eventKey = String(e.event_id);
             const active = eventKey === String(selectedId);

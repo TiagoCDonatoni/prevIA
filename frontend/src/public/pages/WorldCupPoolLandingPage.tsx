@@ -11,6 +11,7 @@ import {
   fetchWorldCupPoolStatus,
   type WorldCupPoolStatusResponse,
 } from "../api/publicClient";
+import { WorldCupPoolAccessLoginForm } from "../components/WorldCupPoolAccessLoginForm";
 import { WorldCupPoolCreateForm } from "../components/WorldCupPoolCreateForm";
 
 const COPY = {
@@ -27,6 +28,14 @@ const COPY = {
       "Monte seu bolão online, compartilhe o link no grupo e acompanhe os palpites da Copa em um ranking simples, leve e feito para celular.",
     primaryCta: "Criar bolão grátis",
     secondaryCta: "Ver como funciona",
+    createPanelTitle: "Criar um bolão novo",
+    createPanelBody: "Gere seu bolão grátis, receba o link de convite e acompanhe tudo pelo painel.",
+    createPanelCta: "Criar agora",
+    accessPanelTitle: "Já tenho um bolão",
+    accessPanelBody: "Entre com e-mail e PIN para abrir seus bolões ou continuar seus palpites.",
+    accessPanelCta: "Entrar",
+    startTitle: "Comece por aqui",
+    startBody: "Crie um bolão novo ou entre em um bolão existente usando seu e-mail e PIN.",
     heroNote:
       "Ideal para grupos de WhatsApp, família, empresa, bar, turma da faculdade e comunidades de futebol.",
     chips: ["Grátis para criar", "Link de convite", "Ranking automático", "Sem aposta financeira"],
@@ -135,6 +144,14 @@ const COPY = {
       "Launch an online pool, share the invite link with your group, and follow World Cup predictions through a simple mobile-first leaderboard.",
     primaryCta: "Create free pool",
     secondaryCta: "See how it works",
+    createPanelTitle: "Create a new pool",
+    createPanelBody: "Create your free pool, get the invite link, and manage everything from the dashboard.",
+    createPanelCta: "Create now",
+    accessPanelTitle: "I already have a pool",
+    accessPanelBody: "Use your email and PIN to open your pools or continue your predictions.",
+    accessPanelCta: "Sign in",
+    startTitle: "Start here",
+    startBody: "Create a new pool or access an existing one using your email and PIN.",
     heroNote:
       "Built for WhatsApp groups, families, offices, college groups, bars, and football communities.",
     chips: ["Free to create", "Invite link", "Automatic ranking", "No financial betting"],
@@ -243,6 +260,14 @@ const COPY = {
       "Lanza una porra online, comparte el enlace con tu grupo y sigue los pronósticos del Mundial en un ranking simple y pensado para móvil.",
     primaryCta: "Crear porra gratis",
     secondaryCta: "Ver cómo funciona",
+    createPanelTitle: "Crear una porra nueva",
+    createPanelBody: "Crea tu porra gratis, recibe el enlace de invitación y gestiona todo desde el panel.",
+    createPanelCta: "Crear ahora",
+    accessPanelTitle: "Ya tengo una porra",
+    accessPanelBody: "Usa tu email y PIN para abrir tus porras o continuar tus pronósticos.",
+    accessPanelCta: "Entrar",
+    startTitle: "Empieza aquí",
+    startBody: "Crea una porra nueva o entra en una existente usando tu email y PIN.",
     heroNote:
       "Pensado para grupos de WhatsApp, familia, oficina, universidad, bares y comunidades de fútbol.",
     chips: ["Gratis para crear", "Enlace de invitación", "Ranking automático", "Sin apuesta financiera"],
@@ -440,7 +465,43 @@ export function WorldCupPoolLandingPage() {
             </div>
           </div>
 
-          <div id="worldcup-pool-create" className="worldcup-pool-hero-form-card">
+          <div className="worldcup-pool-hero-choice-card">
+            <div className="worldcup-pool-hero-choice-head">
+              <span>{copy.eyebrow}</span>
+              <strong>2026</strong>
+            </div>
+
+            <div className="worldcup-pool-hero-choice-actions">
+              <a className="worldcup-pool-hero-choice-option" href="#worldcup-pool-create">
+                <strong>{copy.createPanelTitle}</strong>
+                <span>{copy.createPanelBody}</span>
+                <em>{copy.createPanelCta}</em>
+              </a>
+
+              <a className="worldcup-pool-hero-choice-option" href="#worldcup-pool-access">
+                <strong>{copy.accessPanelTitle}</strong>
+                <span>{copy.accessPanelBody}</span>
+                <em>{copy.accessPanelCta}</em>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="worldcup-pool-section worldcup-pool-start-section">
+        <div className="landing-section-head compact">
+          <div>
+            <h2 className="landing-section-title">{copy.startTitle}</h2>
+            <p className="landing-section-body">{copy.startBody}</p>
+          </div>
+        </div>
+
+        <div className="worldcup-pool-start-grid">
+          <div id="worldcup-pool-access" className="worldcup-pool-start-card">
+            <WorldCupPoolAccessLoginForm lang={currentLang} />
+          </div>
+
+          <div id="worldcup-pool-create" className="worldcup-pool-start-card">
             <WorldCupPoolCreateForm
               lang={currentLang}
               canCreate={Boolean(status?.public_create_enabled)}
