@@ -301,6 +301,27 @@ function fmtPctNullable(x: number | null | undefined) {
   return `${(x * 100).toFixed(1)}%`;
 }
 
+function getEventModelConfidenceOverall(event: ProductOddsEvent | null | undefined) {
+  const direct = event?.model_confidence_overall;
+  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+
+  const fromSnapshot = event?.snapshot_summary?.confidence?.overall;
+  if (typeof fromSnapshot === "number" && Number.isFinite(fromSnapshot)) return fromSnapshot;
+
+  const fromGuardrails = event?.snapshot_summary?.guardrails?.confidence_overall;
+  if (typeof fromGuardrails === "number" && Number.isFinite(fromGuardrails)) return fromGuardrails;
+
+  return null;
+}
+
+function getModelConfidenceMiniTitle(lang: Lang) {
+  return lang === "en"
+    ? "Model confidence"
+    : lang === "es"
+    ? "Confianza del modelo"
+    : "Confiança do modelo";
+}
+
 function getModelConfidenceLabel(lang: Lang, level?: string | null) {
   const normalized = String(level || "").toLowerCase();
 
@@ -389,15 +410,23 @@ function getModelConfidenceNotes(
     coverage.match_coverage_tier ||
     null;
 
-  if (coverageTier) {
-    notes.push(
-      lang === "en"
-        ? `Coverage: ${coverageTier}`
-        : lang === "es"
-        ? `Cobertura: ${coverageTier}`
-        : `Cobertura: ${coverageTier}`
-    );
-  }
+  /*
+   * Temporariamente oculto do card público de confiança.
+   *
+   * A cobertura técnica do modelo pode ser útil futuramente para debug,
+   * auditoria ou uma visão avançada, mas por enquanto gera redundância
+   * com a porcentagem e o nível de confiança exibidos ao usuário.
+   *
+   * if (coverageTier) {
+   *   notes.push(
+   *     lang === "en"
+   *       ? `Coverage: ${coverageTier}`
+   *       : lang === "es"
+   *       ? `Cobertura: ${coverageTier}`
+   *       : `Cobertura: ${coverageTier}`
+   *   );
+   * }
+   */
 
   if (blockedReasons.includes("low_model_confidence")) {
     notes.push(
@@ -1361,10 +1390,10 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
             value: "CONFIDENCE",
             label:
               lang === "en"
-                ? "Highest confidence"
+                ? "Highest model confidence"
                 : lang === "es"
-                ? "Mayor confianza"
-                : "Maior confiança",
+                ? "Mayor confianza del modelo"
+                : "Maior confiança do modelo",
           },
           {
             value: "EDGE",
@@ -2085,7 +2114,14 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
         (a, b) => new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime()
       );
     } else if (effectiveSortBy === "CONFIDENCE") {
-      list.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+      list.sort((a, b) => {
+        const confidenceA = getEventModelConfidenceOverall(a) ?? -Infinity;
+        const confidenceB = getEventModelConfidenceOverall(b) ?? -Infinity;
+
+        if (confidenceA !== confidenceB) return confidenceB - confidenceA;
+
+        return new Date(a.commence_time_utc ?? "").getTime() - new Date(b.commence_time_utc ?? "").getTime();
+      });
     } else {
       list.sort((a, b) => {
         const edgeA =
@@ -2608,17 +2644,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                                   <div key={note}>{note}</div>
                                 ))}
                               </div>
-                            ) : (
-                              <div className="pi-model-confidence-notes">
-                                <div>
-                                  {lang === "en"
-                                    ? "Model confidence not available for this snapshot."
-                                    : lang === "es"
-                                    ? "La confianza del modelo no está disponible para este snapshot."
-                                    : "A confiança do modelo não está disponível para este snapshot."}
-                                </div>
-                              </div>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <LockedPanel
@@ -3557,6 +3583,7 @@ return (
             const hasOpportunityFlag = eventHasOpportunity(e);
             const isProbableOnly = e.match_status === "PROBABLE";
             const isRevealed = store.isRevealed(eventKey);
+            const eventModelConfidenceOverall = getEventModelConfidenceOverall(e);
 
             return (
               <div
@@ -3629,6 +3656,18 @@ return (
                           <span className="pi-subsep">•</span>
                           <span className="pi-odds-mini">
                             H {fmtOdds(e.odds_best.H)} / D {fmtOdds(e.odds_best.D)} / A {fmtOdds(e.odds_best.A)}
+                          </span>
+                        </>
+                      ) : null}
+
+                      {eventModelConfidenceOverall !== null ? (
+                        <>
+                          <span className="pi-subsep">•</span>
+                          <span
+                            className="pi-odds-mini"
+                            title={getModelConfidenceMiniTitle(lang)}
+                          >
+                            Conf. {fmtPctNullable(eventModelConfidenceOverall)}
                           </span>
                         </>
                       ) : null}

@@ -1,0 +1,64 @@
+{
+  "ok": true,
+  "connected_to_snapshot": false,
+  "calls_external_api": false,
+  "mutates_database": false,
+  "purpose": "materialize_missing_team_season_stats_from_core_fixtures",
+  "apply": false,
+  "league_count": 1,
+  "planned_rows": 60,
+  "inserted_rows": 0,
+  "aggregate": {
+    "blocked_by_schema": 1
+  },
+  "results": [
+    {
+      "league_id": 71,
+      "profile_key": "model_v1_hist5_decay",
+      "apply": false,
+      "status": "blocked_by_schema",
+      "candidate_seasons": [
+        2024,
+        2023,
+        2022
+      ],
+      "planned_rows": 60,
+      "insert_columns": [
+        "league_id",
+        "season",
+        "team_id",
+        "played",
+        "wins",
+        "draws",
+        "losses",
+        "goals_for",
+        "goals_against",
+        "points",
+        "home_played",
+        "home_wins",
+        "home_draws",
+        "home_losses",
+        "home_goals_for",
+        "home_goals_against",
+        "home_points",
+        "away_played",
+        "away_wins",
+        "away_draws",
+        "away_losses",
+        "away_goals_for",
+        "away_goals_against",
+        "away_points",
+        "computed_at"
+      ],
+      "unsupported_not_null_columns": [
+        "goal_diff",
+        "points_per_game"
+      ],
+      "preview_summary": {
+        "match": 2,
+        "missing_stats_can_insert": 3
+      },
+      "message": "core.team_season_stats has NOT NULL columns without defaults that are not supported by this materializer."
+    }
+  ]
+}

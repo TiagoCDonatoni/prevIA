@@ -81,6 +81,8 @@ class OddsEventRow(BaseModel):
     probs_1x2: Optional[Dict[str, Optional[float]]] = None  # H/D/A
     has_model: Optional[bool] = None
     has_opportunity: Optional[bool] = None
+    model_confidence_overall: Optional[float] = None
+    model_confidence_level: Optional[str] = None
     edge_summary: Optional[EdgeSummary] = None
     snapshot_summary: Optional[Dict[str, Any]] = None
     resolved_home_team_id: Optional[int] = None

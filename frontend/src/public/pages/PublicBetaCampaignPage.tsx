@@ -10,6 +10,7 @@ import {
   type AccessCampaignRedeemResponse,
 } from "../../product/api/access";
 import { clearAuthMeCache, fetchAuthMe, type AuthMeResponse } from "../../product/api/auth";
+import { clearPartnerReferralCookie, writePartnerReferralCookie } from "../../partner/partnerReferralCookie";
 import { coercePublicLang } from "../lib/publicLang";
 
 const COPY = {
@@ -274,6 +275,16 @@ export function PublicBetaCampaignPage() {
   const hasActiveCampaignGrant =
     Boolean(activeGrant?.campaign_slug) && activeGrant?.campaign_slug === slug;
 
+  React.useEffect(() => {
+    if (!campaign) return;
+    if (String(campaign.kind || "").toLowerCase() !== "partner") return;
+
+    writePartnerReferralCookie({
+      campaignSlug: campaign.slug || slug,
+      lang,
+    });
+  }, [campaign, lang, slug]);
+
   const currentPath = `${location.pathname}${location.search}`;
   const redeemFlag = searchParams.get("redeem");
   const nextAfterAuth = `${location.pathname}?redeem=1`;
@@ -332,6 +343,7 @@ export function PublicBetaCampaignPage() {
     try {
       const result = await postAccessCampaignRedeem(slug);
       setRedeemResult(result);
+      clearPartnerReferralCookie();
 
       clearAuthMeCache();
       const refreshed = await fetchAuthMe();

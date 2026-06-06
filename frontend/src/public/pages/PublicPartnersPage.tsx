@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { coercePublicLang } from "../lib/publicLang";
@@ -62,47 +62,158 @@ const INITIAL_FORM: FormState = {
   website: "",
 };
 
+const PARTNER_CALCULATOR_DEFAULT_SUBSCRIBERS = 20;
+const PARTNER_CALCULATOR_COMMISSION_RATE = 0.5;
+const PARTNER_CALCULATOR_MONTHS = 3;
+
+const PARTNER_PLAN_MIX = [
+  {
+    key: "basic",
+    weight: 0.5,
+    monthlyPrice: 14.9,
+  },
+  {
+    key: "light",
+    weight: 0.35,
+    monthlyPrice: 39.9,
+  },
+  {
+    key: "pro",
+    weight: 0.15,
+    monthlyPrice: 69.9,
+  },
+] as const;
+
+function clampSubscriberEstimate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(5000, Math.floor(value)));
+}
+
+function formatBrlCurrency(value: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function onlyDigits(value: string): string {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatBrazilianWhatsapp(value: string): string {
+  const digits = onlyDigits(value).slice(0, 13);
+
+  if (!digits) return "";
+
+  const hasBrazilCountryCode = digits.startsWith("55") && digits.length > 11;
+  const nationalDigits = hasBrazilCountryCode ? digits.slice(2, 13) : digits.slice(0, 11);
+
+  const ddd = nationalDigits.slice(0, 2);
+  const firstPart =
+    nationalDigits.length > 10 ? nationalDigits.slice(2, 7) : nationalDigits.slice(2, 6);
+  const secondPart =
+    nationalDigits.length > 10 ? nationalDigits.slice(7, 11) : nationalDigits.slice(6, 10);
+
+  let formatted = hasBrazilCountryCode ? "+55" : "";
+
+  if (ddd) {
+    formatted += `${formatted ? " " : ""}(${ddd}`;
+  }
+
+  if (ddd.length === 2) {
+    formatted += ")";
+  }
+
+  if (firstPart) {
+    formatted += ` ${firstPart}`;
+  }
+
+  if (secondPart) {
+    formatted += `-${secondPart}`;
+  }
+
+  return formatted;
+}
+
+function formatWhatsappInput(value: string): string {
+  return formatBrazilianWhatsapp(value);
+}
+
+const PROMOTION_PLAN_MIN_LENGTH = 10;
+
 const COPY = {
   pt: {
-    seoTitle: "Programa de Parceiros prevIA | Parcerias responsáveis",
+    seoTitle: "Ganhe dinheiro indicando o prevIA | Programa de Parceiros",
     seoDescription:
-      "Candidate-se ao Programa de Parceiros prevIA e divulgue análise esportiva responsável para sua audiência.",
+      "Se você cria conteúdo sobre futebol, odds ou apostas esportivas, candidate-se ao Programa de Parceiros prevIA e receba comissão por assinaturas confirmadas.",
     eyebrow: "Programa de Parceiros",
-    title: "Divulgue análise esportiva responsável para sua audiência.",
+    title: "Ganhe dinheiro indicando o prevIA.",
     body:
-      "Estamos selecionando criadores, comunidades e perfis de futebol para divulgar o prevIA com responsabilidade. O prevIA não vende palpites, sinais, certeza de resultado ou promessa de lucro — trabalha com dados, contexto e probabilidades.",
-    cta: "Enviar candidatura",
-    sideKicker: "Parceiros fundadores",
-    sideTitle: "Links oficiais, acompanhamento e comissão sobre assinaturas elegíveis.",
+      "Se você cria conteúdo sobre futebol, odds, estatísticas ou apostas esportivas, transforme sua audiência em renda extra indicando uma ferramenta séria de análise. Você divulga seu link oficial e pode receber comissão quando seus seguidores virarem assinantes confirmados.",
+    cta: "Quero ser parceiro",
+    heroBullets: [
+      "Comissão por assinaturas confirmadas",
+      "Link oficial para divulgar nas redes",
+      "Painel para acompanhar suas indicações",
+    ],
+    sideKicker: "Renda extra com sua audiência",
+    sideTitle: "Indique o prevIA nas suas redes e receba comissão por assinantes elegíveis.",
     sideBody:
-      "Após aprovação e contrato, criamos suas campanhas oficiais e liberamos o painel do parceiro para acompanhar resultados.",
+      "Após aprovação e contrato, você recebe campanhas oficiais, link rastreável e acesso ao painel do parceiro. Sem promessa de aposta certa: o foco é análise, probabilidade e uso responsável.",
     stepsEyebrow: "Como funciona",
-    stepsTitle: "Uma jornada simples, com aprovação manual.",
+    stepsTitle: "Indique, acompanhe e receba comissão.",
     steps: [
       {
-        title: "Você envia sua candidatura",
-        body: "Conte quem você é, quais canais usa e como pretende apresentar o prevIA.",
+        title: "Você se candidata",
+        body: "Conte sobre seu canal, sua audiência e como pretende divulgar o prevIA nas redes ou comunidades.",
       },
       {
-        title: "Avaliamos o alinhamento",
-        body: "Verificamos perfil, audiência, linguagem e aderência à comunicação responsável.",
+        title: "Criamos seu link oficial",
+        body: "Após aprovação manual, contrato e campanha oficial, você recebe um link rastreável para divulgar.",
       },
       {
-        title: "Criamos seus links oficiais",
-        body: "Com aprovação e contrato, você recebe campanhas oficiais e acesso ao painel do parceiro.",
+        title: "Você ganha por assinaturas",
+        body: "Quando alguém assina pelo seu link, a indicação é registrada e a comissão é apurada sobre pagamentos confirmados.",
       },
     ],
     formEyebrow: "Candidatura",
-    formTitle: "Envie seus dados para avaliação",
+    formTitle: "Candidate-se para ganhar comissão indicando o prevIA",
     formHelper:
-      "A candidatura não cria conta, parceiro, campanha ou contrato automaticamente. A equipe prevIA avalia e entra em contato se houver alinhamento.",
-    offerTitle: "O que o parceiro recebe",
+      "A candidatura não cria parceria automaticamente. A equipe prevIA avalia o perfil, a audiência e o alinhamento com divulgação responsável antes de liberar link oficial, contrato e painel do parceiro.",
+    offerTitle: "Por que virar parceiro",
     offers: [
-      "Link ou campanha oficial",
-      "Acompanhamento de cadastros e assinantes",
-      "Comissão sobre assinaturas elegíveis",
-      "Painel do parceiro após aprovação",
+      "Possibilidade de renda extra com sua audiência esportiva",
+      "Comissão por assinaturas elegíveis e pagamentos confirmados",
+      "Link ou campanha oficial para divulgar nas redes",
+      "Painel do parceiro para acompanhar indicações após aprovação",
     ],
+    calculator: {
+      eyebrow: "Simulação de ganhos",
+      title: "Quanto você poderia ganhar indicando o prevIA?",
+      body:
+        "Preencha uma estimativa de assinantes que você acredita conseguir trazer. A simulação usa uma distribuição básica entre planos e considera comissão sobre pagamentos confirmados.",
+      inputLabel: "Assinantes indicados estimados",
+      inputSuffix: "assinantes",
+      generatedRevenue: "Receita mensal estimada gerada",
+      monthlyCommission: "Comissão estimada por mês",
+      threeMonthCommission: "Estimativa nos 3 primeiros meses",
+      planMixTitle: "Distribuição usada na simulação",
+      planMixBody:
+        "Mix ilustrativo: Basic 50%, Light 35% e Pro 15%, usando preços atuais em R$.",
+      commissionNote: "Comissão simulada: 50% sobre pagamentos confirmados.",
+      disclaimer:
+        "Simulação meramente ilustrativa. Não representa promessa de ganho, renda garantida ou aprovação automática. Valores reais dependem do contrato vigente, assinaturas elegíveis, pagamentos confirmados, cancelamentos, reembolsos e período de validação.",
+      plans: {
+        basic: "Basic",
+        light: "Light",
+        pro: "Pro",
+      },
+    },
     complianceTitle: "Comunicação responsável",
     allowedTitle: "Pode comunicar",
     allowed: [
@@ -192,50 +303,81 @@ const COPY = {
     success:
       "Candidatura recebida com sucesso. Vamos avaliar os dados e entraremos em contato se houver alinhamento.",
     error: "Não foi possível enviar a candidatura agora. Tente novamente.",
+    validation: {
+      promotionPlanMinLength:
+        "Descreva como pretende divulgar o prevIA com pelo menos 10 caracteres.",
+    },
     selectPlaceholder: "Selecione",
     privacy:
       "Usaremos esses dados apenas para avaliar a candidatura, entrar em contato e organizar o Programa de Parceiros prevIA.",
   },
   en: {
-    seoTitle: "prevIA Partner Program | Responsible partnerships",
+    seoTitle: "Earn money by recommending prevIA | Partner Program",
     seoDescription:
-      "Apply to the prevIA Partner Program and promote responsible sports analysis to your audience.",
+      "If you create content about football, odds, or sports betting, apply to the prevIA Partner Program and earn commission on confirmed subscriptions.",
     eyebrow: "Partner Program",
-    title: "Promote responsible sports analysis to your audience.",
+    title: "Earn money by recommending prevIA.",
     body:
-      "We are selecting creators and football communities to promote prevIA responsibly. prevIA does not sell picks, signals, certainty, or profit promises — it works with data, context, and probabilities.",
-    cta: "Apply now",
-    sideKicker: "Founding partners",
-    sideTitle: "Official links, tracking, and commission on eligible subscriptions.",
+      "If you create content about football, odds, stats, or sports betting, turn your audience into an extra revenue stream by recommending a serious analysis tool. Share your official link and you may earn commission when your followers become confirmed subscribers.",
+    cta: "I want to partner",
+    heroBullets: [
+      "Commission on confirmed subscriptions",
+      "Official link for your channels",
+      "Partner Console to track referrals",
+    ],
+    sideKicker: "Extra income from your audience",
+    sideTitle: "Recommend prevIA on your channels and earn commission from eligible subscribers.",
     sideBody:
-      "After approval and contract, we create your official campaigns and enable the Partner Console.",
+      "After approval and contract, you receive official campaigns, a trackable link, and Partner Console access. No sure-bet promises: the focus is analysis, probability, and responsible use.",
     stepsEyebrow: "How it works",
-    stepsTitle: "A simple journey, with manual approval.",
+    stepsTitle: "Recommend, track, and earn commission.",
     steps: [
       {
-        title: "You submit your application",
-        body: "Tell us who you are, your channels, and how you plan to present prevIA.",
+        title: "You apply",
+        body: "Tell us about your channel, your audience, and how you plan to promote prevIA across your networks or communities.",
       },
       {
-        title: "We review the fit",
-        body: "We evaluate profile, audience, language, and responsible communication alignment.",
+        title: "We create your official link",
+        body: "After manual approval, contract, and official campaign setup, you receive a trackable link to share.",
       },
       {
-        title: "We create your official links",
-        body: "After approval and contract, you receive official campaigns and Partner Console access.",
+        title: "You earn from subscriptions",
+        body: "When someone subscribes through your link, the referral is registered and commission is calculated on confirmed payments.",
       },
     ],
     formEyebrow: "Application",
-    formTitle: "Send your details for review",
+    formTitle: "Apply to earn commission by recommending prevIA",
     formHelper:
-      "This application does not automatically create an account, partner, campaign, or contract. The prevIA team reviews it and contacts you if there is a fit.",
-    offerTitle: "What partners get",
+      "This application does not automatically create a partnership. The prevIA team reviews your profile, audience, and responsible promotion fit before enabling an official link, contract, and Partner Console.",
+    offerTitle: "Why become a partner",
     offers: [
-      "Official link or campaign",
-      "Signup and subscriber tracking",
-      "Commission on eligible subscriptions",
-      "Partner Console after approval",
+      "Potential extra income from your sports audience",
+      "Commission on eligible subscriptions and confirmed payments",
+      "Official link or campaign to share across your channels",
+      "Partner Console to track referrals after approval",
     ],
+    calculator: {
+      eyebrow: "Earnings simulation",
+      title: "How much could you earn by recommending prevIA?",
+      body:
+        "Enter an estimate of subscribers you believe you can bring. The simulation uses a basic plan distribution and considers commission on confirmed payments.",
+      inputLabel: "Estimated referred subscribers",
+      inputSuffix: "subscribers",
+      generatedRevenue: "Estimated monthly revenue generated",
+      monthlyCommission: "Estimated monthly commission",
+      threeMonthCommission: "Estimated first 3 months",
+      planMixTitle: "Plan distribution used",
+      planMixBody:
+        "Illustrative mix: Basic 50%, Light 35%, and Pro 15%, using current BRL prices.",
+      commissionNote: "Simulated commission: 50% on confirmed payments.",
+      disclaimer:
+        "Illustrative simulation only. It is not a promise of earnings, guaranteed income, or automatic approval. Actual amounts depend on the active contract, eligible subscriptions, confirmed payments, cancellations, refunds, and validation period.",
+      plans: {
+        basic: "Basic",
+        light: "Light",
+        pro: "Pro",
+      },
+    },
     complianceTitle: "Responsible communication",
     allowedTitle: "Allowed messaging",
     allowed: [
@@ -324,51 +466,82 @@ const COPY = {
     sending: "Submitting...",
     success:
       "Application received successfully. We will review it and contact you if there is a fit.",
-    error: "Could not submit the application right now. Please try again.",
+    error: "We could not submit your application right now. Please try again.",
+    validation: {
+      promotionPlanMinLength:
+        "Please describe how you plan to promote prevIA using at least 10 characters.",
+    },
     selectPlaceholder: "Select",
     privacy:
       "We will use this information only to review your application, contact you, and organize the prevIA Partner Program.",
   },
   es: {
-    seoTitle: "Programa de Socios prevIA | Alianzas responsables",
+    seoTitle: "Gana dinero recomendando prevIA | Programa de Socios",
     seoDescription:
-      "Postúlate al Programa de Socios prevIA y divulga análisis deportivo responsable para tu audiencia.",
+      "Si creas contenido sobre fútbol, odds o apuestas deportivas, postúlate al Programa de Socios prevIA y recibe comisión por suscripciones confirmadas.",
     eyebrow: "Programa de Socios",
-    title: "Divulga análisis deportivo responsable para tu audiencia.",
+    title: "Gana dinero recomendando prevIA.",
     body:
-      "Estamos seleccionando creadores y comunidades de fútbol para divulgar prevIA con responsabilidad. prevIA no vende picks, señales, certeza de resultado ni promesa de lucro: trabaja con datos, contexto y probabilidades.",
-    cta: "Enviar candidatura",
-    sideKicker: "Socios fundadores",
-    sideTitle: "Links oficiales, seguimiento y comisión sobre suscripciones elegibles.",
+      "Si creas contenido sobre fútbol, odds, estadísticas o apuestas deportivas, transforma tu audiencia en una fuente de ingresos extra recomendando una herramienta seria de análisis. Divulga tu link oficial y puedes recibir comisión cuando tus seguidores se conviertan en suscriptores confirmados.",
+    cta: "Quiero ser socio",
+    heroBullets: [
+      "Comisión por suscripciones confirmadas",
+      "Link oficial para divulgar en tus redes",
+      "Panel para seguir tus indicaciones",
+    ],
+    sideKicker: "Ingresos extra con tu audiencia",
+    sideTitle: "Recomienda prevIA en tus redes y recibe comisión por suscriptores elegibles.",
     sideBody:
-      "Después de la aprobación y el contrato, creamos tus campañas oficiales y habilitamos el panel del socio.",
+      "Después de la aprobación y el contrato, recibes campañas oficiales, link rastreable y acceso al panel del socio. Sin promesas de apuesta segura: el foco es análisis, probabilidad y uso responsable.",
     stepsEyebrow: "Cómo funciona",
-    stepsTitle: "Una jornada simple, con aprobación manual.",
+    stepsTitle: "Recomienda, sigue y recibe comisión.",
     steps: [
       {
-        title: "Envías tu candidatura",
-        body: "Cuéntanos quién eres, qué canales usas y cómo planeas presentar prevIA.",
+        title: "Te postulas",
+        body: "Cuéntanos sobre tu canal, audiencia y cómo planeas divulgar prevIA en redes o comunidades.",
       },
       {
-        title: "Evaluamos el alineamiento",
-        body: "Revisamos perfil, audiencia, lenguaje y comunicación responsable.",
+        title: "Creamos tu link oficial",
+        body: "Después de aprobación manual, contrato y campaña oficial, recibes un link rastreable para divulgar.",
       },
       {
-        title: "Creamos tus links oficiales",
-        body: "Con aprobación y contrato, recibes campañas oficiales y acceso al panel del socio.",
+        title: "Ganas por suscripciones",
+        body: "Cuando alguien se suscribe por tu link, la indicación queda registrada y la comisión se calcula sobre pagos confirmados.",
       },
     ],
     formEyebrow: "Candidatura",
-    formTitle: "Envía tus datos para evaluación",
+    formTitle: "Postúlate para ganar comisión recomendando prevIA",
     formHelper:
-      "La candidatura no crea cuenta, socio, campaña o contrato automáticamente. El equipo de prevIA evalúa y contacta si hay alineamiento.",
-    offerTitle: "Qué recibe el socio",
+      "La candidatura no crea una alianza automáticamente. El equipo de prevIA evalúa perfil, audiencia y alineación con divulgación responsable antes de liberar link oficial, contrato y panel del socio.",
+    offerTitle: "Por qué ser socio",
     offers: [
-      "Link o campaña oficial",
-      "Seguimiento de registros y suscriptores",
-      "Comisión sobre suscripciones elegibles",
-      "Panel del socio después de la aprobación",
+      "Posibilidad de ingresos extra con tu audiencia deportiva",
+      "Comisión por suscripciones elegibles y pagos confirmados",
+      "Link o campaña oficial para divulgar en tus redes",
+      "Panel del socio para seguir indicaciones después de la aprobación",
     ],
+    calculator: {
+      eyebrow: "Simulación de ingresos",
+      title: "¿Cuánto podrías ganar recomendando prevIA?",
+      body:
+        "Ingresa una estimación de suscriptores que crees que puedes traer. La simulación usa una distribución básica entre planes y considera comisión sobre pagos confirmados.",
+      inputLabel: "Suscriptores indicados estimados",
+      inputSuffix: "suscriptores",
+      generatedRevenue: "Ingresos mensuales estimados generados",
+      monthlyCommission: "Comisión mensual estimada",
+      threeMonthCommission: "Estimación en los 3 primeros meses",
+      planMixTitle: "Distribución usada en la simulación",
+      planMixBody:
+        "Mix ilustrativo: Basic 50%, Light 35% y Pro 15%, usando precios actuales en R$.",
+      commissionNote: "Comisión simulada: 50% sobre pagos confirmados.",
+      disclaimer:
+        "Simulación meramente ilustrativa. No representa promesa de ganancia, ingreso garantizado o aprobación automática. Los valores reales dependen del contrato vigente, suscripciones elegibles, pagos confirmados, cancelaciones, reembolsos y período de validación.",
+      plans: {
+        basic: "Basic",
+        light: "Light",
+        pro: "Pro",
+      },
+    },
     complianceTitle: "Comunicación responsable",
     allowedTitle: "Puede comunicar",
     allowed: [
@@ -457,7 +630,11 @@ const COPY = {
     sending: "Enviando...",
     success:
       "Candidatura recibida con éxito. Vamos a evaluar los datos y contactaremos si hay alineamiento.",
-    error: "No fue posible enviar la candidatura ahora. Inténtalo nuevamente.",
+    error: "No fue posible enviar tu candidatura ahora. Inténtalo nuevamente.",
+    validation: {
+      promotionPlanMinLength:
+        "Describe cómo planeas divulgar prevIA con al menos 10 caracteres.",
+    },
     selectPlaceholder: "Selecciona",
     privacy:
       "Usaremos estos datos solo para evaluar la candidatura, contactarte y organizar el Programa de Socios prevIA.",
@@ -494,6 +671,34 @@ export function PublicPartnersPage() {
   const [error, setError] = useState<string | null>(null);
   const [termsOpen, setTermsOpen] = useState(false);
 
+  const [subscriberEstimate, setSubscriberEstimate] = useState(
+    PARTNER_CALCULATOR_DEFAULT_SUBSCRIBERS
+  );
+
+  const calculator = useMemo(() => {
+    const subscribers = clampSubscriberEstimate(subscriberEstimate);
+
+    const estimatedMonthlyRevenue = PARTNER_PLAN_MIX.reduce((total, plan) => {
+      return total + subscribers * plan.weight * plan.monthlyPrice;
+    }, 0);
+
+    const estimatedMonthlyCommission =
+      estimatedMonthlyRevenue * PARTNER_CALCULATOR_COMMISSION_RATE;
+
+    return {
+      subscribers,
+      estimatedMonthlyRevenue,
+      estimatedMonthlyCommission,
+      estimatedThreeMonthCommission:
+        estimatedMonthlyCommission * PARTNER_CALCULATOR_MONTHS,
+      planRows: PARTNER_PLAN_MIX.map((plan) => ({
+        ...plan,
+        estimatedSubscribers: subscribers * plan.weight,
+        estimatedMonthlyRevenue: subscribers * plan.weight * plan.monthlyPrice,
+      })),
+    };
+  }, [subscriberEstimate]);
+
   const acceptedTerms =
     form.accepted_responsible_disclosure &&
     form.accepted_no_profit_promises &&
@@ -510,6 +715,10 @@ export function PublicPartnersPage() {
     }));
   }
 
+  const promotionPlanLength = form.promotion_plan.trim().length;
+  const promotionPlanTooShort =
+    promotionPlanLength > 0 && promotionPlanLength < PROMOTION_PLAN_MIN_LENGTH;
+
   const disabled =
     busy ||
     !form.full_name.trim() ||
@@ -520,7 +729,7 @@ export function PublicPartnersPage() {
     !form.main_social_url.trim() ||
     !form.audience_size_range ||
     !form.content_type ||
-    !form.promotion_plan.trim() ||
+    promotionPlanLength < PROMOTION_PLAN_MIN_LENGTH ||
     !acceptedTerms;
 
   usePublicSeo({
@@ -541,6 +750,13 @@ export function PublicPartnersPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (form.promotion_plan.trim().length < PROMOTION_PLAN_MIN_LENGTH) {
+      setSuccess(null);
+      setError(copy.validation.promotionPlanMinLength);
+      return;
+    }
+
     if (disabled) return;
 
     setBusy(true);
@@ -574,7 +790,14 @@ export function PublicPartnersPage() {
       setSuccess(copy.success);
       setForm(INITIAL_FORM);
     } catch (err) {
-      setError(copy.error);
+      const message = err instanceof Error ? err.message : "";
+
+      if (message.includes("promotion_plan") && message.includes("string_too_short")) {
+        setError(copy.validation.promotionPlanMinLength);
+      } else {
+        setError(copy.error);
+      }
+
       console.error(err);
     } finally {
       setBusy(false);
@@ -589,6 +812,12 @@ export function PublicPartnersPage() {
             <div className="public-eyebrow">{copy.eyebrow}</div>
             <h1 className="public-title">{copy.title}</h1>
             <p className="public-body">{copy.body}</p>
+
+            <ul className="public-partners-hero-bullets">
+              {copy.heroBullets.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
 
             <div className="public-actions public-partners-hero-actions">
               <a href="#partner-application-form" className="public-btn public-btn-primary">
@@ -657,6 +886,78 @@ export function PublicPartnersPage() {
         </article>
       </section>
 
+      <section className="landing-section public-partners-calculator-section">
+        <div className="public-partners-calculator-card">
+          <div className="public-partners-calculator-copy">
+            <div className="public-eyebrow">{copy.calculator.eyebrow}</div>
+            <h2 className="landing-section-title">{copy.calculator.title}</h2>
+            <p className="landing-section-body">{copy.calculator.body}</p>
+
+            <label className="public-partners-calculator-input">
+              <span>{copy.calculator.inputLabel}</span>
+              <div>
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  step={1}
+                  value={calculator.subscribers}
+                  onChange={(e) =>
+                    setSubscriberEstimate(clampSubscriberEstimate(Number(e.target.value)))
+                  }
+                />
+                <small>{copy.calculator.inputSuffix}</small>
+              </div>
+            </label>
+
+            <p className="public-partners-calculator-note">
+              {copy.calculator.commissionNote}
+            </p>
+          </div>
+
+          <div className="public-partners-calculator-results">
+            <div className="public-partners-calculator-metric muted">
+              <span>{copy.calculator.generatedRevenue}</span>
+              <strong>{formatBrlCurrency(calculator.estimatedMonthlyRevenue)}</strong>
+            </div>
+
+            <div className="public-partners-calculator-metric">
+              <span>{copy.calculator.monthlyCommission}</span>
+              <strong>{formatBrlCurrency(calculator.estimatedMonthlyCommission)}</strong>
+            </div>
+
+            <div className="public-partners-calculator-metric highlight">
+              <span>{copy.calculator.threeMonthCommission}</span>
+              <strong>{formatBrlCurrency(calculator.estimatedThreeMonthCommission)}</strong>
+            </div>
+
+            <div className="public-partners-plan-mix">
+              <h3>{copy.calculator.planMixTitle}</h3>
+              <p>{copy.calculator.planMixBody}</p>
+
+              <div className="public-partners-plan-mix-list">
+                {calculator.planRows.map((plan) => (
+                  <div key={plan.key} className="public-partners-plan-mix-row">
+                    <div>
+                      <strong>{copy.calculator.plans[plan.key]}</strong>
+                      <span>
+                        {formatPercent(plan.weight)} ·{" "}
+                        {formatBrlCurrency(plan.monthlyPrice)}/mês
+                      </span>
+                    </div>
+                    <b>{formatBrlCurrency(plan.estimatedMonthlyRevenue)}</b>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="public-partners-calculator-disclaimer">
+              {copy.calculator.disclaimer}
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section id="partner-application-form" className="landing-section public-partners-form-section">
         <div className="landing-section-head compact">
           <div className="public-eyebrow">{copy.formEyebrow}</div>
@@ -707,9 +1008,13 @@ export function PublicPartnersPage() {
             <label className="beta-field">
               <span>{copy.fields.whatsapp}</span>
               <input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={form.whatsapp}
-                onChange={(e) => updateField("whatsapp", e.target.value)}
+                onChange={(e) => updateField("whatsapp", formatWhatsappInput(e.target.value))}
                 placeholder={copy.placeholders.whatsapp}
+                maxLength={20}
               />
             </label>
 
@@ -777,7 +1082,19 @@ export function PublicPartnersPage() {
               onChange={(e) => updateField("promotion_plan", e.target.value)}
               placeholder={copy.placeholders.promotion_plan}
               rows={5}
+              minLength={PROMOTION_PLAN_MIN_LENGTH}
+              required
+              aria-invalid={promotionPlanTooShort}
             />
+            {promotionPlanTooShort ? (
+              <small className="beta-field-hint beta-field-hint-error">
+                {copy.validation.promotionPlanMinLength}
+              </small>
+            ) : (
+              <small className="beta-field-hint">
+                {promotionPlanLength}/{PROMOTION_PLAN_MIN_LENGTH} caracteres mínimos.
+              </small>
+            )}
           </label>
 
           <div className="beta-form-grid public-partners-optional-grid">

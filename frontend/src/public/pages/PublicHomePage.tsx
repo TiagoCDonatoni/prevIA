@@ -58,6 +58,19 @@ const HERO_FEATURE_ICONS: LandingHeroIconName[] = [
   "value",
 ];
 
+const LANDING_AUDIENCE_CARD_ICONS: LandingHeroIconName[] = [
+  "target",
+  "chart",
+  "value",
+];
+
+const LANDING_AUDIENCE_LOGIC_ICONS: LandingHeroIconName[] = [
+  "odds",
+  "probability",
+  "fairPrice",
+  "value",
+];
+
 function LandingHeroIcon({ name }: { name: LandingHeroIconName }) {
   if (name === "chart") {
     return (
@@ -344,6 +357,38 @@ function getUnifiedFreePlanFlowCopy(lang: LandingLang) {
       summary:
         "La prueba sin cuenta está disponible en la landing. Con una cuenta gratis, puedes seguir explorando dentro de los límites del plan Free.",
       card: "Prueba directo en la landing y continúa gratis con cuenta cuando quieras más continuidad.",
+    },
+  }[lang];
+}
+
+function getLandingAudienceLogicCopy(lang: LandingLang) {
+  return {
+    pt: {
+      panelPill: "Odds → Probabilidade → Valor",
+      logicTitle: "Como o prevIA organiza a leitura",
+      logicSteps: ["Odds", "Probabilidade", "Preço justo", "Valor"],
+      exampleTitle: "Exemplo de leitura",
+      homeLabel: "Time A",
+      awayLabel: "Time B",
+      fairPrice: "Preço justo 2.05",
+    },
+    en: {
+      panelPill: "Odds → Probability → Value",
+      logicTitle: "How prevIA organizes the reading",
+      logicSteps: ["Odds", "Probability", "Fair price", "Value"],
+      exampleTitle: "Reading example",
+      homeLabel: "Team A",
+      awayLabel: "Team B",
+      fairPrice: "Fair price 2.05",
+    },
+    es: {
+      panelPill: "Cuotas → Probabilidad → Valor",
+      logicTitle: "Cómo prevIA organiza la lectura",
+      logicSteps: ["Cuotas", "Probabilidad", "Precio justo", "Valor"],
+      exampleTitle: "Ejemplo de lectura",
+      homeLabel: "Equipo A",
+      awayLabel: "Equipo B",
+      fairPrice: "Precio justo 2.05",
     },
   }[lang];
 }
@@ -673,10 +718,14 @@ export function PublicHomePage() {
     [leagueCoverageItems, leagueCoverageCopy.groupLabels],
   );
 
-  const selectedPlanCard =
-    landingPlans.find((item) => normalizePlanId(item.planId) === selectedLandingPlan) ??
-    landingPlans.find((item) => normalizePlanId(item.planId) === "LIGHT") ??
-    landingPlans[0];
+  /*
+   * Card "Plano em foco" preservado para possível reativação futura.
+   *
+   * const selectedPlanCard =
+   *   landingPlans.find((item) => normalizePlanId(item.planId) === selectedLandingPlan) ??
+   *   landingPlans.find((item) => normalizePlanId(item.planId) === "LIGHT") ??
+   *   landingPlans[0];
+   */
 
   React.useEffect(() => {
     if (selectedLandingPlan === "FREE_ANON") {
@@ -684,16 +733,22 @@ export function PublicHomePage() {
     }
   }, [selectedLandingPlan]);
 
-  const selectedPlanPricing = getLandingPlanPricePresentation(
-    selectedLandingPlan,
-    displayCurrency,
-    billingCycle,
-    landingLang,
-    showPublicFreeAnon,
-  );
-  const selectedPlanMetaItems = buildLandingPlanMeta(selectedLandingPlan, landingLang);
+  /*
+   * Card "Plano em foco" preservado para possível reativação futura.
+   *
+   * const selectedPlanPricing = getLandingPlanPricePresentation(
+   *   selectedLandingPlan,
+   *   displayCurrency,
+   *   billingCycle,
+   *   landingLang,
+   *   showPublicFreeAnon,
+   * );
+   * const selectedPlanMetaItems = buildLandingPlanMeta(selectedLandingPlan, landingLang);
+   */
+   
   const heroVisualTitle = copy.home.preview.items[0]?.title ?? copy.home.hero.sideTitle;
   const previewItems = copy.home.preview.items.slice(0, 3);
+  const audienceLogicCopy = getLandingAudienceLogicCopy(landingLang);
 
   const SEO = {
     pt: {
@@ -839,31 +894,35 @@ export function PublicHomePage() {
         </div>
 
         <div className="landing-plan-summary-shell">
-          <div className="landing-plan-selected-summary">
-            <div className="landing-plan-selected-kicker">{copy.home.plans.selectedLabel}</div>
-            <div className="landing-plan-selected-title">{selectedPlanCard.title}</div>
+          {/*
+            Card "Plano em foco" preservado para possível reativação futura.
 
-            <div
-              className={`landing-plan-selected-price${
-                selectedPlanPricing.isFree ? " is-free" : ""
-              }`}
-            >
-              <div className="landing-plan-selected-price-amount">{selectedPlanPricing.amount}</div>
-              <div className="landing-plan-selected-price-note">{selectedPlanPricing.note}</div>
+            <div className="landing-plan-selected-summary">
+              <div className="landing-plan-selected-kicker">{copy.home.plans.selectedLabel}</div>
+              <div className="landing-plan-selected-title">{selectedPlanCard.title}</div>
+
+              <div
+                className={`landing-plan-selected-price${
+                  selectedPlanPricing.isFree ? " is-free" : ""
+                }`}
+              >
+                <div className="landing-plan-selected-price-amount">{selectedPlanPricing.amount}</div>
+                <div className="landing-plan-selected-price-note">{selectedPlanPricing.note}</div>
+              </div>
+
+              <div className="landing-plan-selected-body">{selectedPlanCard.body}</div>
+
+              <div className="landing-plan-selected-meta">
+                {selectedPlanMetaItems.map((meta) => (
+                  <span key={`selected-${meta}`} className="landing-plan-selected-meta-chip">
+                    {meta}
+                  </span>
+                ))}
+              </div>
+
+              <div className="landing-plan-free-bridge">{freeFlowCopy.summary}</div>
             </div>
-
-            <div className="landing-plan-selected-body">{selectedPlanCard.body}</div>
-
-            <div className="landing-plan-selected-meta">
-              {selectedPlanMetaItems.map((meta) => (
-                <span key={`selected-${meta}`} className="landing-plan-selected-meta-chip">
-                  {meta}
-                </span>
-              ))}
-            </div>
-
-            <div className="landing-plan-free-bridge">{freeFlowCopy.summary}</div>
-          </div>
+          */}
 
           <div className="landing-plan-controls-panel">
             <div className="landing-plan-controls">
@@ -1021,18 +1080,75 @@ export function PublicHomePage() {
 
         <div className="landing-audience-layout">
           <div className="landing-audience-panel landing-audience-panel-positive">
-            <div className="landing-audience-panel-head">
+            <div className="landing-audience-panel-head landing-audience-panel-head-row">
               <h3 className="landing-audience-panel-title">{copy.home.audience.forTitle}</h3>
+              <span className="landing-audience-panel-pill">{audienceLogicCopy.panelPill}</span>
             </div>
 
             <div className="landing-audience-grid">
-              {copy.home.audience.items.map((item) => (
+              {copy.home.audience.items.map((item, index) => (
                 <article key={item.title} className="landing-audience-card">
+                  <span className="landing-audience-card-icon" aria-hidden="true">
+                    <LandingHeroIcon name={LANDING_AUDIENCE_CARD_ICONS[index] ?? "target"} />
+                  </span>
                   <span className="landing-audience-badge">{item.badge}</span>
                   <h4 className="landing-audience-card-title">{item.title}</h4>
                   <p className="landing-audience-card-body">{item.body}</p>
                 </article>
               ))}
+            </div>
+
+            <div className="landing-audience-logic-card" aria-label={audienceLogicCopy.logicTitle}>
+              <div className="landing-audience-logic-main">
+                <div className="landing-audience-logic-title">{audienceLogicCopy.logicTitle}</div>
+
+                <div className="landing-audience-logic-flow">
+                  {audienceLogicCopy.logicSteps.map((step, index) => (
+                    <React.Fragment key={step}>
+                      <span className="landing-audience-logic-step">
+                        <span className="landing-audience-logic-icon" aria-hidden="true">
+                          <LandingHeroIcon
+                            name={LANDING_AUDIENCE_LOGIC_ICONS[index] ?? "odds"}
+                          />
+                        </span>
+                        <span>{step}</span>
+                      </span>
+
+                      {index < audienceLogicCopy.logicSteps.length - 1 ? (
+                        <span className="landing-audience-logic-arrow" aria-hidden="true">
+                          →
+                        </span>
+                      ) : null}
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+
+              <div className="landing-audience-logic-example">
+                <div className="landing-audience-logic-example-title">
+                  {audienceLogicCopy.exampleTitle}
+                </div>
+
+                <div className="landing-audience-logic-match">
+                  <span>
+                    <strong>{audienceLogicCopy.homeLabel}</strong>
+                    <small>1.92 · 54%</small>
+                  </span>
+                  <span className="landing-audience-logic-vs">vs</span>
+                  <span>
+                    <strong>{audienceLogicCopy.awayLabel}</strong>
+                    <small>2.30 · 46%</small>
+                  </span>
+                </div>
+
+                <div className="landing-audience-logic-bar" aria-hidden="true">
+                  <span />
+                </div>
+
+                <small className="landing-audience-logic-fair-price">
+                  {audienceLogicCopy.fairPrice}
+                </small>
+              </div>
             </div>
           </div>
 
@@ -1043,13 +1159,24 @@ export function PublicHomePage() {
 
             <ul className="landing-audience-caution-list">
               {copy.home.audience.cautionItems.map((item) => (
-                <li key={item}>{item}</li>
+                <li key={item}>
+                  <span className="landing-audience-caution-icon" aria-hidden="true">
+                    ×
+                  </span>
+                  <span>{item}</span>
+                </li>
               ))}
             </ul>
 
             <div className="landing-audience-note">
-              <div className="landing-audience-note-title">{copy.home.audience.noteTitle}</div>
-              <p className="landing-audience-note-body">{copy.home.audience.noteBody}</p>
+              <span className="landing-audience-note-icon" aria-hidden="true">
+                ◇
+              </span>
+
+              <div>
+                <div className="landing-audience-note-title">{copy.home.audience.noteTitle}</div>
+                <p className="landing-audience-note-body">{copy.home.audience.noteBody}</p>
+              </div>
             </div>
           </aside>
         </div>

@@ -13,6 +13,8 @@ import {
 } from "../api/publicClient";
 import { WorldCupPoolAccessLoginForm } from "../components/WorldCupPoolAccessLoginForm";
 import { WorldCupPoolCreateForm } from "../components/WorldCupPoolCreateForm";
+import { trackPublicEvent } from "../../lib/analytics";
+import { WorldCupPoolHeroShowcase } from "../components/WorldCupPoolHeroShowcase";
 
 const COPY = {
   pt: {
@@ -23,10 +25,10 @@ const COPY = {
     unavailableBody:
       "A criação de novos bolões está temporariamente pausada. Os bolões já criados continuam acessíveis pelos links de convite e painel.",
     eyebrow: "Bolão da Copa 2026",
-    fallbackTitle: "Crie seu Bolão da Copa 2026 grátis",
+    fallbackTitle: "Crie o bolão da Copa do seu grupo em menos de 1 minuto",
     fallbackSubtitle:
-      "Monte seu bolão online, compartilhe o link no grupo e acompanhe os palpites da Copa em um ranking simples, leve e feito para celular.",
-    primaryCta: "Criar bolão grátis",
+      "Sem planilha, sem app e sem aposta financeira. Crie grátis, envie o link no WhatsApp e acompanhe palpites e ranking automático pelo celular.",
+    primaryCta: "Criar meu bolão grátis",
     secondaryCta: "Ver como funciona",
     createPanelTitle: "Criar um bolão novo",
     createPanelBody: "Gere seu bolão grátis, receba o link de convite e acompanhe tudo pelo painel.",
@@ -37,8 +39,8 @@ const COPY = {
     startTitle: "Comece por aqui",
     startBody: "Crie um bolão novo ou entre em um bolão existente usando seu e-mail e PIN.",
     heroNote:
-      "Ideal para grupos de WhatsApp, família, empresa, bar, turma da faculdade e comunidades de futebol.",
-    chips: ["Grátis para criar", "Link de convite", "Ranking automático", "Sem aposta financeira"],
+      "Perfeito para grupo da família, firma, bar, faculdade, pelada, comunidade de futebol e qualquer resenha da Copa.",
+    chips: ["Sem planilha", "Link no WhatsApp", "Ranking automático", "Grátis para começar"],
     audienceTitle: "Perfeito para qualquer grupo",
     audienceItems: [
       "Grupo de WhatsApp",
@@ -139,10 +141,10 @@ const COPY = {
     unavailableBody:
       "New pool creation is temporarily paused. Existing pools remain accessible through their invite and dashboard links.",
     eyebrow: "World Cup 2026 pool",
-    fallbackTitle: "Create your free World Cup 2026 Pool",
+    fallbackTitle: "Create your group’s World Cup pool in under 1 minute",
     fallbackSubtitle:
-      "Launch an online pool, share the invite link with your group, and follow World Cup predictions through a simple mobile-first leaderboard.",
-    primaryCta: "Create free pool",
+      "No spreadsheets, no app install, and no financial betting. Create it for free, share the WhatsApp link, and follow predictions and the leaderboard on mobile.",
+    primaryCta: "Create my free pool",
     secondaryCta: "See how it works",
     createPanelTitle: "Create a new pool",
     createPanelBody: "Create your free pool, get the invite link, and manage everything from the dashboard.",
@@ -153,8 +155,8 @@ const COPY = {
     startTitle: "Start here",
     startBody: "Create a new pool or access an existing one using your email and PIN.",
     heroNote:
-      "Built for WhatsApp groups, families, offices, college groups, bars, and football communities.",
-    chips: ["Free to create", "Invite link", "Automatic ranking", "No financial betting"],
+      "Perfect for family groups, offices, bars, college friends, football communities, and World Cup banter.",
+    chips: ["No spreadsheets", "WhatsApp link", "Automatic ranking", "Free to start"],
     audienceTitle: "Perfect for any group",
     audienceItems: [
       "WhatsApp groups",
@@ -255,10 +257,10 @@ const COPY = {
     unavailableBody:
       "La creación de nuevas porras está temporalmente pausada. Las porras ya creadas siguen accesibles por sus enlaces de invitación y panel.",
     eyebrow: "Porra del Mundial 2026",
-    fallbackTitle: "Crea tu Porra del Mundial 2026 gratis",
+    fallbackTitle: "Crea la porra del Mundial de tu grupo en menos de 1 minuto",
     fallbackSubtitle:
-      "Lanza una porra online, comparte el enlace con tu grupo y sigue los pronósticos del Mundial en un ranking simple y pensado para móvil.",
-    primaryCta: "Crear porra gratis",
+      "Sin planillas, sin instalar app y sin apuesta financiera. Créala gratis, comparte el enlace por WhatsApp y sigue pronósticos y ranking desde el móvil.",
+    primaryCta: "Crear mi porra gratis",
     secondaryCta: "Ver cómo funciona",
     createPanelTitle: "Crear una porra nueva",
     createPanelBody: "Crea tu porra gratis, recibe el enlace de invitación y gestiona todo desde el panel.",
@@ -269,8 +271,8 @@ const COPY = {
     startTitle: "Empieza aquí",
     startBody: "Crea una porra nueva o entra en una existente usando tu email y PIN.",
     heroNote:
-      "Pensado para grupos de WhatsApp, familia, oficina, universidad, bares y comunidades de fútbol.",
-    chips: ["Gratis para crear", "Enlace de invitación", "Ranking automático", "Sin apuesta financiera"],
+      "Perfecto para familia, oficina, bares, universidad, grupos de fútbol y cualquier conversación del Mundial.",
+    chips: ["Sin planillas", "Enlace por WhatsApp", "Ranking automático", "Gratis para empezar"],
     audienceTitle: "Perfecto para cualquier grupo",
     audienceItems: [
       "Grupos de WhatsApp",
@@ -415,10 +417,27 @@ export function WorldCupPoolLandingPage() {
 
   const title = remoteCopy?.title || copy.fallbackTitle;
   const subtitle = remoteCopy?.subtitle || copy.fallbackSubtitle;
+  const primaryCtaLabel = remoteCopy?.cta_label || copy.primaryCta;
   const scoringSummary = remoteCopy?.scoring_summary;
 
   const isUnavailable =
     !ENABLE_WORLDCUP_POOL || statusError || (status !== null && !status.enabled);
+
+  function handleHeroCreateClick() {
+    trackPublicEvent("worldcup_pool_landing_cta_click", {
+      lang: currentLang,
+      cta: "hero_create",
+      target: "worldcup-pool-create",
+    });
+  }
+
+  function handleHeroHowItWorksClick() {
+    trackPublicEvent("worldcup_pool_landing_cta_click", {
+      lang: currentLang,
+      cta: "hero_how_it_works",
+      target: "worldcup-pool-how-it-works",
+    });
+  }
 
   if (isUnavailable) {
     return (
@@ -446,10 +465,19 @@ export function WorldCupPoolLandingPage() {
             <p className="public-body">{subtitle}</p>
 
             <div className="worldcup-pool-actions">
-              <a className="public-btn public-btn-primary" href="#worldcup-pool-create">
-                {copy.primaryCta}
+              <a
+                className="public-btn public-btn-primary"
+                href="#worldcup-pool-create"
+                onClick={handleHeroCreateClick}
+              >
+                {primaryCtaLabel}
               </a>
-              <a className="public-btn public-btn-secondary" href="#worldcup-pool-how-it-works">
+
+              <a
+                className="public-btn public-btn-secondary"
+                href="#worldcup-pool-how-it-works"
+                onClick={handleHeroHowItWorksClick}
+              >
                 {copy.secondaryCta}
               </a>
             </div>
@@ -465,26 +493,7 @@ export function WorldCupPoolLandingPage() {
             </div>
           </div>
 
-          <div className="worldcup-pool-hero-choice-card">
-            <div className="worldcup-pool-hero-choice-head">
-              <span>{copy.eyebrow}</span>
-              <strong>2026</strong>
-            </div>
-
-            <div className="worldcup-pool-hero-choice-actions">
-              <a className="worldcup-pool-hero-choice-option" href="#worldcup-pool-create">
-                <strong>{copy.createPanelTitle}</strong>
-                <span>{copy.createPanelBody}</span>
-                <em>{copy.createPanelCta}</em>
-              </a>
-
-              <a className="worldcup-pool-hero-choice-option" href="#worldcup-pool-access">
-                <strong>{copy.accessPanelTitle}</strong>
-                <span>{copy.accessPanelBody}</span>
-                <em>{copy.accessPanelCta}</em>
-              </a>
-            </div>
-          </div>
+          <WorldCupPoolHeroShowcase lang={currentLang} />
         </div>
       </section>
 
@@ -497,16 +506,16 @@ export function WorldCupPoolLandingPage() {
         </div>
 
         <div className="worldcup-pool-start-grid">
-          <div id="worldcup-pool-access" className="worldcup-pool-start-card">
-            <WorldCupPoolAccessLoginForm lang={currentLang} />
-          </div>
-
           <div id="worldcup-pool-create" className="worldcup-pool-start-card">
             <WorldCupPoolCreateForm
               lang={currentLang}
               canCreate={Boolean(status?.public_create_enabled)}
               scoringModes={status?.scoring_modes ?? []}
             />
+          </div>
+
+          <div id="worldcup-pool-access" className="worldcup-pool-start-card">
+            <WorldCupPoolAccessLoginForm lang={currentLang} />
           </div>
         </div>
       </section>

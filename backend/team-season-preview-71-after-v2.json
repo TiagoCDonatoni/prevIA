@@ -1,0 +1,226 @@
+{
+  "ok": true,
+  "connected_to_snapshot": false,
+  "calls_external_api": false,
+  "mutates_database": false,
+  "purpose": "team_season_stats_recompute_preview_only",
+  "league_count": 1,
+  "aggregate": {
+    "match": 5
+  },
+  "results": [
+    {
+      "league_id": 71,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "summary": {
+        "match": 5
+      },
+      "season_results": [
+        {
+          "season": 2026,
+          "comparison": {
+            "status": "match",
+            "diffs": {}
+          },
+          "existing": {
+            "season": 2026,
+            "teams_count": 20,
+            "played_sum": 354,
+            "home_played_sum": 177,
+            "away_played_sum": 177,
+            "goals_for_sum": 471,
+            "goals_against_sum": 471,
+            "home_goals_for_sum": 275,
+            "home_goals_against_sum": 196,
+            "away_goals_for_sum": 196,
+            "away_goals_against_sum": 275,
+            "latest_computed_at": "2026-06-04 05:05:09.076050+00:00"
+          },
+          "recomputed": {
+            "season": 2026,
+            "teams_count": 20,
+            "played_sum": 354,
+            "home_played_sum": 177,
+            "away_played_sum": 177,
+            "goals_for_sum": 471,
+            "goals_against_sum": 471,
+            "home_goals_for_sum": 275,
+            "home_goals_against_sum": 196,
+            "away_goals_for_sum": 196,
+            "away_goals_against_sum": 275,
+            "wins_sum": 130,
+            "draws_sum": 94,
+            "losses_sum": 130,
+            "mu_home": 1.5537,
+            "mu_away": 1.1073
+          }
+        },
+        {
+          "season": 2025,
+          "comparison": {
+            "status": "match",
+            "diffs": {}
+          },
+          "existing": {
+            "season": 2025,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 959,
+            "goals_against_sum": 959,
+            "home_goals_for_sum": 580,
+            "home_goals_against_sum": 379,
+            "away_goals_for_sum": 379,
+            "away_goals_against_sum": 580,
+            "latest_computed_at": "2026-06-04 05:05:09.076050+00:00"
+          },
+          "recomputed": {
+            "season": 2025,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 959,
+            "goals_against_sum": 959,
+            "home_goals_for_sum": 580,
+            "home_goals_against_sum": 379,
+            "away_goals_for_sum": 379,
+            "away_goals_against_sum": 580,
+            "wins_sum": 281,
+            "draws_sum": 198,
+            "losses_sum": 281,
+            "mu_home": 1.5263,
+            "mu_away": 0.9974
+          }
+        },
+        {
+          "season": 2024,
+          "comparison": {
+            "status": "match",
+            "diffs": {}
+          },
+          "existing": {
+            "season": 2024,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 929,
+            "goals_against_sum": 929,
+            "home_goals_for_sum": 536,
+            "home_goals_against_sum": 393,
+            "away_goals_for_sum": 393,
+            "away_goals_against_sum": 536,
+            "latest_computed_at": "2026-06-05 03:51:50.946618+00:00"
+          },
+          "recomputed": {
+            "season": 2024,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 929,
+            "goals_against_sum": 929,
+            "home_goals_for_sum": 536,
+            "home_goals_against_sum": 393,
+            "away_goals_for_sum": 393,
+            "away_goals_against_sum": 536,
+            "wins_sum": 279,
+            "draws_sum": 202,
+            "losses_sum": 279,
+            "mu_home": 1.4105,
+            "mu_away": 1.0342
+          }
+        },
+        {
+          "season": 2023,
+          "comparison": {
+            "status": "match",
+            "diffs": {}
+          },
+          "existing": {
+            "season": 2023,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 946,
+            "goals_against_sum": 946,
+            "home_goals_for_sum": 539,
+            "home_goals_against_sum": 407,
+            "away_goals_for_sum": 407,
+            "away_goals_against_sum": 539,
+            "latest_computed_at": "2026-06-05 03:51:50.946618+00:00"
+          },
+          "recomputed": {
+            "season": 2023,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 946,
+            "goals_against_sum": 946,
+            "home_goals_for_sum": 539,
+            "home_goals_against_sum": 407,
+            "away_goals_for_sum": 407,
+            "away_goals_against_sum": 539,
+            "wins_sum": 282,
+            "draws_sum": 196,
+            "losses_sum": 282,
+            "mu_home": 1.4184,
+            "mu_away": 1.0711
+          }
+        },
+        {
+          "season": 2022,
+          "comparison": {
+            "status": "match",
+            "diffs": {}
+          },
+          "existing": {
+            "season": 2022,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 905,
+            "goals_against_sum": 905,
+            "home_goals_for_sum": 534,
+            "home_goals_against_sum": 371,
+            "away_goals_for_sum": 371,
+            "away_goals_against_sum": 534,
+            "latest_computed_at": "2026-06-05 03:51:50.946618+00:00"
+          },
+          "recomputed": {
+            "season": 2022,
+            "teams_count": 20,
+            "played_sum": 760,
+            "home_played_sum": 380,
+            "away_played_sum": 380,
+            "goals_for_sum": 905,
+            "goals_against_sum": 905,
+            "home_goals_for_sum": 534,
+            "home_goals_against_sum": 371,
+            "away_goals_for_sum": 371,
+            "away_goals_against_sum": 534,
+            "wins_sum": 272,
+            "draws_sum": 216,
+            "losses_sum": 272,
+            "mu_home": 1.4053,
+            "mu_away": 0.9763
+          }
+        }
+      ]
+    }
+  ]
+}

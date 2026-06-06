@@ -71,6 +71,17 @@ def _clean(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _required_clean(value: str) -> str:
     cleaned = str(value or "").strip()
     if not cleaned:
@@ -99,6 +110,62 @@ def _hash_optional(value: Optional[str]) -> Optional[str]:
     digest = hashlib.sha256(f"{salt}:{cleaned}".encode("utf-8")).hexdigest()
     return digest
 
+
+def _assert_partner_application_rate_limit(
+    cur,
+    *,
+    email: str,
+    ip_hash: Optional[str],
+) -> None:
+    email_24h_limit = max(1, _env_int("PARTNER_APPLICATION_EMAIL_24H_LIMIT", 1))
+    ip_1h_limit = max(1, _env_int("PARTNER_APPLICATION_IP_1H_LIMIT", 5))
+    ip_24h_limit = max(1, _env_int("PARTNER_APPLICATION_IP_24H_LIMIT", 20))
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM partnership.partner_applications
+        WHERE lower(email) = lower(%(email)s)
+          AND created_at_utc >= NOW() - INTERVAL '24 hours'
+        """,
+        {"email": email},
+    )
+    email_count = int(cur.fetchone()[0] or 0)
+
+    if email_count >= email_24h_limit:
+        raise HTTPException(status_code=429, detail="partner_application_rate_limited_email")
+
+    if not ip_hash:
+        return
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM partnership.partner_applications
+        WHERE ip_hash = %(ip_hash)s
+          AND created_at_utc >= NOW() - INTERVAL '1 hour'
+        """,
+        {"ip_hash": ip_hash},
+    )
+    ip_1h_count = int(cur.fetchone()[0] or 0)
+
+    if ip_1h_count >= ip_1h_limit:
+        raise HTTPException(status_code=429, detail="partner_application_rate_limited_ip_hour")
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM partnership.partner_applications
+        WHERE ip_hash = %(ip_hash)s
+          AND created_at_utc >= NOW() - INTERVAL '24 hours'
+        """,
+        {"ip_hash": ip_hash},
+    )
+    ip_24h_count = int(cur.fetchone()[0] or 0)
+
+    if ip_24h_count >= ip_24h_limit:
+        raise HTTPException(status_code=429, detail="partner_application_rate_limited_ip_day")
+        
 
 def _client_ip(request: Request) -> Optional[str]:
     forwarded_for = request.headers.get("x-forwarded-for")
@@ -226,6 +293,11 @@ def create_partner_application(
     try:
         with pg_conn() as conn:
             with conn.cursor() as cur:
+                _assert_partner_application_rate_limit(
+                    cur,
+                    email=params["email"],
+                    ip_hash=params["ip_hash"],
+                )
                 cur.execute(insert_sql, params)
                 row = cur.fetchone()
             conn.commit()

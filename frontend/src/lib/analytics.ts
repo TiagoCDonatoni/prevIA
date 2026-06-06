@@ -27,3 +27,21 @@ export function trackPublicPageView(pathname: string, search = ""): void {
     language: document.documentElement.lang || undefined,
   });
 }
+
+type PublicAnalyticsValue = string | number | boolean | undefined | null;
+
+export function trackPublicEvent(
+  eventName: string,
+  params: Record<string, PublicAnalyticsValue> = {}
+): void {
+  if (!GA_ID) return;
+  if (typeof window === "undefined") return;
+  if (typeof window.gtag !== "function") return;
+
+  window.gtag("event", eventName, {
+    ...params,
+    page_path: `${window.location.pathname}${window.location.search}`,
+    page_title: document.title,
+    language: document.documentElement.lang || undefined,
+  });
+}

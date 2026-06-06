@@ -483,21 +483,21 @@ SCORING_MODE_SUMMARIES: Dict[WorldCupPoolScoringMode, Dict[Lang, str]] = {
 
 COPY: Dict[Lang, WorldCupPoolStatusCopy] = {
     "pt": WorldCupPoolStatusCopy(
-        title="Crie seu Bolão da Copa 2026 grátis",
-        subtitle="Monte seu bolão online, compartilhe o link no grupo e acompanhe os palpites da Copa em um ranking simples, leve e feito para celular.",
-        cta_label="Criar bolão grátis",
+        title="Crie o bolão da Copa do seu grupo em menos de 1 minuto",
+        subtitle="Sem planilha, sem app e sem aposta financeira. Crie grátis, envie o link no WhatsApp e acompanhe palpites e ranking automático pelo celular.",
+        cta_label="Criar meu bolão grátis",
         scoring_summary="O organizador escolhe entre pontuação Clássica ou Emoção até a final. Na Clássica, placar exato vale 5 pontos, resultado correto vale 3 e gol exato de um time pode render ponto parcial.",
     ),
     "en": WorldCupPoolStatusCopy(
-        title="Create your free World Cup 2026 Pool",
-        subtitle="Launch an online pool, share the invite link with your group, and follow World Cup predictions through a simple mobile-first leaderboard.",
-        cta_label="Create free pool",
+        title="Create your group’s World Cup pool in under 1 minute",
+        subtitle="No spreadsheets, no app install, and no financial betting. Create it for free, share the WhatsApp link, and follow predictions and the leaderboard on mobile.",
+        cta_label="Create my free pool",
         scoring_summary="The organizer chooses between Classic scoring or Drama until the final. In Classic mode, exact score is worth 5 points, correct outcome is worth 3, and an exact team score can earn a partial point.",
     ),
     "es": WorldCupPoolStatusCopy(
-        title="Crea tu Porra del Mundial 2026 gratis",
-        subtitle="Lanza una porra online, comparte el enlace con tu grupo y sigue los pronósticos del Mundial en un ranking simple y pensado para móvil.",
-        cta_label="Crear porra gratis",
+        title="Crea la porra del Mundial de tu grupo en menos de 1 minuto",
+        subtitle="Sin planillas, sin instalar app y sin apuesta financiera. Créala gratis, comparte el enlace por WhatsApp y sigue pronósticos y ranking desde el móvil.",
+        cta_label="Crear mi porra gratis",
         scoring_summary="El organizador elige entre puntuación Clásica o Emoción hasta la final. En la Clásica, el marcador exacto vale 5 puntos, el resultado correcto vale 3 y acertar los goles de un equipo puede sumar un punto parcial.",
     ),
 }

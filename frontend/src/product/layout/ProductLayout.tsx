@@ -7,7 +7,12 @@ import {
   PRODUCT_AUTH_ENABLED,
   PRODUCT_DEV_AUTO_LOGIN_ENABLED,
 } from "../../config";
-import { fetchAccessUsage, postAccessDevReset } from "../api/access";
+import {
+  AccessRequestError,
+  fetchAccessUsage,
+  postAccessCampaignRedeem,
+  postAccessDevReset,
+} from "../api/access";
 import {
   clearProductPlanOverride,
   fetchAuthMe,
@@ -33,9 +38,24 @@ import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { AccountPreferencesModal } from "../components/AccountPreferencesModal";
 import { resolveAccountPreferences } from "../preferences/accountPreferences";
 import { trackProductTelemetry } from "../telemetry/productTelemetry";
+import {
+  clearPartnerReferralCookie,
+  readPartnerReferralCookie,
+} from "../../partner/partnerReferralCookie";
 
 const POST_SIGNUP_SESSION_KEY = "previa_post_signup_pending_v1";
 
+const PARTNER_REFERRAL_TERMINAL_REDEEM_CODES = new Set([
+  "CAMPAIGN_NOT_FOUND",
+  "CAMPAIGN_EXPIRED",
+  "CAMPAIGN_LIMIT_REACHED",
+  "CAMPAIGN_TRIAL_DISABLED",
+  "CAMPAIGN_TRIAL_INVALID",
+  "PLAN_NOT_HIGHER",
+  "PAID_UPGRADE_TRIAL_NOT_ALLOWED",
+  "EXISTING_USERS_NOT_ALLOWED",
+  "ALREADY_USED_TRIAL",
+]);
   type FooterSocialId = "instagram" | "x" | "tiktok";
 
   type FooterSocialItem = {
@@ -508,6 +528,28 @@ React.useEffect(() => {
     }
   }
 
+  async function redeemPendingPartnerReferralAfterAuth() {
+    const referral = readPartnerReferralCookie();
+    if (!referral) return;
+
+    try {
+      await postAccessCampaignRedeem(referral.campaignSlug);
+      clearPartnerReferralCookie();
+
+      const refreshed = await fetchAuthMe();
+      await syncSessionFromAuthPayload(refreshed);
+    } catch (err) {
+      console.error("partner referral redeem after auth failed", err);
+
+      if (
+        err instanceof AccessRequestError &&
+        PARTNER_REFERRAL_TERMINAL_REDEEM_CODES.has(String(err.code || ""))
+      ) {
+        clearPartnerReferralCookie();
+      }
+    }
+  }
+
   async function handleInternalPlanChange(nextPlanRaw: string) {
     const nextPlan = normalizeBackendPlanCode(nextPlanRaw);
     const subscriptionPlan = normalizeBackendPlanCode(
@@ -661,6 +703,11 @@ React.useEffect(() => {
           }
 
           await syncSessionFromAuthPayload(confirmed);
+
+          if (confirmed.is_authenticated) {
+            await redeemPendingPartnerReferralAfterAuth();
+          }
+
           setAuthOpen(false);
 
           const shouldOpenPostSignupOffer =

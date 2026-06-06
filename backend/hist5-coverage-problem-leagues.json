@@ -1,0 +1,670 @@
+{
+  "ok": true,
+  "connected_to_snapshot": false,
+  "purpose": "historical_coverage_diagnostics_only",
+  "profile": {
+    "key": "model_v1_hist5_decay",
+    "mode": "historical_decay",
+    "description": "Modelo experimental desconectado: contexto histórico de 5 temporadas, com peso maior na temporada efetiva e peso pequeno nas antigas.",
+    "history_window": 5,
+    "season_weights": [
+      0.42,
+      0.27,
+      0.17,
+      0.09,
+      0.05
+    ],
+    "season_weights_normalized": [
+      0.42,
+      0.27,
+      0.17,
+      0.09,
+      0.05
+    ],
+    "competition_adjustment_cap": 0.15,
+    "use_global_team_history": true,
+    "use_same_league_history": true,
+    "use_historical_league_prior": true
+  },
+  "league_count": 9,
+  "results": [
+    {
+      "league_id": 71,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 20,
+          "total_team_played": 354,
+          "avg_team_played": 17.7,
+          "goals_for_sum": 471,
+          "goals_against_sum": 471,
+          "home_goals_for_sum": 275,
+          "away_goals_for_sum": 196,
+          "home_played_sum": 177,
+          "away_played_sum": 177,
+          "mu_home": 1.5537,
+          "mu_away": 1.1073
+        },
+        {
+          "season": 2025,
+          "teams_count": 20,
+          "total_team_played": 760,
+          "avg_team_played": 38.0,
+          "goals_for_sum": 959,
+          "goals_against_sum": 959,
+          "home_goals_for_sum": 580,
+          "away_goals_for_sum": 379,
+          "home_played_sum": 380,
+          "away_played_sum": 380,
+          "mu_home": 1.5263,
+          "mu_away": 0.9974
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 20,
+        "teams_by_seasons_available": {
+          "2": 16,
+          "1": 4
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 253,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 30,
+          "total_team_played": 436,
+          "avg_team_played": 14.53,
+          "goals_for_sum": 720,
+          "goals_against_sum": 720,
+          "home_goals_for_sum": 422,
+          "away_goals_for_sum": 298,
+          "home_played_sum": 218,
+          "away_played_sum": 218,
+          "mu_home": 1.9358,
+          "mu_away": 1.367
+        },
+        {
+          "season": 2025,
+          "teams_count": 30,
+          "total_team_played": 1080,
+          "avg_team_played": 36.0,
+          "goals_for_sum": 1629,
+          "goals_against_sum": 1629,
+          "home_goals_for_sum": 895,
+          "away_goals_for_sum": 734,
+          "home_played_sum": 540,
+          "away_played_sum": 540,
+          "mu_home": 1.6574,
+          "mu_away": 1.3593
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 30,
+        "teams_by_seasons_available": {
+          "2": 30
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 113,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 16,
+          "total_team_played": 162,
+          "avg_team_played": 10.12,
+          "goals_for_sum": 255,
+          "goals_against_sum": 255,
+          "home_goals_for_sum": 143,
+          "away_goals_for_sum": 112,
+          "home_played_sum": 81,
+          "away_played_sum": 81,
+          "mu_home": 1.7654,
+          "mu_away": 1.3827
+        },
+        {
+          "season": 2025,
+          "teams_count": 17,
+          "total_team_played": 484,
+          "avg_team_played": 28.47,
+          "goals_for_sum": 686,
+          "goals_against_sum": 686,
+          "home_goals_for_sum": 357,
+          "away_goals_for_sum": 329,
+          "home_played_sum": 242,
+          "away_played_sum": 242,
+          "mu_home": 1.4752,
+          "mu_away": 1.3595
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 16,
+        "teams_by_seasons_available": {
+          "2": 14,
+          "1": 2
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 128,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 30,
+          "total_team_played": 510,
+          "avg_team_played": 17.0,
+          "goals_for_sum": 528,
+          "goals_against_sum": 528,
+          "home_goals_for_sum": 300,
+          "away_goals_for_sum": 228,
+          "home_played_sum": 255,
+          "away_played_sum": 255,
+          "mu_home": 1.1765,
+          "mu_away": 0.8941
+        },
+        {
+          "season": 2025,
+          "teams_count": 30,
+          "total_team_played": 1020,
+          "avg_team_played": 34.0,
+          "goals_for_sum": 994,
+          "goals_against_sum": 994,
+          "home_goals_for_sum": 561,
+          "away_goals_for_sum": 433,
+          "home_played_sum": 510,
+          "away_played_sum": 510,
+          "mu_home": 1.1,
+          "mu_away": 0.849
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 30,
+        "teams_by_seasons_available": {
+          "2": 28,
+          "1": 2
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 13,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 47,
+          "total_team_played": 250,
+          "avg_team_played": 5.32,
+          "goals_for_sum": 276,
+          "goals_against_sum": 276,
+          "home_goals_for_sum": 169,
+          "away_goals_for_sum": 107,
+          "home_played_sum": 125,
+          "away_played_sum": 125,
+          "mu_home": 1.352,
+          "mu_away": 0.856
+        },
+        {
+          "season": 2025,
+          "teams_count": 47,
+          "total_team_played": 308,
+          "avg_team_played": 6.55,
+          "goals_for_sum": 369,
+          "goals_against_sum": 369,
+          "home_goals_for_sum": 221,
+          "away_goals_for_sum": 148,
+          "home_played_sum": 154,
+          "away_played_sum": 154,
+          "mu_home": 1.4351,
+          "mu_away": 0.961
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 47,
+        "teams_by_seasons_available": {
+          "2": 24,
+          "1": 23
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 98,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 20,
+          "total_team_played": 380,
+          "avg_team_played": 19.0,
+          "goals_for_sum": 506,
+          "goals_against_sum": 506,
+          "home_goals_for_sum": 264,
+          "away_goals_for_sum": 242,
+          "home_played_sum": 190,
+          "away_played_sum": 190,
+          "mu_home": 1.3895,
+          "mu_away": 1.2737
+        },
+        {
+          "season": 2025,
+          "teams_count": 20,
+          "total_team_played": 760,
+          "avg_team_played": 38.0,
+          "goals_for_sum": 911,
+          "goals_against_sum": 911,
+          "home_goals_for_sum": 500,
+          "away_goals_for_sum": 411,
+          "home_played_sum": 380,
+          "away_played_sum": 380,
+          "mu_home": 1.3158,
+          "mu_away": 1.0816
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 20,
+        "teams_by_seasons_available": {
+          "2": 17,
+          "1": 3
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 265,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 16,
+          "total_team_played": 222,
+          "avg_team_played": 13.88,
+          "goals_for_sum": 304,
+          "goals_against_sum": 304,
+          "home_goals_for_sum": 178,
+          "away_goals_for_sum": 126,
+          "home_played_sum": 111,
+          "away_played_sum": 111,
+          "mu_home": 1.6036,
+          "mu_away": 1.1351
+        },
+        {
+          "season": 2025,
+          "teams_count": 16,
+          "total_team_played": 480,
+          "avg_team_played": 30.0,
+          "goals_for_sum": 635,
+          "goals_against_sum": 635,
+          "home_goals_for_sum": 372,
+          "away_goals_for_sum": 263,
+          "home_played_sum": 240,
+          "away_played_sum": 240,
+          "mu_home": 1.55,
+          "mu_away": 1.0958
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 16,
+        "teams_by_seasons_available": {
+          "2": 14,
+          "1": 2
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 11,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 56,
+          "total_team_played": 224,
+          "avg_team_played": 4.67,
+          "goals_for_sum": 249,
+          "goals_against_sum": 249,
+          "home_goals_for_sum": 145,
+          "away_goals_for_sum": 104,
+          "home_played_sum": 112,
+          "away_played_sum": 112,
+          "mu_home": 1.2946,
+          "mu_away": 0.9286
+        },
+        {
+          "season": 2025,
+          "teams_count": 56,
+          "total_team_played": 314,
+          "avg_team_played": 5.61,
+          "goals_for_sum": 375,
+          "goals_against_sum": 375,
+          "home_goals_for_sum": 224,
+          "away_goals_for_sum": 151,
+          "home_played_sum": 157,
+          "away_played_sum": 157,
+          "mu_home": 1.4268,
+          "mu_away": 0.9618
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 56,
+        "teams_by_seasons_available": {
+          "2": 19,
+          "1": 37
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    },
+    {
+      "league_id": 292,
+      "profile_key": "model_v1_hist5_decay",
+      "status": "ok",
+      "target_season": 2026,
+      "target_seasons": [
+        2026,
+        2025,
+        2024,
+        2023,
+        2022
+      ],
+      "available_seasons": [
+        2026,
+        2025
+      ],
+      "available_seasons_in_window": [
+        2026,
+        2025
+      ],
+      "configured_weight_by_season": {
+        "2026": 0.42,
+        "2025": 0.27,
+        "2024": 0.17,
+        "2023": 0.09,
+        "2022": 0.05
+      },
+      "renormalized_available_weight_by_season": {
+        "2026": 0.608696,
+        "2025": 0.391304
+      },
+      "season_rows": [
+        {
+          "season": 2026,
+          "teams_count": 12,
+          "total_team_played": 180,
+          "avg_team_played": 15.0,
+          "goals_for_sum": 204,
+          "goals_against_sum": 204,
+          "home_goals_for_sum": 97,
+          "away_goals_for_sum": 107,
+          "home_played_sum": 90,
+          "away_played_sum": 90,
+          "mu_home": 1.0778,
+          "mu_away": 1.1889
+        },
+        {
+          "season": 2025,
+          "teams_count": 14,
+          "total_team_played": 464,
+          "avg_team_played": 33.14,
+          "goals_for_sum": 587,
+          "goals_against_sum": 587,
+          "home_goals_for_sum": 316,
+          "away_goals_for_sum": 271,
+          "home_played_sum": 232,
+          "away_played_sum": 232,
+          "mu_home": 1.3621,
+          "mu_away": 1.1681
+        }
+      ],
+      "team_continuity": {
+        "target_season_team_count": 12,
+        "teams_by_seasons_available": {
+          "2": 11,
+          "1": 1
+        },
+        "teams_with_3_plus_seasons": 0,
+        "teams_with_full_window": 0
+      }
+    }
+  ]
+}

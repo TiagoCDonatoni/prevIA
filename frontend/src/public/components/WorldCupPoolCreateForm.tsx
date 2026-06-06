@@ -9,6 +9,7 @@ import {
   type WorldCupPoolScoringMode,
   type WorldCupPoolScoringModeConfig,
 } from "../api/publicClient";
+import { trackPublicEvent } from "../../lib/analytics";
 
 type Props = {
   lang: Lang;
@@ -220,7 +221,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
   const [created, setCreated] = React.useState<WorldCupPoolCreateResponse | null>(null);
   const [copied, setCopied] = React.useState(false);
   const [adminOpening, setAdminOpening] = React.useState(false);
-
+  const hasTrackedStartRef = React.useRef(false);
   const pinIsValid = /^\d{4}$/.test(pin);
 
   const visibleScoringModes = React.useMemo(() => {
@@ -244,10 +245,29 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
     setPin(value.replace(/\D/g, "").slice(0, 4));
   }
 
+  function trackCreateFormStart(source: string) {
+    if (hasTrackedStartRef.current) return;
+
+    hasTrackedStartRef.current = true;
+
+    trackPublicEvent("worldcup_pool_create_form_start", {
+      lang,
+      source,
+    });
+  }
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
 
     if (disabled) return;
+
+    trackCreateFormStart("submit");
+
+    trackPublicEvent("worldcup_pool_create_submit", {
+      lang,
+      scoring_mode: scoringMode,
+      marketing_opt_in: marketingOptIn,
+    });
 
     setBusy(true);
     setError("");
@@ -267,9 +287,20 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
         marketing_opt_in: marketingOptIn,
       });
 
+      trackPublicEvent("worldcup_pool_create_success", {
+        lang,
+        scoring_mode: scoringMode,
+      });
+
       setCreated(response);
     } catch (err) {
       console.error("failed to create world cup pool", err);
+
+      trackPublicEvent("worldcup_pool_create_error", {
+        lang,
+        scoring_mode: scoringMode,
+      });
+
       setError(copy.error);
     } finally {
       setBusy(false);
@@ -277,6 +308,9 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
   }
 
   async function openOrganizerPanelAfterCreate() {
+    trackPublicEvent("worldcup_pool_open_admin_after_create", {
+      lang,
+    });
     if (!created?.pool.slug || !created.pool.admin_url || adminOpening) return;
 
     setAdminOpening(true);
@@ -301,6 +335,9 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
 
     try {
       await navigator.clipboard.writeText(created.pool.invite_url);
+      trackPublicEvent("worldcup_pool_invite_copy", {
+        lang,
+      });
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -374,6 +411,11 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
             href={whatsappUrl}
             target="_blank"
             rel="noreferrer"
+            onClick={() =>
+              trackPublicEvent("worldcup_pool_invite_whatsapp_click", {
+                lang,
+              })
+            }
           >
             {copy.shareWhatsApp}
           </a>
@@ -406,6 +448,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
         <input
           value={poolName}
           onChange={(event) => setPoolName(event.target.value)}
+          onFocus={() => trackCreateFormStart("pool_name")}
           placeholder={copy.poolNamePlaceholder}
           autoComplete="off"
           disabled={!canCreate || busy}
@@ -417,6 +460,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
         <input
           value={organizerName}
           onChange={(event) => setOrganizerName(event.target.value)}
+          onFocus={() => trackCreateFormStart("organizer_name")}
           placeholder={copy.organizerNamePlaceholder}
           autoComplete="name"
           disabled={!canCreate || busy}
@@ -429,6 +473,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
+          onFocus={() => trackCreateFormStart("email")}
           placeholder={copy.emailPlaceholder}
           autoComplete="email"
           disabled={!canCreate || busy}
@@ -442,6 +487,7 @@ export function WorldCupPoolCreateForm({ lang, canCreate, scoringModes }: Props)
           inputMode="numeric"
           value={pin}
           onChange={(event) => onPinChange(event.target.value)}
+          onFocus={() => trackCreateFormStart("pin")}
           placeholder={copy.pinPlaceholder}
           autoComplete="one-time-code"
           disabled={!canCreate || busy}

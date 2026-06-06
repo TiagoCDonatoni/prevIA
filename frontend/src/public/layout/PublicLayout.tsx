@@ -18,6 +18,7 @@ import "../glossary.css";
 import BrandLogo from "../../shared/BrandLogo";
 import { LanguageDropdown } from "../../shared/LanguageDropdown";
 import { ProductAuthModal, type AuthSuccessMeta } from "../../product/auth/ProductAuthModal";
+import { getPartnerReferralRedeemPath } from "../../partner/partnerReferralCookie";
 import { fetchAuthMe } from "../../product/api/auth";
 import { ENABLE_PUBLIC_PRODUCT_LAYER, ENABLE_WORLDCUP_POOL } from "../../config";
 
@@ -718,7 +719,8 @@ export function PublicLayout() {
             setAuthInitialResetToken("");
             clearAuthSearchParams();
 
-            navigate(nextPath ?? "/app", { replace: true });
+            const referralRedeemPath = getPartnerReferralRedeemPath(currentLang as Lang);
+            navigate(nextPath ?? referralRedeemPath ?? "/app", { replace: true });
           }}
         />
       ) : null}

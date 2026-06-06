@@ -111,7 +111,7 @@ export function visibilityForPlan(plan: PlanId): Entitlements["visibility"] {
       show_edge_percent: false,
     },
     context: {
-      show_confidence_level: false,
+      show_confidence_level: true,
       show_similar_sample_size: false,
       show_form_summary: false,
       show_head_to_head: false,
@@ -130,7 +130,6 @@ export function visibilityForPlan(plan: PlanId): Entitlements["visibility"] {
     base.value.show_value_explained = true;
     base.value.show_fair_odds = true;
     base.value.show_edge_percent = true;
-    base.context.show_confidence_level = true;
     base.context.show_similar_sample_size = true;
     base.context.show_form_summary = true;
   }

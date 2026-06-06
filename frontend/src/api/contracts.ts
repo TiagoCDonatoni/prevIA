@@ -756,6 +756,8 @@ export type ProductOddsEvent = {
   probs_1x2?: ProductOdds1x2 | null;
   has_model?: boolean | null;
   has_opportunity?: boolean | null;
+  model_confidence_overall?: number | null;
+  model_confidence_level?: string | null;
 
   edge_summary?: ProductEdgeSummary | null;
 

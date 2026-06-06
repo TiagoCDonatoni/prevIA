@@ -224,6 +224,7 @@ def product_index(
             markets = payload.get("markets") or {}
             confidence = payload.get("confidence") or {}
             confidence_overall = confidence.get("overall")
+            confidence_level = confidence.get("level")
             probs_1x2 = ((markets.get("1x2") or {}).get("p_model") or {})
             snapshot_summary = _build_snapshot_summary(payload)
 
@@ -285,6 +286,8 @@ def product_index(
                     } if (has_model and is_unlocked) else None,
                     has_model=bool(has_model),
                     has_opportunity=bool(has_public_opportunity),
+                    model_confidence_overall=_safe_float(confidence_overall),
+                    model_confidence_level=str(confidence_level) if confidence_level else None,
                     snapshot_summary=snapshot_summary if is_unlocked else None,
                     resolved_home_team_id=(
                         int(inputs["home_team_id"]) if inputs.get("home_team_id") is not None else None
