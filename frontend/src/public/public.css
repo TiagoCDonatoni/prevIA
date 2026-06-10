@@ -6000,15 +6000,14 @@
 }
 
 .landing-audience-card-icon {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
-  margin-bottom: 12px;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 10px;
   box-sizing: border-box;
-  border-radius: 12px;
+  border-radius: 13px;
   border: 1px solid rgba(11, 47, 138, 0.12);
   background: rgba(11, 47, 138, 0.07);
   color: var(--public-brand);
@@ -6018,15 +6017,23 @@
 .landing-audience-card-icon svg {
   display: block;
   flex: 0 0 auto;
-  width: 17px;
-  height: 17px;
-  max-width: 17px;
-  max-height: 17px;
+  width: 18px;
+  height: 18px;
+  max-width: 18px;
+  max-height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.85;
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.landing-audience-card .landing-audience-badge {
+  width: fit-content;
+}
+
+.landing-audience-card-icon svg path {
+  vector-effect: non-scaling-stroke;
 }
 
 .landing-audience-card-title {

@@ -1,0 +1,10 @@
+{
+    "requested_by":  "dev",
+    "job_kwargs":  {
+                       "confirmation_delay_minutes":  1,
+                       "min_minutes_after_kickoff":  100,
+                       "dry_run":  true
+                   },
+    "trigger_source":  "manual",
+    "job_key":  "worldcup_pool_results_sync"
+}

@@ -58,10 +58,12 @@ const HERO_FEATURE_ICONS: LandingHeroIconName[] = [
   "value",
 ];
 
-const LANDING_AUDIENCE_CARD_ICONS: LandingHeroIconName[] = [
-  "target",
-  "chart",
-  "value",
+type LandingAudienceCardIconName = "criteria" | "reading" | "journey";
+
+const LANDING_AUDIENCE_CARD_ICONS: LandingAudienceCardIconName[] = [
+  "criteria",
+  "reading",
+  "journey",
 ];
 
 const LANDING_AUDIENCE_LOGIC_ICONS: LandingHeroIconName[] = [
@@ -148,6 +150,36 @@ function LandingHeroIcon({ name }: { name: LandingHeroIconName }) {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M4 16l5-5 4 4 7-8" />
       <path d="M20 7v6h-6" />
+    </svg>
+  );
+}
+
+function LandingAudienceCardIcon({ name }: { name: LandingAudienceCardIconName }) {
+  if (name === "criteria") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 12.4l3.1 3.1L17.4 8" />
+        <path d="M6 18h12" />
+      </svg>
+    );
+  }
+
+  if (name === "reading") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 17V9" />
+        <path d="M12 17V6.5" />
+        <path d="M17 17v-6" />
+        <path d="M5.5 17h13" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 16l4-4 3 3 5-7" />
+      <path d="M15 8h3v3" />
+      <path d="M6 18.5h12" />
     </svg>
   );
 }
@@ -1089,7 +1121,7 @@ export function PublicHomePage() {
               {copy.home.audience.items.map((item, index) => (
                 <article key={item.title} className="landing-audience-card">
                   <span className="landing-audience-card-icon" aria-hidden="true">
-                    <LandingHeroIcon name={LANDING_AUDIENCE_CARD_ICONS[index] ?? "target"} />
+                    <LandingAudienceCardIcon name={LANDING_AUDIENCE_CARD_ICONS[index] ?? "criteria"} />
                   </span>
                   <span className="landing-audience-badge">{item.badge}</span>
                   <h4 className="landing-audience-card-title">{item.title}</h4>

@@ -13,6 +13,7 @@ from src.ops.jobs.oddspapi_enrichment import oddspapi_run_controlled_enrichment
 from src.ops.jobs.pipeline_run_all import pipeline_run_all
 from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.update_pipeline import update_pipeline_run, update_pipeline_run_shard
+from src.ops.jobs.worldcup_pool_results_sync import worldcup_pool_results_sync
 
 JobCallable = Callable[..., dict]
 
@@ -29,6 +30,7 @@ JOB_DISPATCH: Dict[str, JobCallable] = {
     "snapshots_materialize": snapshots_materialize,
     "update_pipeline_run": update_pipeline_run,
     "update_pipeline_run_shard": update_pipeline_run_shard,
+    "worldcup_pool_results_sync": worldcup_pool_results_sync,
 }
 
 

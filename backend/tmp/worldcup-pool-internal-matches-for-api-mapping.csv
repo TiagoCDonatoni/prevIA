@@ -1,0 +1,73 @@
+﻿internal_match_id,match_key,official_match_no,display_order,phase,group_code,bracket_label,internal_home_label,internal_away_label,internal_match_label,kickoff_utc,lock_at_utc,status,home_score,away_score,result_source,api_fixture_id,api_home_team_id,api_away_team_id,api_mapping_status,api_mapping_note,predictions_count
+1,fifa_world_cup_2026_group_a_match_1,1,1,group,A,,México,África do Sul,México x África do Sul,2026-06-11T19:00:00+00:00,2026-06-11T19:00:00+00:00,scheduled,,,,,,,,,11
+2,fifa_world_cup_2026_group_a_match_2,2,2,group,A,,República da Coreia,República Tcheca,República da Coreia x República Tcheca,2026-06-12T02:00:00+00:00,2026-06-12T02:00:00+00:00,scheduled,,,,,,,,,11
+7,fifa_world_cup_2026_group_b_match_1,3,3,group,B,,Canadá,Bósnia e Herzegovina,Canadá x Bósnia e Herzegovina,2026-06-12T19:00:00+00:00,2026-06-12T19:00:00+00:00,scheduled,,,,,,,,,11
+19,fifa_world_cup_2026_group_d_match_1,4,4,group,D,,Estados Unidos,Paraguai,Estados Unidos x Paraguai,2026-06-13T01:00:00+00:00,2026-06-13T01:00:00+00:00,scheduled,,,,,,,,,11
+8,fifa_world_cup_2026_group_b_match_2,5,5,group,B,,Catar,Suíça,Catar x Suíça,2026-06-13T19:00:00+00:00,2026-06-13T19:00:00+00:00,scheduled,,,,,,,,,11
+13,fifa_world_cup_2026_group_c_match_1,6,6,group,C,,Brasil,Marrocos,Brasil x Marrocos,2026-06-13T22:00:00+00:00,2026-06-13T22:00:00+00:00,scheduled,,,,,,,,,11
+14,fifa_world_cup_2026_group_c_match_2,7,7,group,C,,Haiti,Escócia,Haiti x Escócia,2026-06-14T01:00:00+00:00,2026-06-14T01:00:00+00:00,scheduled,,,,,,,,,11
+20,fifa_world_cup_2026_group_d_match_2,8,8,group,D,,Austrália,Turquia,Austrália x Turquia,2026-06-14T04:00:00+00:00,2026-06-14T04:00:00+00:00,scheduled,,,,,,,,,11
+25,fifa_world_cup_2026_group_e_match_1,9,9,group,E,,Alemanha,Curaçau,Alemanha x Curaçau,2026-06-14T17:00:00+00:00,2026-06-14T17:00:00+00:00,scheduled,,,,,,,,,11
+31,fifa_world_cup_2026_group_f_match_1,10,10,group,F,,Holanda,Japão,Holanda x Japão,2026-06-14T20:00:00+00:00,2026-06-14T20:00:00+00:00,scheduled,,,,,,,,,11
+26,fifa_world_cup_2026_group_e_match_2,11,11,group,E,,Costa do Marfim,Equador,Costa do Marfim x Equador,2026-06-14T23:00:00+00:00,2026-06-14T23:00:00+00:00,scheduled,,,,,,,,,10
+32,fifa_world_cup_2026_group_f_match_2,12,12,group,F,,Suécia,Tunísia,Suécia x Tunísia,2026-06-15T02:00:00+00:00,2026-06-15T02:00:00+00:00,scheduled,,,,,,,,,10
+43,fifa_world_cup_2026_group_h_match_1,13,13,group,H,,Espanha,Cabo Verde,Espanha x Cabo Verde,2026-06-15T16:00:00+00:00,2026-06-15T16:00:00+00:00,scheduled,,,,,,,,,10
+37,fifa_world_cup_2026_group_g_match_1,14,14,group,G,,Bélgica,Egito,Bélgica x Egito,2026-06-15T19:00:00+00:00,2026-06-15T19:00:00+00:00,scheduled,,,,,,,,,10
+44,fifa_world_cup_2026_group_h_match_2,15,15,group,H,,Arábia Saudita,Uruguai,Arábia Saudita x Uruguai,2026-06-15T22:00:00+00:00,2026-06-15T22:00:00+00:00,scheduled,,,,,,,,,10
+38,fifa_world_cup_2026_group_g_match_2,16,16,group,G,,Irã,Nova Zelândia,Irã x Nova Zelândia,2026-06-16T01:00:00+00:00,2026-06-16T01:00:00+00:00,scheduled,,,,,,,,,10
+49,fifa_world_cup_2026_group_i_match_1,17,17,group,I,,França,Senegal,França x Senegal,2026-06-16T19:00:00+00:00,2026-06-16T19:00:00+00:00,scheduled,,,,,,,,,10
+50,fifa_world_cup_2026_group_i_match_2,18,18,group,I,,Iraque,Noruega,Iraque x Noruega,2026-06-16T22:00:00+00:00,2026-06-16T22:00:00+00:00,scheduled,,,,,,,,,10
+56,fifa_world_cup_2026_group_j_match_2,19,19,group,J,,Argentina,Argélia,Argentina x Argélia,2026-06-17T01:00:00+00:00,2026-06-17T01:00:00+00:00,scheduled,,,,,,,,,10
+55,fifa_world_cup_2026_group_j_match_1,20,20,group,J,,Áustria,Jordânia,Áustria x Jordânia,2026-06-17T04:00:00+00:00,2026-06-17T04:00:00+00:00,scheduled,,,,,,,,,10
+61,fifa_world_cup_2026_group_k_match_1,21,21,group,K,,Portugal,República Democrática do Congo,Portugal x República Democrática do Congo,2026-06-17T17:00:00+00:00,2026-06-17T17:00:00+00:00,scheduled,,,,,,,,,10
+67,fifa_world_cup_2026_group_l_match_1,22,22,group,L,,Inglaterra,Croácia,Inglaterra x Croácia,2026-06-17T20:00:00+00:00,2026-06-17T20:00:00+00:00,scheduled,,,,,,,,,10
+68,fifa_world_cup_2026_group_l_match_2,23,23,group,L,,Gana,Panamá,Gana x Panamá,2026-06-17T23:00:00+00:00,2026-06-17T23:00:00+00:00,scheduled,,,,,,,,,10
+62,fifa_world_cup_2026_group_k_match_2,24,24,group,K,,Uzbequistão,Colômbia,Uzbequistão x Colômbia,2026-06-18T02:00:00+00:00,2026-06-18T02:00:00+00:00,scheduled,,,,,,,,,10
+3,fifa_world_cup_2026_group_a_match_3,25,25,group,A,,República Tcheca,África do Sul,República Tcheca x África do Sul,2026-06-18T16:00:00+00:00,2026-06-18T16:00:00+00:00,scheduled,,,,,,,,,10
+9,fifa_world_cup_2026_group_b_match_3,26,26,group,B,,Suíça,Bósnia e Herzegovina,Suíça x Bósnia e Herzegovina,2026-06-18T19:00:00+00:00,2026-06-18T19:00:00+00:00,scheduled,,,,,,,,,10
+10,fifa_world_cup_2026_group_b_match_4,27,27,group,B,,Canadá,Catar,Canadá x Catar,2026-06-18T22:00:00+00:00,2026-06-18T22:00:00+00:00,scheduled,,,,,,,,,10
+4,fifa_world_cup_2026_group_a_match_4,28,28,group,A,,México,República da Coreia,México x República da Coreia,2026-06-19T01:00:00+00:00,2026-06-19T01:00:00+00:00,scheduled,,,,,,,,,10
+22,fifa_world_cup_2026_group_d_match_4,29,29,group,D,,Estados Unidos,Austrália,Estados Unidos x Austrália,2026-06-19T19:00:00+00:00,2026-06-19T19:00:00+00:00,scheduled,,,,,,,,,10
+15,fifa_world_cup_2026_group_c_match_3,30,30,group,C,,Escócia,Marrocos,Escócia x Marrocos,2026-06-19T22:00:00+00:00,2026-06-19T22:00:00+00:00,scheduled,,,,,,,,,10
+16,fifa_world_cup_2026_group_c_match_4,31,31,group,C,,Brasil,Haiti,Brasil x Haiti,2026-06-20T00:30:00+00:00,2026-06-20T00:30:00+00:00,scheduled,,,,,,,,,10
+21,fifa_world_cup_2026_group_d_match_3,32,32,group,D,,Turquia,Paraguai,Turquia x Paraguai,2026-06-20T03:00:00+00:00,2026-06-20T03:00:00+00:00,scheduled,,,,,,,,,10
+34,fifa_world_cup_2026_group_f_match_4,33,33,group,F,,Holanda,Suécia,Holanda x Suécia,2026-06-20T17:00:00+00:00,2026-06-20T17:00:00+00:00,scheduled,,,,,,,,,10
+27,fifa_world_cup_2026_group_e_match_3,34,34,group,E,,Alemanha,Costa do Marfim,Alemanha x Costa do Marfim,2026-06-20T20:00:00+00:00,2026-06-20T20:00:00+00:00,scheduled,,,,,,,,,10
+28,fifa_world_cup_2026_group_e_match_4,35,35,group,E,,Equador,Curaçau,Equador x Curaçau,2026-06-21T00:00:00+00:00,2026-06-21T00:00:00+00:00,scheduled,,,,,,,,,10
+33,fifa_world_cup_2026_group_f_match_3,36,36,group,F,,Tunísia,Japão,Tunísia x Japão,2026-06-21T02:00:00+00:00,2026-06-21T02:00:00+00:00,scheduled,,,,,,,,,10
+45,fifa_world_cup_2026_group_h_match_3,37,37,group,H,,Espanha,Arábia Saudita,Espanha x Arábia Saudita,2026-06-21T16:00:00+00:00,2026-06-21T16:00:00+00:00,scheduled,,,,,,,,,10
+39,fifa_world_cup_2026_group_g_match_3,38,38,group,G,,Bélgica,Irã,Bélgica x Irã,2026-06-21T19:00:00+00:00,2026-06-21T19:00:00+00:00,scheduled,,,,,,,,,10
+46,fifa_world_cup_2026_group_h_match_4,39,39,group,H,,Uruguai,Cabo Verde,Uruguai x Cabo Verde,2026-06-21T22:00:00+00:00,2026-06-21T22:00:00+00:00,scheduled,,,,,,,,,10
+40,fifa_world_cup_2026_group_g_match_4,40,40,group,G,,Nova Zelândia,Egito,Nova Zelândia x Egito,2026-06-22T01:00:00+00:00,2026-06-22T01:00:00+00:00,scheduled,,,,,,,,,10
+57,fifa_world_cup_2026_group_j_match_3,41,41,group,J,,Argentina,Áustria,Argentina x Áustria,2026-06-22T17:00:00+00:00,2026-06-22T17:00:00+00:00,scheduled,,,,,,,,,10
+51,fifa_world_cup_2026_group_i_match_3,42,42,group,I,,França,Iraque,França x Iraque,2026-06-22T21:00:00+00:00,2026-06-22T21:00:00+00:00,scheduled,,,,,,,,,10
+52,fifa_world_cup_2026_group_i_match_4,43,43,group,I,,Noruega,Senegal,Noruega x Senegal,2026-06-23T00:00:00+00:00,2026-06-23T00:00:00+00:00,scheduled,,,,,,,,,10
+58,fifa_world_cup_2026_group_j_match_4,44,44,group,J,,Jordânia,Argélia,Jordânia x Argélia,2026-06-23T03:00:00+00:00,2026-06-23T03:00:00+00:00,scheduled,,,,,,,,,10
+63,fifa_world_cup_2026_group_k_match_3,45,45,group,K,,Portugal,Uzbequistão,Portugal x Uzbequistão,2026-06-23T17:00:00+00:00,2026-06-23T17:00:00+00:00,scheduled,,,,,,,,,10
+69,fifa_world_cup_2026_group_l_match_3,46,46,group,L,,Inglaterra,Gana,Inglaterra x Gana,2026-06-23T20:00:00+00:00,2026-06-23T20:00:00+00:00,scheduled,,,,,,,,,10
+70,fifa_world_cup_2026_group_l_match_4,47,47,group,L,,Panamá,Croácia,Panamá x Croácia,2026-06-23T23:00:00+00:00,2026-06-23T23:00:00+00:00,scheduled,,,,,,,,,10
+64,fifa_world_cup_2026_group_k_match_4,48,48,group,K,,Colômbia,República Democrática do Congo,Colômbia x República Democrática do Congo,2026-06-24T02:00:00+00:00,2026-06-24T02:00:00+00:00,scheduled,,,,,,,,,10
+11,fifa_world_cup_2026_group_b_match_5,49,49,group,B,,Suíça,Canadá,Suíça x Canadá,2026-06-24T19:00:00+00:00,2026-06-24T19:00:00+00:00,scheduled,,,,,,,,,10
+12,fifa_world_cup_2026_group_b_match_6,50,50,group,B,,Bósnia e Herzegovina,Catar,Bósnia e Herzegovina x Catar,2026-06-24T19:00:00+00:00,2026-06-24T19:00:00+00:00,scheduled,,,,,,,,,10
+17,fifa_world_cup_2026_group_c_match_5,51,51,group,C,,Escócia,Brasil,Escócia x Brasil,2026-06-24T22:00:00+00:00,2026-06-24T22:00:00+00:00,scheduled,,,,,,,,,10
+18,fifa_world_cup_2026_group_c_match_6,52,52,group,C,,Marrocos,Haiti,Marrocos x Haiti,2026-06-24T22:00:00+00:00,2026-06-24T22:00:00+00:00,scheduled,,,,,,,,,10
+5,fifa_world_cup_2026_group_a_match_5,53,53,group,A,,República Tcheca,México,República Tcheca x México,2026-06-25T01:00:00+00:00,2026-06-25T01:00:00+00:00,scheduled,,,,,,,,,10
+6,fifa_world_cup_2026_group_a_match_6,54,54,group,A,,África do Sul,República da Coreia,África do Sul x República da Coreia,2026-06-25T01:00:00+00:00,2026-06-25T01:00:00+00:00,scheduled,,,,,,,,,10
+29,fifa_world_cup_2026_group_e_match_5,55,55,group,E,,Equador,Alemanha,Equador x Alemanha,2026-06-25T20:00:00+00:00,2026-06-25T20:00:00+00:00,scheduled,,,,,,,,,10
+30,fifa_world_cup_2026_group_e_match_6,56,56,group,E,,Curaçau,Costa do Marfim,Curaçau x Costa do Marfim,2026-06-25T20:00:00+00:00,2026-06-25T20:00:00+00:00,scheduled,,,,,,,,,10
+35,fifa_world_cup_2026_group_f_match_5,57,57,group,F,,Japão,Suécia,Japão x Suécia,2026-06-25T23:00:00+00:00,2026-06-25T23:00:00+00:00,scheduled,,,,,,,,,10
+36,fifa_world_cup_2026_group_f_match_6,58,58,group,F,,Tunísia,Holanda,Tunísia x Holanda,2026-06-25T23:00:00+00:00,2026-06-25T23:00:00+00:00,scheduled,,,,,,,,,10
+23,fifa_world_cup_2026_group_d_match_5,59,59,group,D,,Turquia,Estados Unidos,Turquia x Estados Unidos,2026-06-26T02:00:00+00:00,2026-06-26T02:00:00+00:00,scheduled,,,,,,,,,10
+24,fifa_world_cup_2026_group_d_match_6,60,60,group,D,,Paraguai,Austrália,Paraguai x Austrália,2026-06-26T02:00:00+00:00,2026-06-26T02:00:00+00:00,scheduled,,,,,,,,,10
+53,fifa_world_cup_2026_group_i_match_5,61,61,group,I,,Noruega,França,Noruega x França,2026-06-26T19:00:00+00:00,2026-06-26T19:00:00+00:00,scheduled,,,,,,,,,10
+54,fifa_world_cup_2026_group_i_match_6,62,62,group,I,,Senegal,Iraque,Senegal x Iraque,2026-06-26T19:00:00+00:00,2026-06-26T19:00:00+00:00,scheduled,,,,,,,,,10
+47,fifa_world_cup_2026_group_h_match_5,63,63,group,H,,Cabo Verde,Arábia Saudita,Cabo Verde x Arábia Saudita,2026-06-27T00:00:00+00:00,2026-06-27T00:00:00+00:00,scheduled,,,,,,,,,10
+48,fifa_world_cup_2026_group_h_match_6,64,64,group,H,,Uruguai,Espanha,Uruguai x Espanha,2026-06-27T00:00:00+00:00,2026-06-27T00:00:00+00:00,scheduled,,,,,,,,,10
+41,fifa_world_cup_2026_group_g_match_5,65,65,group,G,,Egito,Irã,Egito x Irã,2026-06-27T03:00:00+00:00,2026-06-27T03:00:00+00:00,scheduled,,,,,,,,,10
+42,fifa_world_cup_2026_group_g_match_6,66,66,group,G,,Nova Zelândia,Bélgica,Nova Zelândia x Bélgica,2026-06-27T03:00:00+00:00,2026-06-27T03:00:00+00:00,scheduled,,,,,,,,,10
+71,fifa_world_cup_2026_group_l_match_5,67,67,group,L,,Panamá,Inglaterra,Panamá x Inglaterra,2026-06-27T21:00:00+00:00,2026-06-27T21:00:00+00:00,scheduled,,,,,,,,,10
+72,fifa_world_cup_2026_group_l_match_6,68,68,group,L,,Croácia,Gana,Croácia x Gana,2026-06-27T21:00:00+00:00,2026-06-27T21:00:00+00:00,scheduled,,,,,,,,,10
+65,fifa_world_cup_2026_group_k_match_5,69,69,group,K,,Colômbia,Portugal,Colômbia x Portugal,2026-06-27T23:30:00+00:00,2026-06-27T23:30:00+00:00,scheduled,,,,,,,,,10
+66,fifa_world_cup_2026_group_k_match_6,70,70,group,K,,República Democrática do Congo,Uzbequistão,República Democrática do Congo x Uzbequistão,2026-06-27T23:30:00+00:00,2026-06-27T23:30:00+00:00,scheduled,,,,,,,,,10
+59,fifa_world_cup_2026_group_j_match_5,71,71,group,J,,Argélia,Áustria,Argélia x Áustria,2026-06-28T02:00:00+00:00,2026-06-28T02:00:00+00:00,scheduled,,,,,,,,,9
+60,fifa_world_cup_2026_group_j_match_6,72,72,group,J,,Jordânia,Argentina,Jordânia x Argentina,2026-06-28T02:00:00+00:00,2026-06-28T02:00:00+00:00,scheduled,,,,,,,,,9

@@ -5,6 +5,7 @@ from psycopg.types.json import Json
 
 import argparse
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from tqdm import tqdm  # <-- Opção B: barra de progresso
@@ -23,6 +24,19 @@ from src.etl.core_etl_pg import (
     map_fixture,
     _iter_response_items,  # ok usar internamente aqui, pois é seu próprio módulo
 )
+
+DEFAULT_ENDPOINTS: Dict[str, Dict[str, Any]] = {
+    "teams": {
+        "id": "teams",
+        "path": "/teams",
+        "params": {"league": "{league_id}", "season": "{season}"},
+    },
+    "fixtures": {
+        "id": "fixtures",
+        "path": "/fixtures",
+        "params": {"league": "{league_id}", "season": "{season}"},
+    },
+}
 
 
 def _read_json(path) -> Dict[str, Any]:
@@ -132,15 +146,64 @@ def _apply_core_from_payload(endpoint: str, payload: Dict[str, Any]) -> int:
                 return n
 
 
-def _resolve_league_ids(plan: Dict[str, Any]) -> List[int]:
-    src = (plan.get("league_source") or {})
-    mode = src.get("mode", "ids")
-    max_leagues = int(src.get("max_leagues", 50))
+def _parse_int_csv_or_range(value: str) -> List[int]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+
+    out: List[int] = []
+    for part in raw.split(","):
+        item = part.strip()
+        if not item:
+            continue
+
+        if "-" in item:
+            start_txt, end_txt = item.split("-", 1)
+            start = int(start_txt.strip())
+            end = int(end_txt.strip())
+            if end < start:
+                raise ValueError(f"invalid range: {item}")
+            out.extend(range(start, end + 1))
+        else:
+            out.append(int(item))
+
+    return sorted(set(out))
+
+
+def _parse_csv(value: str) -> List[str]:
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
+def _load_approved_league_ids(*, max_leagues: int) -> List[int]:
+    sql = """
+      SELECT DISTINCT league_id::int AS league_id
+      FROM odds.odds_league_map
+      WHERE league_id IS NOT NULL
+        AND COALESCE(enabled, false) = true
+        AND mapping_status = 'approved'
+      ORDER BY league_id ASC
+      LIMIT %(n)s
+    """
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"n": int(max_leagues)})
+            return [int(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+
+
+def _resolve_league_ids(
+    plan: Dict[str, Any],
+    *,
+    mode_override: Optional[str] = None,
+    max_leagues_override: Optional[int] = None,
+) -> List[int]:
+    src = plan.get("league_source") or {}
+    mode = str(mode_override or src.get("mode", "ids")).strip()
+    max_leagues = int(max_leagues_override or src.get("max_leagues", 50))
 
     if mode == "ids":
         ids = src.get("league_ids") or []
         ids = [int(x) for x in ids if isinstance(x, (int, str)) and str(x).strip().isdigit()]
-        return ids[:max_leagues]
+        return sorted(set(ids))[:max_leagues]
 
     if mode == "from_core":
         sql = "select league_id from core.leagues order by league_id asc limit %(n)s"
@@ -149,12 +212,24 @@ def _resolve_league_ids(plan: Dict[str, Any]) -> List[int]:
                 cur.execute(sql, {"n": max_leagues})
                 return [int(r[0]) for r in cur.fetchall()]
 
-    raise ValueError("league_source.mode must be 'ids' or 'from_core'")
+    if mode in {"approved", "from_approved_league_map"}:
+        return _load_approved_league_ids(max_leagues=max_leagues)
+
+    raise ValueError(
+        "league_source.mode must be one of: ids, from_core, approved, from_approved_league_map"
+    )
 
 
-def _resolve_seasons(plan: Dict[str, Any]) -> List[int]:
+def _resolve_seasons(plan: Dict[str, Any], *, override: Optional[str] = None) -> List[int]:
+    if override:
+        seasons = _parse_int_csv_or_range(override)
+        if not seasons:
+            raise ValueError("--seasons did not resolve to any season")
+        return seasons
+
     s = plan.get("seasons") or {}
     mode = s.get("mode", "range")
+
     if mode == "range":
         start = int(s.get("start"))
         end = int(s.get("end"))
@@ -164,25 +239,61 @@ def _resolve_seasons(plan: Dict[str, Any]) -> List[int]:
 
     if mode == "list":
         seasons = s.get("items") or []
-        return [int(x) for x in seasons]
+        return sorted(set(int(x) for x in seasons))
 
     raise ValueError("seasons.mode must be 'range' or 'list'")
 
 
-def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> Dict[str, Any]:
+def _resolve_endpoints(plan: Dict[str, Any], *, override: Optional[str] = None) -> List[Dict[str, Any]]:
+    if not override:
+        endpoints = plan.get("endpoints") or []
+        if not endpoints:
+            raise ValueError("No endpoints configured in backfill plan")
+        return endpoints
+
+    out: List[Dict[str, Any]] = []
+    for endpoint_id in _parse_csv(override):
+        if endpoint_id not in DEFAULT_ENDPOINTS:
+            raise ValueError(f"Unsupported endpoint for approved backfill: {endpoint_id}")
+        out.append(dict(DEFAULT_ENDPOINTS[endpoint_id]))
+
+    if not out:
+        raise ValueError("--endpoints did not resolve to any endpoint")
+
+    return out
+
+
+def run_backfill(
+    *,
+    dry_run: bool,
+    resume: bool,
+    stop_after: Optional[int],
+    league_source: Optional[str] = None,
+    seasons_override: Optional[str] = None,
+    endpoints_override: Optional[str] = None,
+    max_leagues: Optional[int] = None,
+    sleep_ms: int = 0,
+    force: bool = False,
+) -> Dict[str, Any]:
     settings = load_settings()
     plan = _read_json(CONFIG_DIR / "backfill.apifootball.json")
     provider = plan.get("provider", "apifootball")
 
-    client = ApiFootballClient(
-        base_url=settings.apifootball_base_url,
-        api_key=settings.apifootball_key,
-        timeout_s=int(settings.app_defaults.get("http_timeout_s", 30)),
-    )
+    client: Optional[ApiFootballClient] = None
+    if not dry_run:
+        client = ApiFootballClient(
+            base_url=settings.apifootball_base_url,
+            api_key=settings.apifootball_key,
+            timeout_s=int(settings.app_defaults.get("http_timeout_s", 30)),
+        )
 
-    league_ids = _resolve_league_ids(plan)
-    seasons = _resolve_seasons(plan)
-    endpoints = plan.get("endpoints") or []
+    league_ids = _resolve_league_ids(
+        plan,
+        mode_override=league_source,
+        max_leagues_override=max_leagues,
+    )
+    seasons = _resolve_seasons(plan, override=seasons_override)
+    endpoints = _resolve_endpoints(plan, override=endpoints_override)
     paging = plan.get("paging") or {}
     page_param = paging.get("page_param")  # None => sem paginação por parâmetro
     max_pages_safety = int(paging.get("max_pages_safety", 50))
@@ -195,6 +306,8 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
         "calls_fail": 0,
         "pages_ok": 0,
         "pages_fail": 0,
+        "units_planned": 0,
+        "units_skipped_done": 0,
     }
 
     # Monta todas as unidades antes para ter barra de progresso global (Units)
@@ -225,12 +338,35 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
 
         base_params = _fmt_params(params_template, league_id=league_id, season=season)
 
-        # checkpoint
-        ck = _get_checkpoint(provider, ep_id, league_id, season)
-        if resume and ck.get("status") == "done":
+        if dry_run:
+            counters["units_planned"] += 1
+            if stop_after is not None:
+                stop_after -= 1
+                if stop_after <= 0:
+                    return {
+                        "provider": provider,
+                        "dry_run": True,
+                        "calls_external_api": False,
+                        "mutates_database": False,
+                        "stopped_early": True,
+                        "league_source": league_source or (plan.get("league_source") or {}).get("mode", "ids"),
+                        "league_count": len(league_ids),
+                        "season_count": len(seasons),
+                        "endpoint_ids": [str(ep.get("id")) for ep in endpoints],
+                        "league_ids": league_ids,
+                        "seasons": seasons,
+                        "counters": counters,
+                        "units": total_units,
+                    }
             continue
 
-        start_page = int(ck.get("last_page_done") or 0) + 1 if resume else 1
+        # checkpoint
+        ck = _get_checkpoint(provider, ep_id, league_id, season)
+        if resume and not force and ck.get("status") == "done":
+            counters["units_skipped_done"] += 1
+            continue
+
+        start_page = int(ck.get("last_page_done") or 0) + 1 if resume and not force else 1
         seen_total_pages: Optional[int] = ck.get("total_pages")
 
         # Atualiza descrição da unit atual
@@ -272,6 +408,7 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
                     status, payload = 200, {"response": [], "paging": {"current": page, "total": page}}
                 else:
                     try:
+                        assert client is not None
                         status, payload = client.get(path, params)
                     except Exception as ex:
                         status, payload = 599, {"errors": {"exception": str(ex)}, "response": None}
@@ -380,6 +517,9 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
                     )
                     break
 
+                if sleep_ms > 0:
+                    time.sleep(float(sleep_ms) / 1000.0)
+
                 page += 1
 
         finally:
@@ -388,19 +528,80 @@ def run_backfill(*, dry_run: bool, resume: bool, stop_after: Optional[int]) -> D
         if stop_after is not None:
             stop_after -= 1
             if stop_after <= 0:
-                return {"provider": provider, "stopped_early": True, "counters": counters, "units": total_units}
+                return {
+                    "provider": provider,
+                    "dry_run": bool(dry_run),
+                    "calls_external_api": not bool(dry_run),
+                    "mutates_database": not bool(dry_run),
+                    "stopped_early": True,
+                    "league_source": league_source or (plan.get("league_source") or {}).get("mode", "ids"),
+                    "league_count": len(league_ids),
+                    "season_count": len(seasons),
+                    "endpoint_ids": [str(ep.get("id")) for ep in endpoints],
+                    "league_ids": league_ids,
+                    "seasons": seasons,
+                    "counters": counters,
+                    "units": total_units,
+                }
 
-    return {"provider": provider, "stopped_early": False, "counters": counters, "units": total_units}
+    return {
+        "provider": provider,
+        "dry_run": bool(dry_run),
+        "calls_external_api": not bool(dry_run),
+        "mutates_database": not bool(dry_run),
+        "stopped_early": False,
+        "league_source": league_source or (plan.get("league_source") or {}).get("mode", "ids"),
+        "league_count": len(league_ids),
+        "season_count": len(seasons),
+        "endpoint_ids": [str(ep.get("id")) for ep in endpoints],
+        "league_ids": league_ids,
+        "seasons": seasons,
+        "counters": counters,
+        "units": total_units,
+    }
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Multi-season backfill (API-Football -> RAW -> CORE) with checkpoint")
-    ap.add_argument("--dry-run", action="store_true")
+    ap = argparse.ArgumentParser(description="Multi-season backfill (API-Football -> RAW) with checkpoint")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview only; does not call API and does not write RAW/checkpoints",
+    )
     ap.add_argument("--resume", action="store_true", help="resume using raw.backfill_checkpoint")
+    ap.add_argument("--force", action="store_true", help="ignore done checkpoints and request units again")
     ap.add_argument("--stop-after", type=int, default=None, help="stop after N endpoint units (debug)")
+    ap.add_argument(
+        "--league-source",
+        default=None,
+        choices=["ids", "from_core", "approved", "from_approved_league_map"],
+        help="override config league_source.mode",
+    )
+    ap.add_argument("--max-leagues", type=int, default=None, help="max leagues when using approved/from_core")
+    ap.add_argument(
+        "--seasons",
+        default=None,
+        help='override seasons. Examples: "2021-2026" or "2021,2022,2023"',
+    )
+    ap.add_argument(
+        "--endpoints",
+        default=None,
+        help='override endpoints CSV. Supported: "teams,fixtures"',
+    )
+    ap.add_argument("--sleep-ms", type=int, default=0, help="optional sleep between paged calls")
     args = ap.parse_args()
 
-    result = run_backfill(dry_run=bool(args.dry_run), resume=bool(args.resume), stop_after=args.stop_after)
+    result = run_backfill(
+        dry_run=bool(args.dry_run),
+        resume=bool(args.resume),
+        stop_after=args.stop_after,
+        league_source=args.league_source,
+        seasons_override=args.seasons,
+        endpoints_override=args.endpoints,
+        max_leagues=args.max_leagues,
+        sleep_ms=int(args.sleep_ms or 0),
+        force=bool(args.force),
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

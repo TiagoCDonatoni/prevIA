@@ -287,6 +287,7 @@ def run_core_etl(
     limit: int,
     league_ids: Optional[List[int]] = None,
     seasons: Optional[List[int]] = None,
+    dry_run: bool = False,
 ) -> Dict[str, int]:
     bodies = _load_raw_bodies(
         provider=provider,
@@ -305,12 +306,21 @@ def run_core_etl(
             mapped = [m for m in mapped if int(m["league_id"]) in allow]
 
         mapped = _dedupe_rows_keep_first(mapped, "league_id")
+
+        if dry_run:
+            return {"raw_rows": len(bodies), "items": len(mapped), "upserts": 0}
+
         upserts = _apply_upserts(LEAGUES_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 
     if endpoint == "teams":
         mapped = [map_team(it) for b in bodies for it in _iter_response_items(b)]
         mapped = [m for m in mapped if m is not None]
+        mapped = _dedupe_rows_keep_first(mapped, "team_id")
+
+        if dry_run:
+            return {"raw_rows": len(bodies), "items": len(mapped), "upserts": 0}
+
         upserts = _apply_upserts(TEAMS_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 
@@ -325,7 +335,12 @@ def run_core_etl(
         if seasons:
             allow_seasons = set(int(x) for x in seasons)
             mapped = [m for m in mapped if int(m["season"]) in allow_seasons]
+
         mapped = _dedupe_rows_keep_first(mapped, "fixture_id")
+
+        if dry_run:
+            return {"raw_rows": len(bodies), "items": len(mapped), "upserts": 0}
+
         upserts = _apply_upserts(FIXTURES_UPSERT_SQL, mapped)
         return {"raw_rows": len(bodies), "items": len(mapped), "upserts": upserts}
 
