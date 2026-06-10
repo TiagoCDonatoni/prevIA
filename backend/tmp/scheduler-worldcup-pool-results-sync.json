@@ -1,0 +1,17 @@
+{
+    "requested_by":  "cloud_scheduler_worldcup_pool_results_sync",
+    "job_kwargs":  {
+                       "lookback_days":  14,
+                       "competition_key":  "fifa_world_cup_2026",
+                       "batch_size":  20,
+                       "min_minutes_after_kickoff":  100,
+                       "limit":  60,
+                       "confirmation_delay_minutes":  1,
+                       "dry_run":  false
+                   },
+    "trigger_source":  "scheduler",
+    "job_key":  "worldcup_pool_results_sync",
+    "payload":  {
+
+                }
+}
