@@ -341,6 +341,9 @@ export type WorldCupPoolParticipantMatch = {
   lock_at_utc?: string | null;
   status: string;
   is_locked: boolean;
+  result_home_score?: number | null;
+  result_away_score?: number | null;
+  points?: number | null;
   prediction?: WorldCupPoolMatchPrediction | null;
 };
 
@@ -379,6 +382,9 @@ export type WorldCupPoolRankingItem = {
   display_name: string;
   points: number;
   predictions_count: number;
+  exact_score_hits: number;
+  outcome_hits: number;
+  exact_team_score_hits: number;
   last_prediction_at_utc?: string | null;
   is_me: boolean;
 };
@@ -389,6 +395,43 @@ export type WorldCupPoolRankingResponse = {
   participant: WorldCupPoolDashboardParticipant;
   me: WorldCupPoolRankingItem;
   items: WorldCupPoolRankingItem[];
+  pagination: WorldCupPoolPagination;
+};
+
+export type WorldCupPoolVisiblePredictionItem = {
+  match_id: number;
+  match_key: string;
+  official_match_no?: number | null;
+  display_order: number;
+  phase: string;
+  group_code?: string | null;
+  bracket_label?: string | null;
+  home_label: string;
+  away_label: string;
+  kickoff_utc?: string | null;
+  lock_at_utc?: string | null;
+  match_status: string;
+  predicted_home_score: number;
+  predicted_away_score: number;
+  result_home_score?: number | null;
+  result_away_score?: number | null;
+  points?: number | null;
+  updated_at_utc?: string | null;
+  locked_at_utc?: string | null;
+};
+
+export type WorldCupPoolVisiblePredictionsResponse = {
+  ok: boolean;
+  pool: WorldCupPoolInvitePool;
+  participant: WorldCupPoolDashboardParticipant;
+  target_participant: {
+    id: number;
+    display_name: string;
+  };
+  items: WorldCupPoolVisiblePredictionItem[];
+  summary: {
+    visible_predictions: number;
+  };
   pagination: WorldCupPoolPagination;
 };
 
@@ -573,6 +616,33 @@ export async function fetchWorldCupPoolParticipantRanking(
   });
 }
 
+export async function fetchWorldCupPoolParticipantLockedPredictions(
+  inviteToken: string,
+  participantId: number,
+  options?: {
+    page?: number;
+    pageSize?: number;
+  }
+): Promise<WorldCupPoolVisiblePredictionsResponse> {
+  const url = new URL(
+    `/public/worldcup-pool/invites/${encodeURIComponent(inviteToken)}/participant/ranking/${encodeURIComponent(
+      String(participantId)
+    )}/locked-predictions`,
+    API_BASE_URL
+  );
+
+  url.searchParams.set("page", String(options?.page || 1));
+  url.searchParams.set("page_size", String(options?.pageSize || 10));
+
+  return fetchJson<WorldCupPoolVisiblePredictionsResponse>(url.toString(), {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+}
+
 export type WorldCupPoolAccessRole = "organizer" | "participant";
 
 export type WorldCupPoolMyPool = {
@@ -673,6 +743,9 @@ export type WorldCupPoolOrganizerParticipant = {
   status: string;
   points: number;
   predictions_count: number;
+  exact_score_hits: number;
+  outcome_hits: number;
+  exact_team_score_hits: number;
   available_matches: number;
   joined_at_utc?: string | null;
   last_seen_at_utc?: string | null;

@@ -34,6 +34,8 @@ const PREVIEW_IMAGES = [
   previewAnalyticsImg,
 ] as const;
 
+const LANDING_PREVIEW_AUTOPLAY_MS = 5000;
+
 type LandingHeroIconName =
   | "chart"
   | "target"
@@ -489,13 +491,37 @@ function formatLandingPrice(
   currency: PricingCurrency,
 ): string {
   const locale = currency === "BRL" ? "pt-BR" : "en-US";
+  const hasFractionalPart = Math.abs(value - Math.round(value)) > 0.001;
+  const fractionDigits = currency === "BRL" || hasFractionalPart ? 2 : 0;
 
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
-    minimumFractionDigits: currency === "BRL" ? 2 : 0,
-    maximumFractionDigits: currency === "BRL" ? 2 : 0,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
   }).format(value);
+}
+
+function getBillingCycleDurationInMonths(cycle: BillingCycle): number {
+  if (cycle === "annual") return 12;
+  if (cycle === "quarterly") return 3;
+  return 1;
+}
+
+function getLandingBillingDiscountPercent(
+  planId: PaidPlanId,
+  currency: PricingCurrency,
+  cycle: BillingCycle,
+): number | null {
+  if (cycle === "monthly") return null;
+
+  const monthlyValue = LANDING_PLAN_PRICES[planId][currency].monthly;
+  const cycleValue = LANDING_PLAN_PRICES[planId][currency][cycle];
+  const regularValue = monthlyValue * getBillingCycleDurationInMonths(cycle);
+
+  if (regularValue <= 0 || cycleValue >= regularValue) return null;
+
+  return Math.round(((regularValue - cycleValue) / regularValue) * 100);
 }
 
 function getLandingPricingCopy(lang: LandingLang) {
@@ -513,10 +539,17 @@ function getLandingPricingCopy(lang: LandingLang) {
         monthly: "Mensal",
       },
       billingNotes: {
-        annual: "cobrança anual",
-        quarterly: "cobrança trimestral",
+        annual: "no plano anual",
+        quarterly: "no plano trimestral",
         monthly: "cobrança mensal",
       },
+      billingTotals: {
+        annual: (price: string) => `cobrado ${price}/ano`,
+        quarterly: (price: string) => `cobrado ${price}/trimestre`,
+        monthly: () => "",
+      },
+      discountLabel: (percent: number) => `economize ${percent}%`,
+      monthlyPeriod: "/mês",
       free: "Grátis",
       freeAnon: "Teste grátis",
       noBilling: "sem cobrança",
@@ -534,10 +567,17 @@ function getLandingPricingCopy(lang: LandingLang) {
         monthly: "Monthly",
       },
       billingNotes: {
-        annual: "billed yearly",
-        quarterly: "billed quarterly",
+        annual: "on the annual plan",
+        quarterly: "on the quarterly plan",
         monthly: "billed monthly",
       },
+      billingTotals: {
+        annual: (price: string) => `billed ${price}/year`,
+        quarterly: (price: string) => `billed ${price}/quarter`,
+        monthly: () => "",
+      },
+      discountLabel: (percent: number) => `save ${percent}%`,
+      monthlyPeriod: "/mo",
       free: "Free",
       freeAnon: "Free trial",
       noBilling: "no charge",
@@ -555,10 +595,17 @@ function getLandingPricingCopy(lang: LandingLang) {
         monthly: "Mensual",
       },
       billingNotes: {
-        annual: "cobro anual",
-        quarterly: "cobro trimestral",
+        annual: "en el plan anual",
+        quarterly: "en el plan trimestral",
         monthly: "cobro mensual",
       },
+      billingTotals: {
+        annual: (price: string) => `cobrado ${price}/año`,
+        quarterly: (price: string) => `cobrado ${price}/trimestre`,
+        monthly: () => "",
+      },
+      discountLabel: (percent: number) => `ahorra ${percent}%`,
+      monthlyPeriod: "/mes",
       free: "Gratis",
       freeAnon: "Prueba gratis",
       noBilling: "sin cobro",
@@ -580,6 +627,9 @@ function getLandingPlanPricePresentation(
       amount: showPublicFreeAnon ? copy.freeAnon : copy.free,
       note: copy.noBilling,
       isFree: true,
+      period: "",
+      billingDetail: "",
+      discount: "",
     };
   }
 
@@ -588,6 +638,9 @@ function getLandingPlanPricePresentation(
       amount: copy.free,
       note: copy.noBilling,
       isFree: true,
+      period: "",
+      billingDetail: "",
+      discount: "",
     };
   }
 
@@ -600,10 +653,17 @@ function getLandingPlanPricePresentation(
   }
 
   const value = LANDING_PLAN_PRICES[planId][currency][cycle];
+  const cycleDurationInMonths = getBillingCycleDurationInMonths(cycle);
+  const displayValue = cycle === "monthly" ? value : value / cycleDurationInMonths;
+  const discountPercent = getLandingBillingDiscountPercent(planId, currency, cycle);
 
   return {
-    amount: formatLandingPrice(value, currency),
+    amount: formatLandingPrice(displayValue, currency),
     note: copy.billingNotes[cycle],
+    period: copy.monthlyPeriod,
+    billingDetail:
+      cycle === "monthly" ? "" : copy.billingTotals[cycle](formatLandingPrice(value, currency)),
+    discount: discountPercent ? copy.discountLabel(discountPercent) : "",
     isFree: false,
   };
 }
@@ -676,6 +736,8 @@ export function PublicHomePage() {
     DEFAULT_CURRENCY_BY_LANG[landingLang],
   );
   const [billingCycle, setBillingCycle] = React.useState<BillingCycle>("annual");
+  const [activePreviewIndex, setActivePreviewIndex] = React.useState(0);
+  const [isPreviewTourPaused, setIsPreviewTourPaused] = React.useState(false);
   const [isLeagueCoverageModalOpen, setIsLeagueCoverageModalOpen] = React.useState(false);
   const [leagueCoverageItems, setLeagueCoverageItems] = React.useState<ProductLeagueItem[]>([]);
   const [leagueCoverageCount, setLeagueCoverageCount] = React.useState<number | null>(null);
@@ -780,7 +842,34 @@ export function PublicHomePage() {
    
   const heroVisualTitle = copy.home.preview.items[0]?.title ?? copy.home.hero.sideTitle;
   const previewItems = copy.home.preview.items.slice(0, 3);
+  const activePreviewItem =
+    previewItems[activePreviewIndex] ??
+    previewItems[0] ?? {
+      title: "",
+      body: "",
+      badge: "",
+    };
+  const activePreviewImage = PREVIEW_IMAGES[activePreviewIndex] ?? PREVIEW_IMAGES[0];
   const audienceLogicCopy = getLandingAudienceLogicCopy(landingLang);
+
+  React.useEffect(() => {
+    if (previewItems.length <= 1 || isPreviewTourPaused) {
+      return;
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setActivePreviewIndex((current) => (current + 1) % previewItems.length);
+    }, LANDING_PREVIEW_AUTOPLAY_MS);
+
+    return () => window.clearInterval(timer);
+  }, [isPreviewTourPaused, previewItems.length]);
 
   const SEO = {
     pt: {
@@ -1055,8 +1144,30 @@ export function PublicHomePage() {
                     pricePresentation.isFree ? " is-free" : ""
                   }`}
                 >
-                  <div className="landing-plan-price-amount">{pricePresentation.amount}</div>
+                  <div className="landing-plan-price-main">
+                    <span className="landing-plan-price-amount">{pricePresentation.amount}</span>
+                    {pricePresentation.period ? (
+                      <span className="landing-plan-price-period">{pricePresentation.period}</span>
+                    ) : null}
+                  </div>
+
                   <div className="landing-plan-price-note">{pricePresentation.note}</div>
+
+                  {pricePresentation.billingDetail || pricePresentation.discount ? (
+                    <div className="landing-plan-price-detail-row">
+                      {pricePresentation.billingDetail ? (
+                        <span className="landing-plan-price-detail">
+                          {pricePresentation.billingDetail}
+                        </span>
+                      ) : null}
+
+                      {pricePresentation.discount ? (
+                        <span className="landing-plan-price-discount">
+                          {pricePresentation.discount}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <p className="landing-plan-body">
@@ -1215,42 +1326,92 @@ export function PublicHomePage() {
       </section>
 
       <section className="landing-section landing-preview-section">
-        <div className="landing-section-head compact">
-          <div className="public-eyebrow">{copy.home.preview.eyebrow}</div>
-          <h2 className="landing-section-title">{copy.home.preview.title}</h2>
-          <p className="landing-section-body">{copy.home.preview.body}</p>
+        <div className="landing-preview-tour-head">
+          <div className="landing-section-head compact">
+            <div className="public-eyebrow">{copy.home.preview.eyebrow}</div>
+            <h2 className="landing-section-title">{copy.home.preview.title}</h2>
+            <p className="landing-section-body">{copy.home.preview.body}</p>
+          </div>
+
+          <div className="landing-preview-tabs" aria-label={copy.home.preview.eyebrow}>
+            {previewItems.map((item, index) => (
+              <button
+                key={item.badge}
+                type="button"
+                className={`landing-preview-tab${
+                  index === activePreviewIndex ? " is-active" : ""
+                }`}
+                onClick={() => {
+                  setActivePreviewIndex(index);
+                  setIsPreviewTourPaused(false);
+                }}
+                aria-pressed={index === activePreviewIndex}
+              >
+                <span className="landing-preview-tab-index">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <span>{item.badge}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="landing-preview-grid">
-          {previewItems.map((item, index) => {
-            const imageSrc = PREVIEW_IMAGES[index];
+        <div
+          className="landing-preview-tour-shell"
+          onMouseEnter={() => setIsPreviewTourPaused(true)}
+          onMouseLeave={() => setIsPreviewTourPaused(false)}
+          onFocus={() => setIsPreviewTourPaused(true)}
+          onBlur={() => setIsPreviewTourPaused(false)}
+        >
+          <div className="landing-preview-tour-stage">
+            <div className="landing-preview-tour-browser">
+              <span />
+              <span />
+              <span />
+            </div>
 
-            return (
-              <article key={item.title} className="landing-preview-card">
-                <div className="landing-preview-frame">
-                  <div className="landing-preview-media">
-                    {imageSrc ? (
-                      <img
-                        src={imageSrc}
-                        alt={item.title}
-                        className="landing-preview-image"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="landing-preview-placeholder">{item.badge}</div>
-                    )}
+            <div className="landing-preview-tour-media">
+              {activePreviewImage ? (
+                <img
+                  src={activePreviewImage}
+                  alt={activePreviewItem.title}
+                  className="landing-preview-tour-image"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="landing-preview-placeholder">{activePreviewItem.badge}</div>
+              )}
+            </div>
+          </div>
+
+          <aside className="landing-preview-tour-copy">
+            <div className="landing-preview-tour-badge">{activePreviewItem.badge}</div>
+            <h3 className="landing-preview-tour-title">{activePreviewItem.title}</h3>
+            <p className="landing-preview-tour-body">{activePreviewItem.body}</p>
+
+            <div className="landing-preview-tour-steps">
+              {copy.home.howItWorks.steps.map((item) => (
+                <article key={item.step} className="landing-preview-tour-step">
+                  <span className="landing-preview-tour-step-number">{item.step}</span>
+                  <div>
+                    <h4>{item.title}</h4>
+                    <p>{item.body}</p>
                   </div>
-                </div>
+                </article>
+              ))}
+            </div>
 
-                <div className="landing-preview-kicker">{item.badge}</div>
-                <h3 className="landing-card-title">{item.title}</h3>
-                <p className="landing-card-body">{item.body}</p>
-              </article>
-            );
-          })}
+            <Link to={`/${currentLang}/how-it-works`} className="landing-preview-tour-link">
+              {copy.home.howItWorks.cta}
+            </Link>
+          </aside>
         </div>
       </section>
-                      
+
+      {/*
+        Bloco "Como funciona" preservado para possível reativação futura.
+        Por ora, os passos foram incorporados ao tour "Veja o produto".
+
         <section className="landing-section landing-howitworks-teaser-section">
           <div className="landing-howitworks-teaser-shell">
             <div className="landing-howitworks-teaser-copy">
@@ -1277,49 +1438,61 @@ export function PublicHomePage() {
             </div>
           </div>
         </section>
+      */}
 
-      <div id="novidades">
+      <div id="novidades" className="landing-updates-anchor">
         <BetaLeadForm lang={currentLang} />
       </div>
 
-      <section className="landing-final-cta">
-        <div className="landing-final-cta-card">
-          <div className="landing-final-cta-main">
-            <div className="public-eyebrow">{copy.home.finalCta.eyebrow}</div>
-            <h2 className="landing-final-cta-title">{copy.home.finalCta.title}</h2>
-            <p className="landing-final-cta-body">{copy.home.finalCta.body}</p>
+      {/*
+        CTA final preservado para possível reativação futura.
 
-            <div className="public-actions">
-              <Link to="/app" className="public-btn public-btn-primary">
-                {copy.home.finalCta.primaryCta}
-              </Link>
+        No fluxo atual, ele ficou redundante com:
+        - Hero
+        - Teste grátis
+        - Planos
+        - Tour do produto
+        - Bloco de novidades
 
-              {showPublicFreeAnon ? (
-                <a href="#teste-gratis" className="public-btn public-btn-secondary">
-                  {copy.home.finalCta.secondaryCta}
-                </a>
-              ) : (
-                <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-secondary">
-                  {copy.home.finalCta.secondaryCta}
+        <section className="landing-final-cta">
+          <div className="landing-final-cta-card">
+            <div className="landing-final-cta-main">
+              <div className="public-eyebrow">{copy.home.finalCta.eyebrow}</div>
+              <h2 className="landing-final-cta-title">{copy.home.finalCta.title}</h2>
+              <p className="landing-final-cta-body">{copy.home.finalCta.body}</p>
+
+              <div className="public-actions">
+                <Link to="/app" className="public-btn public-btn-primary">
+                  {copy.home.finalCta.primaryCta}
                 </Link>
-              )}
+
+                {showPublicFreeAnon ? (
+                  <a href="#teste-gratis" className="public-btn public-btn-secondary">
+                    {copy.home.finalCta.secondaryCta}
+                  </a>
+                ) : (
+                  <Link to={`/${currentLang}/glossary`} className="public-btn public-btn-secondary">
+                    {copy.home.finalCta.secondaryCta}
+                  </Link>
+                )}
+              </div>
             </div>
+
+            <aside className="landing-final-cta-side">
+              <div className="landing-final-cta-points">
+                {copy.home.finalCta.points.map((item) => (
+                  <div key={item} className="landing-final-cta-point">
+                    <span className="landing-final-cta-point-dot" aria-hidden="true" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="landing-final-cta-note">{copy.home.finalCta.note}</div>
+            </aside>
           </div>
-
-          <aside className="landing-final-cta-side">
-            <div className="landing-final-cta-points">
-              {copy.home.finalCta.points.map((item) => (
-                <div key={item} className="landing-final-cta-point">
-                  <span className="landing-final-cta-point-dot" aria-hidden="true" />
-                  <span>{item}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="landing-final-cta-note">{copy.home.finalCta.note}</div>
-          </aside>
-        </div>
-      </section>
+        </section>
+      */}
 
       {isLeagueCoverageModalOpen ? (
         <div

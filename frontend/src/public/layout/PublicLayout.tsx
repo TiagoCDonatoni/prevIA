@@ -610,10 +610,10 @@ export function PublicLayout() {
               <p className="public-footer-body">{footer.body}</p>
             </div>
 
-            <div className="public-footer-col">
+            <div className="public-footer-col public-footer-nav-col">
               <div className="public-footer-title">{footer.navigationTitle}</div>
 
-              <div className="public-footer-links">
+              <div className="public-footer-links public-footer-links-grid">
                 <Link to={`/${currentLang}`} className="public-footer-link">
                   {footer.links.home}
                 </Link>
@@ -639,6 +639,7 @@ export function PublicLayout() {
                 <Link to={`/${currentLang}/contact`} className="public-footer-link">
                   {footer.links.contact}
                 </Link>
+
                 <Link
                   to={
                     currentLang === "pt"
@@ -654,7 +655,7 @@ export function PublicLayout() {
               </div>
             </div>
 
-            <div className="public-footer-col">
+            <div className="public-footer-col public-footer-social-col">
               <div className="public-footer-title">{footer.socialTitle}</div>
 
               <div className="public-footer-socials">

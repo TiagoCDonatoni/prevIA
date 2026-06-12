@@ -10,7 +10,7 @@ const COPY = {
   pt: {
     eyebrow: "Novidades do produto",
     title: "Receba novidades do prevIA e acompanhe a evolução.",
-    body: "",
+    body: "Acompanhe melhorias do produto, novas ligas, recursos em desenvolvimento e avisos importantes do prevIA.",
     points: [
       "Cadastro opcional",
       "Sem spam",
@@ -31,7 +31,7 @@ const COPY = {
   en: {
     eyebrow: "Product updates",
     title: "Get prevIA updates and follow the product evolution.",
-    body: "",
+    body: "Follow product improvements, new leagues, upcoming features, and important prevIA updates.",
     points: [
       "Optional signup",
       "No spam",
@@ -52,7 +52,7 @@ const COPY = {
   es: {
     eyebrow: "Novedades del producto",
     title: "Recibe novedades de prevIA y sigue la evolución del producto.",
-    body: "",
+    body: "Sigue mejoras del producto, nuevas ligas, recursos en desarrollo y novedades importantes de prevIA.",
     points: [
       "Registro opcional",
       "Sin spam",
@@ -112,58 +112,63 @@ export function BetaLeadForm({ lang }: Props) {
   }
 
   return (
-    <section className="landing-section">
-      <div className="landing-section-head compact">
-        <div className="public-eyebrow">{copy.eyebrow}</div>
-        <h2 className="landing-section-title">{copy.title}</h2>
-        {null}
-      </div>
+    <section className="landing-section landing-updates-section">
+      <div className="landing-updates-card">
+        <div className="landing-updates-copy">
+          <div className="public-eyebrow">{copy.eyebrow}</div>
+          <h2 className="landing-section-title landing-updates-title">{copy.title}</h2>
+          <p className="landing-section-body landing-updates-body">{copy.body}</p>
 
-      <form className="beta-form-card beta-form-card-strong beta-form-card-compact" onSubmit={onSubmit}>
-        <div className="beta-form-topbar">
-          <div className="beta-form-helper">{copy.helper}</div>
-
-          <div className="beta-form-points">
+          <div className="landing-updates-points">
             {copy.points.map((item) => (
-              <span key={item} className="beta-form-point">
+              <span key={item} className="landing-updates-point">
                 {item}
               </span>
             ))}
           </div>
         </div>
 
-        <div className="beta-form-grid beta-form-grid-compact">
-          <label className="beta-field">
-            <span>{copy.name}</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={copy.namePlaceholder}
-            />
-          </label>
+        <form
+          className="beta-form-card beta-form-card-compact landing-updates-form"
+          onSubmit={onSubmit}
+        >
+          <div className="landing-updates-form-head">
+            <div className="beta-form-helper">{copy.helper}</div>
+          </div>
 
-          <label className="beta-field">
-            <span>{copy.email}</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={copy.emailPlaceholder}
-            />
-          </label>
-        </div>
+          <div className="beta-form-grid beta-form-grid-compact">
+            <label className="beta-field">
+              <span>{copy.name}</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={copy.namePlaceholder}
+              />
+            </label>
 
-        <div className="beta-form-actions">
-          <button type="submit" className="public-btn public-btn-primary" disabled={disabled}>
-            {busy ? copy.sending : copy.submit}
-          </button>
+            <label className="beta-field">
+              <span>{copy.email}</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder={copy.emailPlaceholder}
+              />
+            </label>
+          </div>
 
-          <div className="beta-form-privacy">{copy.privacy}</div>
-        </div>
+          <div className="beta-form-actions">
+            <button type="submit" className="public-btn public-btn-primary" disabled={disabled}>
+              {busy ? copy.sending : copy.submit}
+            </button>
 
-        {success ? <div className="beta-form-success">{success}</div> : null}
-        {error ? <div className="beta-form-error">{error}</div> : null}
-      </form>
+            <div className="beta-form-privacy">{copy.privacy}</div>
+          </div>
+
+          {success ? <div className="beta-form-success">{success}</div> : null}
+          {error ? <div className="beta-form-error">{error}</div> : null}
+        </form>
+      </div>
     </section>
   );
 }

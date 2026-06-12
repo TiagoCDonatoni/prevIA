@@ -241,6 +241,9 @@ class WorldCupPoolParticipantMatch(BaseModel):
     lock_at_utc: Optional[str] = None
     status: str
     is_locked: bool
+    result_home_score: Optional[int] = None
+    result_away_score: Optional[int] = None
+    points: Optional[int] = None
     prediction: Optional[WorldCupPoolMatchPrediction] = None
 
 
@@ -278,6 +281,9 @@ class WorldCupPoolRankingItem(BaseModel):
     display_name: str
     points: int
     predictions_count: int
+    exact_score_hits: int = 0
+    outcome_hits: int = 0
+    exact_team_score_hits: int = 0
     last_prediction_at_utc: Optional[str] = None
     is_me: bool = False
 
@@ -288,6 +294,46 @@ class WorldCupPoolRankingResponse(BaseModel):
     participant: WorldCupPoolDashboardParticipant
     me: WorldCupPoolRankingItem
     items: list[WorldCupPoolRankingItem]
+    pagination: WorldCupPoolPagination
+
+class WorldCupPoolVisiblePredictionsParticipant(BaseModel):
+    id: int
+    display_name: str
+
+
+class WorldCupPoolVisiblePredictionItem(BaseModel):
+    match_id: int
+    match_key: str
+    official_match_no: Optional[int] = None
+    display_order: int
+    phase: str
+    group_code: Optional[str] = None
+    bracket_label: Optional[str] = None
+    home_label: str
+    away_label: str
+    kickoff_utc: Optional[str] = None
+    lock_at_utc: Optional[str] = None
+    match_status: str
+    predicted_home_score: int
+    predicted_away_score: int
+    result_home_score: Optional[int] = None
+    result_away_score: Optional[int] = None
+    points: Optional[int] = None
+    updated_at_utc: Optional[str] = None
+    locked_at_utc: Optional[str] = None
+
+
+class WorldCupPoolVisiblePredictionsSummary(BaseModel):
+    visible_predictions: int
+
+
+class WorldCupPoolVisiblePredictionsResponse(BaseModel):
+    ok: bool = True
+    pool: WorldCupPoolInvitePool
+    participant: WorldCupPoolDashboardParticipant
+    target_participant: WorldCupPoolVisiblePredictionsParticipant
+    items: list[WorldCupPoolVisiblePredictionItem]
+    summary: WorldCupPoolVisiblePredictionsSummary
     pagination: WorldCupPoolPagination
 
 class WorldCupPoolOrganizerPool(BaseModel):
@@ -333,6 +379,9 @@ class WorldCupPoolOrganizerParticipant(BaseModel):
     status: str
     points: int
     predictions_count: int
+    exact_score_hits: int = 0
+    outcome_hits: int = 0
+    exact_team_score_hits: int = 0
     available_matches: int
     joined_at_utc: Optional[str] = None
     last_seen_at_utc: Optional[str] = None
@@ -3467,8 +3516,8 @@ def list_worldcup_pool_participant_matches(
       (
         m.status = 'finished'
         OR (
-          COALESCE(m.lock_at_utc, m.kickoff_utc) IS NOT NULL
-          AND COALESCE(m.lock_at_utc, m.kickoff_utc) <= NOW()
+          COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') IS NOT NULL
+          AND COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') <= NOW()
         )
       )
     """
@@ -3544,13 +3593,23 @@ def list_worldcup_pool_participant_matches(
           m.match_key
         ) AS away_label,
         m.kickoff_utc,
-        COALESCE(m.lock_at_utc, m.kickoff_utc) AS lock_at_utc,
+        COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') AS lock_at_utc,
         m.status,
         {lock_expr} AS is_locked,
         pr.predicted_home_score,
         pr.predicted_away_score,
         pr.updated_at_utc,
-        pr.locked_at_utc
+        pr.locked_at_utc,
+        m.home_score,
+        m.away_score,
+        CASE
+          WHEN m.status = 'finished'
+           AND m.home_score IS NOT NULL
+           AND m.away_score IS NOT NULL
+           AND pr.id IS NOT NULL
+          THEN pr.points
+          ELSE NULL
+        END AS visible_points
       FROM worldcup_pool.matches m
       LEFT JOIN worldcup_pool.predictions pr
         ON pr.match_id = m.id
@@ -3630,6 +3689,9 @@ def list_worldcup_pool_participant_matches(
                 lock_at_utc=_iso(row[10]),
                 status=str(row[11]),
                 is_locked=bool(row[12]),
+                result_home_score=int(row[17]) if row[17] is not None else None,
+                result_away_score=int(row[18]) if row[18] is not None else None,
+                points=int(row[19]) if row[19] is not None else None,
                 prediction=prediction,
             )
         )
@@ -3685,12 +3747,12 @@ def upsert_worldcup_pool_prediction(
       SELECT
         m.id,
         m.match_key,
-        COALESCE(m.lock_at_utc, m.kickoff_utc) AS lock_at_utc,
+        COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') AS lock_at_utc,
         (
           m.status = 'finished'
           OR (
-            COALESCE(m.lock_at_utc, m.kickoff_utc) IS NOT NULL
-            AND COALESCE(m.lock_at_utc, m.kickoff_utc) <= NOW()
+            COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') IS NOT NULL
+            AND COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') <= NOW()
           )
         ) AS is_locked,
         m.status
@@ -3867,30 +3929,96 @@ def get_worldcup_pool_participant_ranking(
     """
 
     ranking_cte = """
-      WITH ranked AS (
+      WITH participant_scores AS (
         SELECT
           pt.id AS participant_id,
           pt.display_name,
+          pt.joined_at_utc,
           COALESCE(SUM(pr.points), 0)::int AS points,
           COUNT(DISTINCT pr.id)::int AS predictions_count,
-          MAX(pr.updated_at_utc) AS last_prediction_at_utc,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              COALESCE(SUM(pr.points), 0) DESC,
-              COUNT(pr.id) DESC,
-              pt.joined_at_utc ASC,
-              pt.id ASC
-          )::int AS rank_position
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_home_score = m.home_score
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_score_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND (
+                 CASE
+                   WHEN pr.predicted_home_score > pr.predicted_away_score THEN 'H'
+                   WHEN pr.predicted_home_score < pr.predicted_away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               ) = (
+                 CASE
+                   WHEN m.home_score > m.away_score THEN 'H'
+                   WHEN m.home_score < m.away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               )
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS outcome_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_home_score = m.home_score
+              THEN 1 ELSE 0
+            END
+            +
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_team_score_hits,
+          MAX(pr.updated_at_utc) AS last_prediction_at_utc
         FROM worldcup_pool.participants pt
         LEFT JOIN worldcup_pool.predictions pr
           ON pr.pool_id = pt.pool_id
          AND pr.participant_id = pt.id
+        LEFT JOIN worldcup_pool.matches m
+          ON m.id = pr.match_id
         WHERE pt.pool_id = %s
           AND pt.status = 'active'
         GROUP BY
           pt.id,
           pt.display_name,
           pt.joined_at_utc
+      ),
+      ranked AS (
+        SELECT
+          participant_id,
+          display_name,
+          points,
+          predictions_count,
+          exact_score_hits,
+          outcome_hits,
+          exact_team_score_hits,
+          last_prediction_at_utc,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              points DESC,
+              exact_score_hits DESC,
+              outcome_hits DESC,
+              exact_team_score_hits DESC,
+              predictions_count DESC,
+              joined_at_utc ASC,
+              participant_id ASC
+          )::int AS rank_position
+        FROM participant_scores
       )
     """
 
@@ -3901,6 +4029,9 @@ def get_worldcup_pool_participant_ranking(
         display_name,
         points,
         predictions_count,
+        exact_score_hits,
+        outcome_hits,
+        exact_team_score_hits,
         last_prediction_at_utc,
         participant_id = %s AS is_me
       FROM ranked
@@ -3916,6 +4047,9 @@ def get_worldcup_pool_participant_ranking(
         display_name,
         points,
         predictions_count,
+        exact_score_hits,
+        outcome_hits,
+        exact_team_score_hits,
         last_prediction_at_utc,
         true AS is_me
       FROM ranked
@@ -3975,8 +4109,11 @@ def get_worldcup_pool_participant_ranking(
             display_name=str(row[2]),
             points=int(row[3] or 0),
             predictions_count=int(row[4] or 0),
-            last_prediction_at_utc=_iso(row[5]),
-            is_me=bool(row[6]),
+            exact_score_hits=int(row[5] or 0),
+            outcome_hits=int(row[6] or 0),
+            exact_team_score_hits=int(row[7] or 0),
+            last_prediction_at_utc=_iso(row[8]),
+            is_me=bool(row[9]),
         )
 
     total_pages = (total_items + page_size - 1) // page_size if total_items > 0 else 0
@@ -3987,6 +4124,194 @@ def get_worldcup_pool_participant_ranking(
         participant=participant,
         me=_ranking_item_from_row(me_row),
         items=[_ranking_item_from_row(row) for row in item_rows],
+        pagination=WorldCupPoolPagination(
+            page=page,
+            page_size=page_size,
+            total_items=total_items,
+            total_pages=total_pages,
+        ),
+    )
+
+@router.get(
+    "/invites/{invite_token}/participant/ranking/{target_participant_id}/locked-predictions",
+    response_model=WorldCupPoolVisiblePredictionsResponse,
+)
+def get_worldcup_pool_participant_locked_predictions(
+    invite_token: str,
+    target_participant_id: int,
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=20),
+) -> WorldCupPoolVisiblePredictionsResponse:
+    pool, participant = _require_participant_context(invite_token, request)
+
+    current_lang = str(pool.lang or "pt")
+    offset = (page - 1) * page_size
+
+    lock_expr = """
+      (
+        m.status = 'finished'
+        OR (
+          COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') IS NOT NULL
+          AND COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') <= NOW()
+        )
+      )
+    """
+
+    target_sql = """
+      SELECT id, display_name
+      FROM worldcup_pool.participants
+      WHERE id = %s
+        AND pool_id = %s
+        AND status = 'active'
+      LIMIT 1
+    """
+
+    count_sql = f"""
+      SELECT COUNT(pr.id)
+      FROM worldcup_pool.predictions pr
+      JOIN worldcup_pool.matches m
+        ON m.id = pr.match_id
+      WHERE pr.pool_id = %s
+        AND pr.participant_id = %s
+        AND m.competition_key = 'fifa_world_cup_2026'
+        AND m.status <> 'cancelled'
+        AND {lock_expr}
+    """
+
+    items_sql = f"""
+      SELECT
+        m.id,
+        m.match_key,
+        m.official_match_no,
+        m.display_order,
+        m.phase,
+        m.group_code,
+        m.bracket_label,
+        COALESCE(
+          m.home_team_i18n ->> %s,
+          m.home_label_i18n ->> %s,
+          m.home_label_i18n ->> 'pt',
+          m.match_key
+        ) AS home_label,
+        COALESCE(
+          m.away_team_i18n ->> %s,
+          m.away_label_i18n ->> %s,
+          m.away_label_i18n ->> 'pt',
+          m.match_key
+        ) AS away_label,
+        m.kickoff_utc,
+        COALESCE(m.lock_at_utc, m.kickoff_utc - INTERVAL '1 hour') AS lock_at_utc,
+        m.status,
+        pr.predicted_home_score,
+        pr.predicted_away_score,
+        m.home_score,
+        m.away_score,
+        CASE
+          WHEN m.status = 'finished'
+           AND m.home_score IS NOT NULL
+           AND m.away_score IS NOT NULL
+          THEN pr.points
+          ELSE NULL
+        END AS visible_points,
+        pr.updated_at_utc,
+        pr.locked_at_utc
+      FROM worldcup_pool.predictions pr
+      JOIN worldcup_pool.matches m
+        ON m.id = pr.match_id
+      WHERE pr.pool_id = %s
+        AND pr.participant_id = %s
+        AND m.competition_key = 'fifa_world_cup_2026'
+        AND m.status <> 'cancelled'
+        AND {lock_expr}
+      ORDER BY
+        m.display_order ASC,
+        m.kickoff_utc NULLS LAST,
+        m.id ASC
+      LIMIT %s
+      OFFSET %s
+    """
+
+    try:
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(target_sql, (target_participant_id, pool.id))
+                target_row = cur.fetchone()
+
+                if not target_row:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "ok": False,
+                            "code": "TARGET_PARTICIPANT_NOT_FOUND",
+                            "message": "Participant was not found in this pool.",
+                        },
+                    )
+
+                cur.execute(count_sql, (pool.id, target_participant_id))
+                total_items = int((cur.fetchone() or [0])[0] or 0)
+
+                cur.execute(
+                    items_sql,
+                    (
+                        current_lang,
+                        current_lang,
+                        current_lang,
+                        current_lang,
+                        pool.id,
+                        target_participant_id,
+                        page_size,
+                        offset,
+                    ),
+                )
+                rows = cur.fetchall()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "ok": False,
+                "code": "PARTICIPANT_LOCKED_PREDICTIONS_LOOKUP_FAILED",
+                "message": f"Failed to load participant locked predictions: {e}",
+            },
+        )
+
+    total_pages = (total_items + page_size - 1) // page_size if total_items > 0 else 0
+
+    return WorldCupPoolVisiblePredictionsResponse(
+        ok=True,
+        pool=pool,
+        participant=participant,
+        target_participant=WorldCupPoolVisiblePredictionsParticipant(
+            id=int(target_row[0]),
+            display_name=str(target_row[1]),
+        ),
+        items=[
+            WorldCupPoolVisiblePredictionItem(
+                match_id=int(row[0]),
+                match_key=str(row[1]),
+                official_match_no=int(row[2]) if row[2] is not None else None,
+                display_order=int(row[3] or 0),
+                phase=str(row[4]),
+                group_code=str(row[5]) if row[5] is not None else None,
+                bracket_label=str(row[6]) if row[6] is not None else None,
+                home_label=str(row[7]),
+                away_label=str(row[8]),
+                kickoff_utc=_iso(row[9]),
+                lock_at_utc=_iso(row[10]),
+                match_status=str(row[11]),
+                predicted_home_score=int(row[12]),
+                predicted_away_score=int(row[13]),
+                result_home_score=int(row[14]) if row[14] is not None else None,
+                result_away_score=int(row[15]) if row[15] is not None else None,
+                points=int(row[16]) if row[16] is not None else None,
+                updated_at_utc=_iso(row[17]),
+                locked_at_utc=_iso(row[18]),
+            )
+            for row in rows
+        ],
+        summary=WorldCupPoolVisiblePredictionsSummary(visible_predictions=total_items),
         pagination=WorldCupPoolPagination(
             page=page,
             page_size=page_size,
@@ -4783,7 +5108,7 @@ def get_worldcup_pool_organizer_dashboard(
     """
 
     ranking_cte = """
-      WITH ranked AS (
+      WITH participant_scores AS (
         SELECT
           pt.id AS participant_id,
           pt.display_name,
@@ -4795,20 +5120,63 @@ def get_worldcup_pool_organizer_dashboard(
           pt.removed_at_utc,
           COALESCE(SUM(pr.points), 0)::int AS points,
           COUNT(DISTINCT pr.id)::int AS predictions_count,
-          MAX(pr.updated_at_utc) AS last_prediction_at_utc,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              COALESCE(SUM(pr.points), 0) DESC,
-              COUNT(pr.id) DESC,
-              pt.joined_at_utc ASC,
-              pt.id ASC
-          )::int AS rank_position
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_home_score = m.home_score
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_score_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND (
+                 CASE
+                   WHEN pr.predicted_home_score > pr.predicted_away_score THEN 'H'
+                   WHEN pr.predicted_home_score < pr.predicted_away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               ) = (
+                 CASE
+                   WHEN m.home_score > m.away_score THEN 'H'
+                   WHEN m.home_score < m.away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               )
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS outcome_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_home_score = m.home_score
+              THEN 1 ELSE 0
+            END
+            +
+            CASE
+              WHEN m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_team_score_hits,
+          MAX(pr.updated_at_utc) AS last_prediction_at_utc
         FROM worldcup_pool.participants pt
         JOIN worldcup_pool.pools p
           ON p.id = pt.pool_id
         LEFT JOIN worldcup_pool.predictions pr
           ON pr.pool_id = pt.pool_id
          AND pr.participant_id = pt.id
+        LEFT JOIN worldcup_pool.matches m
+          ON m.id = pr.match_id
         WHERE pt.pool_id = %s
           AND pt.status = 'active'
         GROUP BY
@@ -4820,6 +5188,34 @@ def get_worldcup_pool_organizer_dashboard(
           pt.joined_at_utc,
           pt.last_seen_at_utc,
           pt.removed_at_utc
+      ),
+      ranked AS (
+        SELECT
+          participant_id,
+          display_name,
+          email,
+          status,
+          is_organizer,
+          joined_at_utc,
+          last_seen_at_utc,
+          removed_at_utc,
+          points,
+          predictions_count,
+          exact_score_hits,
+          outcome_hits,
+          exact_team_score_hits,
+          last_prediction_at_utc,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              points DESC,
+              exact_score_hits DESC,
+              outcome_hits DESC,
+              exact_team_score_hits DESC,
+              predictions_count DESC,
+              joined_at_utc ASC,
+              participant_id ASC
+          )::int AS rank_position
+        FROM participant_scores
       )
     """
 
@@ -4836,6 +5232,9 @@ def get_worldcup_pool_organizer_dashboard(
         removed_at_utc,
         points,
         predictions_count,
+        exact_score_hits,
+        outcome_hits,
+        exact_team_score_hits,
         last_prediction_at_utc
       FROM ranked
       WHERE (%s = '' OR lower(display_name) LIKE %s)
@@ -4891,8 +5290,11 @@ def get_worldcup_pool_organizer_dashboard(
             removed_at_utc=_iso(row[8]),
             points=int(row[9] or 0),
             predictions_count=int(row[10] or 0),
+            exact_score_hits=int(row[11] or 0),
+            outcome_hits=int(row[12] or 0),
+            exact_team_score_hits=int(row[13] or 0),
             available_matches=available_matches,
-            last_prediction_at_utc=_iso(row[11]),
+            last_prediction_at_utc=_iso(row[14]),
         )
         for row in rows
     ]

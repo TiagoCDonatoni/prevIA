@@ -992,6 +992,7 @@ def list_odds_events(
 
     now = datetime.now(timezone.utc)
     end = now + timedelta(hours=hours_ahead)
+    active_model_version = get_active_model_version()
 
     sql = """
       WITH last_ts AS (
@@ -1015,7 +1016,8 @@ def list_odds_events(
           s.updated_at_utc,
           s.payload
         FROM product.matchup_snapshot_v1 s
-        WHERE s.fixture_id IS NOT NULL
+        WHERE s.model_version = %(model_version)s
+          AND s.fixture_id IS NOT NULL
         ORDER BY s.fixture_id, s.updated_at_utc DESC
       ),
       latest_snap_ev AS (
@@ -1024,7 +1026,8 @@ def list_odds_events(
           s.updated_at_utc,
           s.payload
         FROM product.matchup_snapshot_v1 s
-        WHERE s.event_id IS NOT NULL
+        WHERE s.model_version = %(model_version)s
+          AND s.event_id IS NOT NULL
         ORDER BY s.event_id, s.updated_at_utc DESC
       )
       SELECT
@@ -1063,7 +1066,13 @@ def list_odds_events(
         with conn.cursor() as cur:
             cur.execute(
                 sql,
-                {"sport_key": sport_key, "now": now, "end": end, "limit": int(limit)},
+                    {
+                        "sport_key": sport_key,
+                        "now": now,
+                        "end": end,
+                        "limit": int(limit),
+                        "model_version": str(active_model_version),
+                    }
             )
             rows = cur.fetchall()
 

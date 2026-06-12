@@ -73,6 +73,12 @@ const COPY = {
     saved: "Salvo automaticamente",
     errorStatus: "Erro ao salvar",
     retry: "Tentar novamente",
+    result: "Resultado",
+    resultPending: "Resultado ainda não finalizado",
+    pointsEarned: "Pontuação",
+    pointsPending: "Pontos após resultado",
+    noPoints: "Sem pontuação",
+    points: "pts",
   },
   en: {
     title: "Predictions",
@@ -115,6 +121,12 @@ const COPY = {
     saved: "Saved automatically",
     errorStatus: "Save error",
     retry: "Try again",
+    result: "Result",
+    resultPending: "Result not final yet",
+    pointsEarned: "Points",
+    pointsPending: "Points after result",
+    noPoints: "No points",
+    points: "pts",
   },
   es: {
     title: "Pronósticos",
@@ -157,6 +169,12 @@ const COPY = {
     saved: "Guardado automáticamente",
     errorStatus: "Error al guardar",
     retry: "Intentar nuevamente",
+    result: "Resultado",
+    resultPending: "Resultado aún no finalizado",
+    pointsEarned: "Puntuación",
+    pointsPending: "Puntos después del resultado",
+    noPoints: "Sin puntuación",
+    points: "pts",
   },
 } as const;
 
@@ -584,6 +602,13 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
                   const isLocked = match.is_locked || status === "locked";
                   const phaseLabel = getPhaseLabel(match, copy);
                   const matchTime = formatKickoffTime(match.kickoff_utc, lang, copy.timeTbd);
+                  const hasResult =
+                    match.result_home_score !== null &&
+                    match.result_home_score !== undefined &&
+                    match.result_away_score !== null &&
+                    match.result_away_score !== undefined;
+                  const hasPrediction = Boolean(match.prediction);
+                  const shouldShowResultStrip = hasResult || (isLocked && hasPrediction);
 
                   return (
                     <article
@@ -647,6 +672,36 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
                           </button>
                         ) : null}
                       </div>
+
+                      {shouldShowResultStrip ? (
+                        <div className="worldcup-pool-match-result-strip">
+                          {hasResult ? (
+                            <span>
+                              {copy.result}:{" "}
+                              <strong>
+                                {match.result_home_score} × {match.result_away_score}
+                              </strong>
+                            </span>
+                          ) : (
+                            <span>{copy.resultPending}</span>
+                          )}
+
+                          {hasResult ? (
+                            match.points !== null && match.points !== undefined ? (
+                              <span>
+                                {copy.pointsEarned}:{" "}
+                                <strong>
+                                  {match.points} {copy.points}
+                                </strong>
+                              </span>
+                            ) : (
+                              <span>{copy.noPoints}</span>
+                            )
+                          ) : (
+                            <span>{copy.pointsPending}</span>
+                          )}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
