@@ -3,13 +3,16 @@ import {
   getAdminOddsAuditSummary,
   getAdminOddsAuditByLeague,
   getAdminOddsAuditEvents,
+  getAdminOddsAuditShadowSnapshots,
   postAdminOddsAuditSyncResults,
+  buildAdminOddsAuditShadowSnapshotsCsvUrl,
 } from "../api/client";
 import type {
   AdminOddsAuditSummaryResponse,
   AdminOddsAuditByLeagueResponse,
   AdminOddsAuditEventsResponse,
   AdminOddsAuditByLeagueRow,
+  AdminOddsAuditShadowSnapshotsResponse,
 } from "../api/contracts";
 import { Card } from "../ui/Card";
 import { Kpi } from "../ui/Kpi";
@@ -546,6 +549,7 @@ export default function OddsAudit() {
   const [byLeague, setByLeague] = useState<AdminOddsAuditByLeagueResponse | null>(null);
   const [byLeaguePrev, setByLeaguePrev] = useState<AdminOddsAuditByLeagueResponse | null>(null);
   const [events, setEvents] = useState<AdminOddsAuditEventsResponse | null>(null);
+  const [shadowSnapshots, setShadowSnapshots] = useState<AdminOddsAuditShadowSnapshotsResponse | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -610,7 +614,7 @@ export default function OddsAudit() {
         offset_windows: 0,
       };
 
-      const [summaryRes, summaryPrevRes, byLeagueRes, byLeaguePrevRes, eventsRes] = await Promise.all([
+      const [summaryRes, summaryPrevRes, byLeagueRes, byLeaguePrevRes, eventsRes, shadowSnapshotsRes] = await Promise.all([
         getAdminOddsAuditSummary({
           league_id: params.league_id,
           season: params.season,
@@ -664,6 +668,12 @@ export default function OddsAudit() {
             limit: params.limit,
             offset: params.offset,
           }),
+
+      getAdminOddsAuditShadowSnapshots({
+        league_id: params.league_id,
+        season: params.season,
+        limit: 20,
+      }).catch(() => null),
       ]);
 
       setSummary(summaryRes);
@@ -671,12 +681,14 @@ export default function OddsAudit() {
       setByLeague(byLeagueRes);
       setByLeaguePrev(byLeaguePrevRes);
       setEvents(eventsRes);
+      setShadowSnapshots(shadowSnapshotsRes);
     } catch (e: any) {
       setSummary(null);
       setSummaryPrev(null);
       setByLeague(null);
       setByLeaguePrev(null);
       setEvents(null);
+      setShadowSnapshots(null);
       setErr(String(e?.message || e));
     } finally {
       setLoading(false);
@@ -711,6 +723,16 @@ export default function OddsAudit() {
   useEffect(() => {
     void load();
   }, [params]);
+
+  const exportShadowSnapshotsCsv = () => {
+    const url = buildAdminOddsAuditShadowSnapshotsCsvUrl({
+      league_id: params.league_id,
+      season: params.season,
+      limit: 500,
+    });
+
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   const summaryDeltas = useMemo(
     () => ({
@@ -1037,6 +1059,124 @@ export default function OddsAudit() {
             </div>
           </div>
         </div>
+      </Card>
+
+      <Card title="Hist5 shadow preview">
+        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Pill>read-only</Pill>
+          <Pill>não altera produto</Pill>
+          <Pill>{shadowSnapshots?.meta.shadow_model_version ?? "model_v1_hist5_decay_shadow"}</Pill>
+          {shadowSnapshots ? <Pill>{shadowSnapshots.summary.pairs} pares</Pill> : null}
+          {shadowSnapshots ? <Pill>{shadowSnapshots.summary.favorite_changed} flips</Pill> : null}
+          {shadowSnapshots ? <Pill>{shadowSnapshots.summary.finished_pairs} finalizados</Pill> : null}
+          {shadowSnapshots?.summary.delta_logloss_shadow_minus_public != null ? (
+            <Pill>
+              LL Δ {shadowSnapshots.summary.delta_logloss_shadow_minus_public.toFixed(3)}
+            </Pill>
+          ) : null}
+          <button
+            type="button"
+            onClick={exportShadowSnapshotsCsv}
+            style={{
+              border: "1px solid rgba(148, 163, 184, 0.35)",
+              background: "rgba(15, 23, 42, 0.35)",
+              color: "inherit",
+              borderRadius: 999,
+              padding: "4px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Export shadow CSV
+          </button>
+        </div>
+
+        <div className="note" style={{ marginBottom: 12 }}>
+          Comparação leve entre o modelo público ativo e o snapshot shadow hist5 já materializado.
+          Esta leitura é apenas operacional e não muda a experiência pública.
+        </div>
+
+        {!shadowSnapshots || shadowSnapshots.rows.length === 0 ? (
+          <div className="note">Sem snapshots shadow pareados para os filtros atuais.</div>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Kickoff</th>
+                <th>Game</th>
+                <th className="mono">Res</th>
+                <th className="mono">Lg</th>
+                <th className="mono">v0 H/D/A</th>
+                <th className="mono">shadow H/D/A</th>
+                <th className="mono">Fav</th>
+                <th className="mono">Δ max</th>
+                <th className="mono">LL Δ</th>
+                <th className="mono">Conf.</th>
+                <th className="mono">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shadowSnapshots.rows.map((row) => (
+                <tr key={row.event_id}>
+                  <td className="mono">{row.kickoff_utc ? fmtIsoToShort(row.kickoff_utc) : "—"}</td>
+                  <td>
+                    {(row.home_name ?? "Home")} vs {(row.away_name ?? "Away")}
+                    <div className="note mono">{row.sport_key ?? "—"}</div>
+                  </td>
+
+                  <td className="mono">
+                    {row.result_1x2 ? (
+                      <>
+                        {row.result_1x2}
+                        {row.home_goals != null && row.away_goals != null ? (
+                          <div className="note mono">
+                            {row.home_goals}-{row.away_goals}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="mono">{row.league_id ?? "—"}</td>
+                  <td className="mono">
+                    {row.public_probs
+                      ? `${metricPct(row.public_probs.H)} / ${metricPct(row.public_probs.D)} / ${metricPct(row.public_probs.A)}`
+                      : "—"}
+                  </td>
+                  <td className="mono">
+                    {row.shadow_probs
+                      ? `${metricPct(row.shadow_probs.H)} / ${metricPct(row.shadow_probs.D)} / ${metricPct(row.shadow_probs.A)}`
+                      : "—"}
+                  </td>
+                  <td className="mono">
+                    {row.public_top_side ?? "—"} → {row.shadow_top_side ?? "—"}
+                    {row.favorite_changed ? (
+                      <div className="note mono" style={{ color: "#b54708", fontWeight: 700 }}>
+                        mudou favorito
+                      </div>
+                    ) : (
+                      <div className="note mono">mesmo favorito</div>
+                    )}
+                  </td>
+                  <td className="mono">{metricPct(row.max_abs_delta)}</td>
+
+                  <td className="mono">
+                    {row.delta_logloss_shadow_minus_public == null
+                      ? "—"
+                      : row.delta_logloss_shadow_minus_public.toFixed(3)}
+                  </td>
+
+                  <td className="mono">
+                    {metricPct(row.shadow_confidence)}
+                    <div className="note mono">{row.shadow_confidence_level ?? "—"}</div>
+                  </td>
+                  <td className="mono">{row.shadow_lambda_source ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
 
       <Card title="Comparison vs previous period">

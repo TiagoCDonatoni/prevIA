@@ -2900,6 +2900,362 @@
   cursor: not-allowed;
 }
 
+.pi-match-context{
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  padding: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  margin-bottom: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.pi-match-context-topline{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pi-match-context-label{
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pi-match-context-chips{
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.pi-match-context-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.pi-match-context-chip b{
+  color: #0f172a;
+  font-weight: 900;
+}
+
+.pi-match-context-headline{
+  margin: 0 0 12px;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 950;
+}
+
+/* 
+   Narrativa guiada:
+   usar linhas, não colunas.
+   A área lateral da análise é estreita; 4 colunas comprimem o texto.
+*/
+.pi-match-context-grid{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pi-match-context-card{
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 10px 11px;
+  background: #ffffff;
+}
+
+.pi-match-context-card--positive{
+  border-color: #bbf7d0;
+  background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%);
+}
+
+.pi-match-context-card--caution{
+  border-color: #fed7aa;
+  background: linear-gradient(180deg, #fff7ed 0%, #ffffff 100%);
+}
+
+.pi-match-context-card-label{
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+.pi-match-context-card-value{
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12.5px;
+  line-height: 1.38;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* A conclusão é o bloco mais importante: deixa mais confortável para leitura. */
+.pi-match-context-card:nth-child(4){
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 12px;
+}
+
+.pi-match-context-card:nth-child(4) .pi-match-context-card-label{
+  color: #1d4ed8;
+}
+
+.pi-match-context-card:nth-child(4) .pi-match-context-card-value{
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Destaque principal da conclusão da narrativa guiada */
+.pi-match-context-card:nth-child(4){
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(11, 47, 138, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(11, 47, 138, 0.10), transparent 34%),
+    linear-gradient(180deg, #ffffff 0%, #eef4ff 100%);
+  box-shadow:
+    0 8px 22px rgba(11, 47, 138, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.pi-match-context-card:nth-child(4)::before{
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--previa-blue) 0%, #2563eb 100%);
+}
+
+.pi-match-context-card:nth-child(4) .pi-match-context-card-label{
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--previa-blue-soft);
+  color: var(--previa-blue);
+  border: 1px solid rgba(11, 47, 138, 0.14);
+}
+
+.pi-match-context-card:nth-child(4) .pi-match-context-card-value{
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.48;
+  font-weight: 750;
+}
+
+.pi-match-context-paragraphs{
+  margin-top: 12px;
+  display: grid;
+  gap: 7px;
+}
+
+.pi-match-context-paragraphs p{
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@media (max-width: 980px){
+  .pi-match-context-topline{
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pi-match-context-chips{
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px){
+  .pi-match-context{
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .pi-match-context-headline{
+    font-size: 15px;
+  }
+
+  .pi-match-context-card{
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .pi-match-context-card-value{
+    font-size: 12.5px;
+  }
+}
+
+/* =========================================================
+   Match context guided narrative — refinamento visual
+   Alinha cores ao padrão prevIA e organiza chips em linhas.
+   ========================================================= */
+
+.pi-match-context{
+  border-color: rgba(11, 47, 138, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(11, 47, 138, 0.06), transparent 34%),
+    linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.pi-match-context-topline{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.pi-match-context-label{
+  width: fit-content;
+  background: var(--previa-blue-soft);
+  color: var(--previa-blue);
+  border: 1px solid rgba(11, 47, 138, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.pi-match-context-chips{
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-content: initial;
+  gap: 7px;
+}
+
+.pi-match-context-chip{
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+  border-color: #dbe5ff;
+  background: linear-gradient(180deg, #ffffff 0%, var(--previa-blue-soft-2) 100%);
+  color: #40516d;
+  padding: 7px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 1.15;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.pi-match-context-chip b{
+  color: var(--previa-blue);
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.pi-match-context-headline{
+  color: var(--previa-text);
+  font-size: 13.5px;
+  line-height: 1.34;
+  letter-spacing: -0.005em;
+  font-weight: 750;
+  margin-bottom: 12px;
+}
+
+.pi-match-context-card{
+  border-color: #dbe3ee;
+  background: #ffffff;
+}
+
+.pi-match-context-card-label{
+  color: #52627d;
+  font-size: 10.5px;
+  letter-spacing: 0.035em;
+}
+
+.pi-match-context-card-value{
+  color: var(--previa-text);
+  font-weight: 700;
+}
+
+.pi-match-context-card--positive{
+  border-color: rgba(11, 47, 138, 0.18);
+  background:
+    linear-gradient(180deg, rgba(232, 239, 255, 0.72) 0%, #ffffff 100%);
+}
+
+.pi-match-context-card--positive .pi-match-context-card-label{
+  color: var(--previa-blue);
+}
+
+.pi-match-context-card--caution{
+  border-color: #fed7aa;
+  background: linear-gradient(180deg, #fff7ed 0%, #ffffff 100%);
+}
+
+.pi-match-context-card--caution .pi-match-context-card-label{
+  color: #9a3412;
+}
+
+.pi-match-context-card:nth-child(4){
+  border-color: rgba(11, 47, 138, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(11, 47, 138, 0.08), transparent 30%),
+    linear-gradient(180deg, #ffffff 0%, var(--previa-blue-soft-2) 100%);
+}
+
+.pi-match-context-card:nth-child(4) .pi-match-context-card-label{
+  color: var(--previa-blue);
+}
+
+@media (max-width: 640px){
+  .pi-match-context-chips{
+    grid-template-columns: 1fr;
+  }
+
+  .pi-match-context-chip{
+    justify-content: flex-start;
+  }
+}
+
+/* 
+   Na narrativa guiada, o destaque visual deve ficar na conclusão.
+   Contexto / Modelo / Odd ficam mais neutros para não competir entre si.
+*/
+.pi-match-context-card:not(:nth-child(4)).pi-match-context-card--positive{
+  border-color: #dbe3ee;
+  background: #ffffff;
+}
+
+.pi-match-context-card:not(:nth-child(4)).pi-match-context-card--positive .pi-match-context-card-label{
+  color: #52627d;
+}
+
+.pi-match-context-card:not(:nth-child(4)).pi-match-context-card--caution{
+  border-color: #dbe3ee;
+  background: #ffffff;
+}
+
+.pi-match-context-card:not(:nth-child(4)).pi-match-context-card--caution .pi-match-context-card-label{
+  color: #52627d;
+}
+
 .pi-narrative{
   border: 1px solid #e5e7eb;
   border-radius: 14px;

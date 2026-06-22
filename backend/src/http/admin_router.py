@@ -3,8 +3,11 @@ from typing import Any, Dict, List, Optional, Tuple, Literal
 
 import re
 import unicodedata
+import csv
+import io
+import math
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Response
 
 from src.db.pg import pg_conn
 
@@ -1672,6 +1675,568 @@ def admin_odds_audit_reliability_events(
         },
         "rows": event_rows,
     }
+
+def _audit_shadow_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _audit_shadow_prob_triplet(h: Any, d: Any, a: Any) -> Optional[Dict[str, float]]:
+    hh = _audit_shadow_float(h)
+    dd = _audit_shadow_float(d)
+    aa = _audit_shadow_float(a)
+
+    if hh is None or dd is None or aa is None:
+        return None
+
+    return {"H": hh, "D": dd, "A": aa}
+
+
+def _audit_shadow_top_side(probs: Optional[Dict[str, float]]) -> Optional[str]:
+    if not probs:
+        return None
+    return _top1(float(probs["H"]), float(probs["D"]), float(probs["A"]))
+
+
+def _audit_shadow_top_prob(probs: Optional[Dict[str, float]]) -> Optional[float]:
+    side = _audit_shadow_top_side(probs)
+    if not probs or side is None:
+        return None
+    return float(probs[side])
+
+def _audit_shadow_safe_prob(value: float) -> float:
+    return max(1e-15, min(1.0 - 1e-15, float(value)))
+
+
+def _audit_shadow_brier(
+    probs: Optional[Dict[str, float]],
+    outcome: Optional[str],
+) -> Optional[float]:
+    if not probs or outcome not in {"H", "D", "A"}:
+        return None
+
+    return sum(
+        (float(probs[side]) - (1.0 if side == outcome else 0.0)) ** 2
+        for side in ("H", "D", "A")
+    )
+
+
+def _audit_shadow_logloss(
+    probs: Optional[Dict[str, float]],
+    outcome: Optional[str],
+) -> Optional[float]:
+    if not probs or outcome not in {"H", "D", "A"}:
+        return None
+
+    return -math.log(_audit_shadow_safe_prob(float(probs[outcome])))
+
+
+def _audit_shadow_top1_hit(
+    probs: Optional[Dict[str, float]],
+    outcome: Optional[str],
+) -> Optional[bool]:
+    if not probs or outcome not in {"H", "D", "A"}:
+        return None
+
+    return _audit_shadow_top_side(probs) == outcome
+
+
+def _audit_shadow_round(value: Any, digits: int = 6) -> Optional[float]:
+    v = _audit_shadow_float(value)
+    if v is None:
+        return None
+    return round(float(v), int(digits))
+
+@admin_odds_router.get("/audit/shadow-snapshots")
+def admin_odds_audit_shadow_snapshots(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    sport_key: Optional[str] = Query(default=None, max_length=120),
+    public_model_version: Optional[str] = Query(default=None, max_length=120),
+    shadow_model_version: str = Query(default="model_v1_hist5_decay_shadow", max_length=120),
+    limit: int = Query(default=20, ge=1, le=100),
+    only_finished: bool = Query(default=False),
+) -> Dict[str, Any]:
+    """
+    Preview read-only de snapshots shadow.
+
+    Não troca modelo público.
+    Não grava banco.
+    Não chama API externa.
+    Apenas compara snapshots já existentes em product.matchup_snapshot_v1.
+    """
+
+    if not public_model_version:
+        from src.product.model_registry import get_active_model_version
+
+        public_model_version = str(get_active_model_version())
+
+    sql = """
+      WITH public_snap AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.sport_key,
+          s.kickoff_utc,
+          s.home_name,
+          s.away_name,
+          s.fixture_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.model_version = %(public_model_version)s
+          AND s.event_id IS NOT NULL
+        ORDER BY s.event_id, s.updated_at_utc DESC
+      ),
+      shadow_snap AS (
+        SELECT DISTINCT ON (s.event_id)
+          s.event_id,
+          s.sport_key,
+          s.kickoff_utc,
+          s.home_name,
+          s.away_name,
+          s.fixture_id,
+          s.updated_at_utc,
+          s.payload
+        FROM product.matchup_snapshot_v1 s
+        WHERE s.model_version = %(shadow_model_version)s
+          AND s.event_id IS NOT NULL
+        ORDER BY s.event_id, s.updated_at_utc DESC
+      ),
+      paired AS (
+        SELECT
+          p.event_id,
+          COALESCE(p.sport_key, sh.sport_key) AS sport_key,
+          COALESCE(p.kickoff_utc, sh.kickoff_utc) AS kickoff_utc,
+          COALESCE(p.home_name, sh.home_name) AS home_name,
+          COALESCE(p.away_name, sh.away_name) AS away_name,
+          COALESCE(
+            NULLIF(sh.payload #>> '{inputs,league_id}', '')::int,
+            NULLIF(p.payload #>> '{inputs,league_id}', '')::int
+          ) AS league_id,
+          COALESCE(
+            NULLIF(sh.payload #>> '{inputs,season}', '')::int,
+            NULLIF(p.payload #>> '{inputs,season}', '')::int
+          ) AS season,
+          p.updated_at_utc AS public_updated_at_utc,
+          sh.updated_at_utc AS shadow_updated_at_utc,
+
+          p.payload #>> '{markets,1x2,p_model,home}' AS public_h,
+          p.payload #>> '{markets,1x2,p_model,draw}' AS public_d,
+          p.payload #>> '{markets,1x2,p_model,away}' AS public_a,
+
+          sh.payload #>> '{markets,1x2,p_model,home}' AS shadow_h,
+          sh.payload #>> '{markets,1x2,p_model,draw}' AS shadow_d,
+          sh.payload #>> '{markets,1x2,p_model,away}' AS shadow_a,
+
+          sh.payload #>> '{inputs,lambda_source}' AS shadow_lambda_source,
+          sh.payload #>> '{confidence,overall}' AS shadow_confidence,
+          sh.payload #>> '{confidence,level}' AS shadow_confidence_level,
+
+          ar.result_1x2,
+          ar.home_goals,
+          ar.away_goals
+        FROM public_snap p
+        JOIN shadow_snap sh
+          ON sh.event_id = p.event_id
+        LEFT JOIN odds.audit_result ar
+          ON ar.event_id = p.event_id
+      )
+      SELECT
+        event_id,
+        sport_key,
+        kickoff_utc,
+        home_name,
+        away_name,
+        league_id,
+        season,
+        public_updated_at_utc,
+        shadow_updated_at_utc,
+        public_h,
+        public_d,
+        public_a,
+        shadow_h,
+        shadow_d,
+        shadow_a,
+        shadow_lambda_source,
+        shadow_confidence,
+        shadow_confidence_level,
+        result_1x2,
+        home_goals,
+        away_goals
+      FROM paired
+      WHERE (%(league_id)s::int IS NULL OR league_id = %(league_id)s::int)
+        AND (%(season)s::int IS NULL OR season = %(season)s::int)
+        AND (%(sport_key)s::text IS NULL OR sport_key = %(sport_key)s::text)
+        AND (%(only_finished)s::boolean = false OR result_1x2 IS NOT NULL)
+      ORDER BY kickoff_utc ASC NULLS LAST, event_id ASC
+      LIMIT %(limit)s
+    """
+
+    with pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "league_id": league_id,
+                    "season": season,
+                    "sport_key": sport_key,
+                    "public_model_version": str(public_model_version),
+                    "shadow_model_version": str(shadow_model_version),
+                    "limit": int(limit),
+                    "only_finished": bool(only_finished),
+                },
+            )
+            rows = cur.fetchall() or []
+
+    out_rows: List[Dict[str, Any]] = []
+    favorite_changed_count = 0
+    sum_max_abs_delta = 0.0
+    comparable = 0
+
+    finished_pairs = 0
+    public_brier_sum = 0.0
+    shadow_brier_sum = 0.0
+    public_logloss_sum = 0.0
+    shadow_logloss_sum = 0.0
+    public_top1_hits = 0
+    shadow_top1_hits = 0
+    favorite_changed_finished = 0
+    shadow_better_logloss = 0
+    public_better_logloss = 0
+
+    for (
+        event_id,
+        sport_key_db,
+        kickoff_utc,
+        home_name,
+        away_name,
+        league_id_db,
+        season_db,
+        public_updated_at_utc,
+        shadow_updated_at_utc,
+        public_h,
+        public_d,
+        public_a,
+        shadow_h,
+        shadow_d,
+        shadow_a,
+        shadow_lambda_source,
+        shadow_confidence,
+        shadow_confidence_level,
+        result_1x2,
+        home_goals,
+        away_goals,
+    ) in rows:
+        public_probs = _audit_shadow_prob_triplet(public_h, public_d, public_a)
+        shadow_probs = _audit_shadow_prob_triplet(shadow_h, shadow_d, shadow_a)
+
+        public_top_side = _audit_shadow_top_side(public_probs)
+        shadow_top_side = _audit_shadow_top_side(shadow_probs)
+
+        public_top_prob = _audit_shadow_top_prob(public_probs)
+        shadow_top_prob = _audit_shadow_top_prob(shadow_probs)
+
+        favorite_changed = (
+            public_top_side is not None
+            and shadow_top_side is not None
+            and public_top_side != shadow_top_side
+        )
+
+        if favorite_changed:
+            favorite_changed_count += 1
+
+        max_abs_delta = None
+        if public_probs and shadow_probs:
+            max_abs_delta = max(
+                abs(float(shadow_probs[side]) - float(public_probs[side]))
+                for side in ("H", "D", "A")
+            )
+            sum_max_abs_delta += float(max_abs_delta)
+            comparable += 1
+
+        outcome = str(result_1x2) if result_1x2 in {"H", "D", "A"} else None
+
+        public_brier = _audit_shadow_brier(public_probs, outcome)
+        shadow_brier = _audit_shadow_brier(shadow_probs, outcome)
+        public_logloss = _audit_shadow_logloss(public_probs, outcome)
+        shadow_logloss = _audit_shadow_logloss(shadow_probs, outcome)
+        public_top1_hit = _audit_shadow_top1_hit(public_probs, outcome)
+        shadow_top1_hit = _audit_shadow_top1_hit(shadow_probs, outcome)
+
+        delta_brier_shadow_minus_public = (
+            float(shadow_brier) - float(public_brier)
+            if shadow_brier is not None and public_brier is not None
+            else None
+        )
+        delta_logloss_shadow_minus_public = (
+            float(shadow_logloss) - float(public_logloss)
+            if shadow_logloss is not None and public_logloss is not None
+            else None
+        )
+
+        if outcome is not None and public_brier is not None and shadow_brier is not None:
+            finished_pairs += 1
+            public_brier_sum += float(public_brier)
+            shadow_brier_sum += float(shadow_brier)
+            public_logloss_sum += float(public_logloss or 0.0)
+            shadow_logloss_sum += float(shadow_logloss or 0.0)
+
+            if public_top1_hit:
+                public_top1_hits += 1
+            if shadow_top1_hit:
+                shadow_top1_hits += 1
+            if favorite_changed:
+                favorite_changed_finished += 1
+
+            if (
+                delta_logloss_shadow_minus_public is not None
+                and delta_logloss_shadow_minus_public < 0
+            ):
+                shadow_better_logloss += 1
+            elif (
+                delta_logloss_shadow_minus_public is not None
+                and delta_logloss_shadow_minus_public > 0
+            ):
+                public_better_logloss += 1
+
+        out_rows.append(
+            {
+                "event_id": str(event_id),
+                "sport_key": str(sport_key_db) if sport_key_db is not None else None,
+                "kickoff_utc": _iso_utc_or_none(kickoff_utc),
+                "home_name": str(home_name) if home_name is not None else None,
+                "away_name": str(away_name) if away_name is not None else None,
+                "league_id": int(league_id_db) if league_id_db is not None else None,
+                "season": int(season_db) if season_db is not None else None,
+                "public_updated_at_utc": _iso_utc_or_none(public_updated_at_utc),
+                "shadow_updated_at_utc": _iso_utc_or_none(shadow_updated_at_utc),
+                "public_probs": public_probs,
+                "shadow_probs": shadow_probs,
+                "public_top_side": public_top_side,
+                "shadow_top_side": shadow_top_side,
+                "public_top_prob": public_top_prob,
+                "shadow_top_prob": shadow_top_prob,
+                "favorite_changed": favorite_changed,
+                "max_abs_delta": max_abs_delta,
+                "shadow_lambda_source": str(shadow_lambda_source) if shadow_lambda_source is not None else None,
+                "shadow_confidence": _audit_shadow_float(shadow_confidence),
+                "shadow_confidence_level": (
+                    str(shadow_confidence_level) if shadow_confidence_level is not None else None
+                ),
+                "result_1x2": outcome,
+                "home_goals": int(home_goals) if home_goals is not None else None,
+                "away_goals": int(away_goals) if away_goals is not None else None,
+                "public_brier": _audit_shadow_round(public_brier),
+                "shadow_brier": _audit_shadow_round(shadow_brier),
+                "delta_brier_shadow_minus_public": _audit_shadow_round(
+                    delta_brier_shadow_minus_public
+                ),
+                "public_logloss": _audit_shadow_round(public_logloss),
+                "shadow_logloss": _audit_shadow_round(shadow_logloss),
+                "delta_logloss_shadow_minus_public": _audit_shadow_round(
+                    delta_logloss_shadow_minus_public
+                ),
+                "public_top1_hit": public_top1_hit,
+                "shadow_top1_hit": shadow_top1_hit,
+            }
+        )
+
+    return {
+        "ok": True,
+        "connected_to_public_model": False,
+        "calls_external_api": False,
+        "mutates_database": False,
+        "meta": {
+            "league_id": league_id,
+            "season": season,
+            "sport_key": sport_key,
+            "public_model_version": str(public_model_version),
+            "shadow_model_version": str(shadow_model_version),
+            "limit": int(limit),
+            "only_finished": bool(only_finished),
+            "returned": len(out_rows),
+        },
+        "summary": {
+            "pairs": len(out_rows),
+            "favorite_changed": int(favorite_changed_count),
+            "favorite_changed_rate": (
+                float(favorite_changed_count) / float(len(out_rows))
+                if out_rows
+                else None
+            ),
+            "avg_max_abs_delta": (
+                float(sum_max_abs_delta) / float(comparable)
+                if comparable > 0
+                else None
+            ),
+            "finished_pairs": int(finished_pairs),
+            "favorite_changed_finished": int(favorite_changed_finished),
+            "public_brier": (
+                float(public_brier_sum) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "shadow_brier": (
+                float(shadow_brier_sum) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "delta_brier_shadow_minus_public": (
+                (float(shadow_brier_sum) / float(finished_pairs))
+                - (float(public_brier_sum) / float(finished_pairs))
+                if finished_pairs > 0
+                else None
+            ),
+            "public_logloss": (
+                float(public_logloss_sum) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "shadow_logloss": (
+                float(shadow_logloss_sum) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "delta_logloss_shadow_minus_public": (
+                (float(shadow_logloss_sum) / float(finished_pairs))
+                - (float(public_logloss_sum) / float(finished_pairs))
+                if finished_pairs > 0
+                else None
+            ),
+            "public_top1_acc": (
+                float(public_top1_hits) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "shadow_top1_acc": (
+                float(shadow_top1_hits) / float(finished_pairs)
+                if finished_pairs > 0
+                else None
+            ),
+            "delta_top1_shadow_minus_public": (
+                (float(shadow_top1_hits) / float(finished_pairs))
+                - (float(public_top1_hits) / float(finished_pairs))
+                if finished_pairs > 0
+                else None
+            ),
+            "shadow_better_logloss": int(shadow_better_logloss),
+            "public_better_logloss": int(public_better_logloss),
+        },
+        "rows": out_rows,
+    }
+
+@admin_odds_router.get("/audit/shadow-snapshots.csv")
+def admin_odds_audit_shadow_snapshots_csv(
+    league_id: Optional[int] = Query(default=None, ge=1),
+    season: Optional[int] = Query(default=None, ge=1900, le=2100),
+    sport_key: Optional[str] = Query(default=None, max_length=120),
+    public_model_version: Optional[str] = Query(default=None, max_length=120),
+    shadow_model_version: str = Query(default="model_v1_hist5_decay_shadow", max_length=120),
+    limit: int = Query(default=100, ge=1, le=500),
+    only_finished: bool = Query(default=False),
+) -> Response:
+    payload = admin_odds_audit_shadow_snapshots(
+        league_id=league_id,
+        season=season,
+        sport_key=sport_key,
+        public_model_version=public_model_version,
+        shadow_model_version=shadow_model_version,
+        limit=limit,
+        only_finished=only_finished,
+    )
+
+    output = io.StringIO()
+
+    fieldnames = [
+        "event_id",
+        "sport_key",
+        "kickoff_utc",
+        "home_name",
+        "away_name",
+        "league_id",
+        "season",
+        "result_1x2",
+        "home_goals",
+        "away_goals",
+        "public_h",
+        "public_d",
+        "public_a",
+        "shadow_h",
+        "shadow_d",
+        "shadow_a",
+        "public_top_side",
+        "shadow_top_side",
+        "favorite_changed",
+        "max_abs_delta",
+        "shadow_confidence",
+        "shadow_confidence_level",
+        "shadow_lambda_source",
+        "public_brier",
+        "shadow_brier",
+        "delta_brier_shadow_minus_public",
+        "public_logloss",
+        "shadow_logloss",
+        "delta_logloss_shadow_minus_public",
+        "public_top1_hit",
+        "shadow_top1_hit",
+    ]
+
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for row in payload.get("rows") or []:
+        public_probs = row.get("public_probs") or {}
+        shadow_probs = row.get("shadow_probs") or {}
+
+        writer.writerow(
+            {
+                "event_id": row.get("event_id"),
+                "sport_key": row.get("sport_key"),
+                "kickoff_utc": row.get("kickoff_utc"),
+                "home_name": row.get("home_name"),
+                "away_name": row.get("away_name"),
+                "league_id": row.get("league_id"),
+                "season": row.get("season"),
+                "result_1x2": row.get("result_1x2"),
+                "home_goals": row.get("home_goals"),
+                "away_goals": row.get("away_goals"),
+                "public_h": public_probs.get("H"),
+                "public_d": public_probs.get("D"),
+                "public_a": public_probs.get("A"),
+                "shadow_h": shadow_probs.get("H"),
+                "shadow_d": shadow_probs.get("D"),
+                "shadow_a": shadow_probs.get("A"),
+                "public_top_side": row.get("public_top_side"),
+                "shadow_top_side": row.get("shadow_top_side"),
+                "favorite_changed": row.get("favorite_changed"),
+                "max_abs_delta": row.get("max_abs_delta"),
+                "shadow_confidence": row.get("shadow_confidence"),
+                "shadow_confidence_level": row.get("shadow_confidence_level"),
+                "shadow_lambda_source": row.get("shadow_lambda_source"),
+                "public_brier": row.get("public_brier"),
+                "shadow_brier": row.get("shadow_brier"),
+                "delta_brier_shadow_minus_public": row.get("delta_brier_shadow_minus_public"),
+                "public_logloss": row.get("public_logloss"),
+                "shadow_logloss": row.get("shadow_logloss"),
+                "delta_logloss_shadow_minus_public": row.get("delta_logloss_shadow_minus_public"),
+                "public_top1_hit": row.get("public_top1_hit"),
+                "shadow_top1_hit": row.get("shadow_top1_hit"),
+            }
+        )
+
+    filename = "hist5-shadow-snapshots.csv"
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 @admin_router.get("/matchup/whatif")
 def admin_matchup_whatif(

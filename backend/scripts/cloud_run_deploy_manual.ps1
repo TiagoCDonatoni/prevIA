@@ -60,6 +60,35 @@ if ($LASTEXITCODE -ne 0) {
     throw "Falha no deploy do Cloud Run."
 }
 
+Write-Host "==> Routing 100% traffic to latest Cloud Run revision..."
+& gcloud run services update-traffic $service `
+    --project $projectId `
+    --region $region `
+    --to-latest `
+    --quiet
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Falha ao rotear trafego para a revisao mais recente do Cloud Run."
+}
+
+$latestReadyRevision = & gcloud run services describe $service `
+    --project $projectId `
+    --region $region `
+    --format "value(status.latestReadyRevisionName)"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Falha ao ler a revisao latestReady do Cloud Run."
+}
+
+$trafficStatus = & gcloud run services describe $service `
+    --project $projectId `
+    --region $region `
+    --format "yaml(status.traffic)"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Falha ao ler o trafego do Cloud Run."
+}
+
 $serviceUrl = & gcloud run services describe $service `
     --project $projectId `
     --region $region `
@@ -71,4 +100,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "OK: Cloud Run deployed"
+Write-Host "LATEST_READY_REVISION=$latestReadyRevision"
+Write-Host "TRAFFIC:"
+Write-Host $trafficStatus
 Write-Host "SERVICE_URL=$serviceUrl"

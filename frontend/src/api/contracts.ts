@@ -511,6 +511,77 @@ export type AdminOddsAuditEventsResponse = {
   rows: AdminOddsAuditEventRow[];
 };
 
+export type AdminOddsAuditShadowSnapshotRow = {
+  event_id: string;
+  sport_key: string | null;
+  kickoff_utc: string | null;
+  home_name: string | null;
+  away_name: string | null;
+  league_id: number | null;
+  season: number | null;
+  public_updated_at_utc: string | null;
+  shadow_updated_at_utc: string | null;
+  public_probs: { H: number; D: number; A: number } | null;
+  shadow_probs: { H: number; D: number; A: number } | null;
+  public_top_side: AdminOddsAuditSide | null;
+  shadow_top_side: AdminOddsAuditSide | null;
+  public_top_prob: number | null;
+  shadow_top_prob: number | null;
+  favorite_changed: boolean;
+  max_abs_delta: number | null;
+  shadow_lambda_source: string | null;
+  shadow_confidence: number | null;
+  shadow_confidence_level: string | null;
+  result_1x2: AdminOddsAuditSide | null;
+  home_goals: number | null;
+  away_goals: number | null;
+  public_brier: number | null;
+  shadow_brier: number | null;
+  delta_brier_shadow_minus_public: number | null;
+  public_logloss: number | null;
+  shadow_logloss: number | null;
+  delta_logloss_shadow_minus_public: number | null;
+  public_top1_hit: boolean | null;
+  shadow_top1_hit: boolean | null;
+};
+
+export type AdminOddsAuditShadowSnapshotsResponse = {
+  ok: boolean;
+  connected_to_public_model: boolean;
+  calls_external_api: boolean;
+  mutates_database: boolean;
+  meta: {
+    league_id: number | null;
+    season: number | null;
+    sport_key: string | null;
+    public_model_version: string;
+    shadow_model_version: string;
+    limit: number;
+    returned: number;
+    only_finished: boolean;
+  };
+  summary: {
+    pairs: number;
+    favorite_changed: number;
+    favorite_changed_rate: number | null;
+    avg_max_abs_delta: number | null;
+    finished_pairs: number;
+    favorite_changed_finished: number;
+    public_brier: number | null;
+    shadow_brier: number | null;
+    delta_brier_shadow_minus_public: number | null;
+    public_logloss: number | null;
+    shadow_logloss: number | null;
+    delta_logloss_shadow_minus_public: number | null;
+    public_top1_acc: number | null;
+    shadow_top1_acc: number | null;
+    delta_top1_shadow_minus_public: number | null;
+    shadow_better_logloss: number;
+    public_better_logloss: number;
+  };
+  rows: AdminOddsAuditShadowSnapshotRow[];
+};
+
 export type AdminOddsAuditSyncResultsResponse = {
   ok: boolean;
   inserted: number;
@@ -718,6 +789,68 @@ export type ProductModelGuardrails = {
   strength_context?: Record<string, unknown> | null;
 };
 
+export type ProductNarrativeContextSection = {
+  text?: string | null;
+  status?: string | null;
+  quality?: string | null;
+  sample_size?: unknown;
+};
+
+export type ProductNarrativeContextLanguage = {
+  headline?: string | null;
+  paragraphs?: string[] | null;
+  sections?: Record<string, ProductNarrativeContextSection | null | undefined> | null;
+};
+
+export type ProductNarrativeContextSignals = {
+  tone?: string | null;
+  pricing_status?: string | null;
+  pricing_outcome?: "home" | "draw" | "away" | string | null;
+  context_side?: "home" | "balanced" | "away" | string | null;
+  season_edge?: string | null;
+  home_away_edge?: string | null;
+  head_to_head_edge?: string | null;
+  price_context_alignment?: string | null;
+  context_model_alignment?: string | null;
+  context_pricing_status?: string | null;
+  context_outcome?: "home" | "away" | string | null;
+  most_likely_outcome?: "home" | "draw" | "away" | string | null;
+  value_outcome?: "home" | "draw" | "away" | string | null;
+  value_status?: string | null;
+};
+
+export type ProductNarrativePricingOutcome = {
+  model_prob?: number | null;
+  best_odd?: number | null;
+  status?: string | null;
+};
+
+export type ProductNarrativeContext = {
+  version?: string | null;
+  status?: string | null;
+  quality?: string | null;
+  default_language?: string | null;
+  headline?: string | null;
+  paragraphs?: string[] | null;
+  sections?: Record<string, ProductNarrativeContextSection | null | undefined> | null;
+  texts?: Record<string, ProductNarrativeContextLanguage | null | undefined> | null;
+  signals?: ProductNarrativeContextSignals | null;
+  facts?:
+    | {
+        pricing?: {
+          status?: string | null;
+          alignment?: string | null;
+          context_model_alignment?: string | null;
+          most_likely_outcome?: string | null;
+          value_outcome?: string | null;
+          outcomes?: Record<string, ProductNarrativePricingOutcome | null | undefined> | null;
+        } | null;
+      }
+    | Record<string, unknown>
+    | null;
+  selected_variants?: Record<string, unknown> | null;
+};
+
 export type ProductSnapshotSummary = {
   totals?: {
     line?: number | null;
@@ -737,6 +870,8 @@ export type ProductSnapshotSummary = {
   } | null;
   confidence?: ProductModelConfidence | null;
   guardrails?: ProductModelGuardrails | null;
+  narrative_context?: ProductNarrativeContext | null;
+
 };
 
 export type ProductOddsEvent = {

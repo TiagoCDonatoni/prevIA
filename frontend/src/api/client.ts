@@ -47,6 +47,7 @@ import type {
   AdminPartnerApplicationConvertResponse,
   AdminCreatePartnerCampaignLinkPayload,
   AdminPartnerDetailResponse,
+  AdminOddsAuditShadowSnapshotsResponse,
 } from "./contracts";
 
 function sleep(ms: number) {
@@ -400,6 +401,51 @@ export async function getAdminOddsAuditEvents(params?: {
   return fetchJson<AdminOddsAuditEventsResponse>(url.toString(), {
     headers: { Accept: "application/json" },
   });
+}
+
+export async function getAdminOddsAuditShadowSnapshots(params?: {
+  league_id?: number | null;
+  season?: number | null;
+  sport_key?: string | null;
+  public_model_version?: string | null;
+  shadow_model_version?: string | null;
+  limit?: number;
+  only_finished?: boolean;
+}): Promise<AdminOddsAuditShadowSnapshotsResponse> {
+  const url = new URL("/admin/odds/audit/shadow-snapshots", API_BASE_URL);
+
+  if (params?.league_id != null) url.searchParams.set("league_id", String(params.league_id));
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.sport_key) url.searchParams.set("sport_key", params.sport_key);
+  if (params?.public_model_version) url.searchParams.set("public_model_version", params.public_model_version);
+  if (params?.shadow_model_version) url.searchParams.set("shadow_model_version", params.shadow_model_version);
+  if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+
+  return fetchJson<AdminOddsAuditShadowSnapshotsResponse>(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+}
+
+export function buildAdminOddsAuditShadowSnapshotsCsvUrl(params?: {
+  league_id?: number | null;
+  season?: number | null;
+  sport_key?: string | null;
+  public_model_version?: string | null;
+  shadow_model_version?: string | null;
+  limit?: number;
+  only_finished?: boolean;
+}): string {
+  const url = new URL("/admin/odds/audit/shadow-snapshots.csv", API_BASE_URL);
+
+  if (params?.league_id != null) url.searchParams.set("league_id", String(params.league_id));
+  if (params?.season != null) url.searchParams.set("season", String(params.season));
+  if (params?.sport_key) url.searchParams.set("sport_key", params.sport_key);
+  if (params?.public_model_version) url.searchParams.set("public_model_version", params.public_model_version);
+  if (params?.shadow_model_version) url.searchParams.set("shadow_model_version", params.shadow_model_version);
+  if (params?.limit != null) url.searchParams.set("limit", String(params.limit));
+  if (params?.only_finished) url.searchParams.set("only_finished", "true");
+
+  return url.toString();
 }
 
 export async function postAdminOddsAuditSyncResults(params?: {

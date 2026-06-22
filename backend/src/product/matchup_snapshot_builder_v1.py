@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from src.product.matchup_model_v0 import estimate_lambdas_with_fallback
+from src.product.narrative_context_builder_v1 import attach_narrative_context_v1
 
 from src.core.season_policy import (
     choose_current_operational_season,
@@ -248,6 +249,74 @@ def _select_totals_main_line_and_best(conn, *, event_id: str) -> Dict[str, Any]:
         "source_captured_at_utc": source_ts,
     }
 
+def _select_1x2_best_odds(conn, *, event_id: str) -> Dict[str, Any]:
+    """
+    Lê as melhores odds 1x2 no último timestamp disponível para o evento.
+
+    A narrativa usa isso para sair do "se o preço ajudar" e gerar uma
+    conclusão baseada no preço disponível no snapshot.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('odds.odds_snapshots_1x2')")
+            table_exists = bool((cur.fetchone() or [None])[0])
+    except Exception:
+        table_exists = False
+
+    if not table_exists:
+        return {
+            "best_odds": {"home": None, "draw": None, "away": None},
+            "source_captured_at_utc": None,
+            "status": "unavailable",
+            "reason": "odds_snapshots_1x2_missing",
+        }
+
+    sql = """
+      WITH last_ts AS (
+        SELECT event_id, MAX(captured_at_utc) AS max_ts
+        FROM odds.odds_snapshots_1x2
+        WHERE event_id = %(event_id)s
+        GROUP BY event_id
+      )
+      SELECT
+        lt.max_ts,
+        MAX(s.odds_home) AS odds_home,
+        MAX(s.odds_draw) AS odds_draw,
+        MAX(s.odds_away) AS odds_away
+      FROM last_ts lt
+      JOIN odds.odds_snapshots_1x2 s
+        ON s.event_id = lt.event_id
+       AND s.captured_at_utc = lt.max_ts
+      GROUP BY lt.max_ts
+      LIMIT 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"event_id": str(event_id)})
+        row = cur.fetchone()
+
+    if not row:
+        return {
+            "best_odds": {"home": None, "draw": None, "away": None},
+            "source_captured_at_utc": None,
+            "status": "unavailable",
+            "reason": "no_1x2_odds_for_event",
+        }
+
+    source_ts, odds_home, odds_draw, odds_away = row
+    best_odds = {
+        "home": float(odds_home) if odds_home is not None else None,
+        "draw": float(odds_draw) if odds_draw is not None else None,
+        "away": float(odds_away) if odds_away is not None else None,
+    }
+    has_any = any(v is not None for v in best_odds.values())
+
+    return {
+        "best_odds": best_odds,
+        "source_captured_at_utc": source_ts,
+        "status": "available" if has_any else "unavailable",
+        "reason": None if has_any else "empty_1x2_odds_for_event",
+    }
+
 def _resolve_matchup_payload_column(conn) -> str:
     """
     Detecta o nome da coluna JSONB onde o payload do snapshot é armazenado.
@@ -285,6 +354,33 @@ def _json_dumps_safe(payload: Dict[str, Any]) -> str:
         raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     return json.dumps(payload, default=_json_default)
+
+def _attach_narrative_context_to_payload(
+    conn,
+    *,
+    payload: Dict[str, Any],
+    sport_key: Optional[str],
+    home_name: Optional[str],
+    away_name: Optional[str],
+    kickoff_utc,
+) -> Dict[str, Any]:
+    return attach_narrative_context_v1(
+        conn,
+        payload=payload,
+        sport_key=sport_key,
+        home_name=home_name,
+        away_name=away_name,
+        kickoff_utc=kickoff_utc,
+        language="pt-BR",
+    )
+
+
+def _record_narrative_context_counter(c: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    narrative = payload.get("narrative_context") if isinstance(payload, dict) else None
+    status = str((narrative or {}).get("status") or "unknown")
+    quality = str((narrative or {}).get("quality") or "unknown")
+    c[f"narrative_status_{status}"] = int(c.get(f"narrative_status_{status}", 0)) + 1
+    c[f"narrative_quality_{quality}"] = int(c.get(f"narrative_quality_{quality}", 0)) + 1
 
 def upsert_matchup_snapshot_v1(
     conn,
@@ -702,7 +798,11 @@ def _build_empty_snapshot_payload(
     fixture_id: Optional[int],
     home_team_id: Optional[int],
     away_team_id: Optional[int],
+    one_x_two: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    one_x_two = one_x_two or {}
+    one_x_two_best = dict(one_x_two.get("best_odds") or {})
+
     return {
         "model_version": model_version,
         "calc_version": calc_version,
@@ -730,7 +830,20 @@ def _build_empty_snapshot_payload(
         },
         "matrix": None,
         "markets": {
-            "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
+            "1x2": {
+                "p_model": {"home": None, "draw": None, "away": None},
+                "best_odds": {
+                    "home": one_x_two_best.get("home"),
+                    "draw": one_x_two_best.get("draw"),
+                    "away": one_x_two_best.get("away"),
+                },
+                "source_captured_at_utc": (
+                    one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
+                    if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
+                    else one_x_two.get("source_captured_at_utc")
+                ),
+                "odds_status": one_x_two.get("status"),
+            },
             "btts": {"p_model": {"yes": None, "no": None}},
             "totals": {
                 "main_line": totals.get("main_line"),
@@ -778,6 +891,14 @@ def rebuild_matchup_snapshots_v1(
         "lambda_source_recent_fixtures": 0,
         "lambda_source_league_prior": 0,
         "lambda_source_team_season_stats_blended": 0,
+        "narrative_status_available": 0,
+        "narrative_status_limited": 0,
+        "narrative_status_unavailable": 0,
+        "narrative_status_unknown": 0,
+        "narrative_quality_good": 0,
+        "narrative_quality_limited": 0,
+        "narrative_quality_unavailable": 0,
+        "narrative_quality_unknown": 0,
     }
 
     # candidates: normal (window) ou incremental (event_ids)
@@ -803,9 +924,15 @@ def rebuild_matchup_snapshots_v1(
         )
 
         totals = _select_totals_main_line_and_best(conn, event_id=event_id)
+        one_x_two = _select_1x2_best_odds(conn, event_id=event_id)
         print(
             f"[SNAPSHOT] totals main_line={totals.get('main_line')} "
             f"source_ts={totals.get('source_captured_at_utc')}",
+            flush=True,
+        )
+        print(
+            f"[SNAPSHOT] 1x2 odds_status={one_x_two.get('status')} "
+            f"source_ts={one_x_two.get('source_captured_at_utc')}",
             flush=True,
         )
 
@@ -827,7 +954,17 @@ def rebuild_matchup_snapshots_v1(
                     fixture_id=None,
                     home_team_id=None,
                     away_team_id=None,
+                    one_x_two=one_x_two,
                 )
+                payload = _attach_narrative_context_to_payload(
+                    conn,
+                    payload=payload,
+                    sport_key=ev["sport_key"],
+                    home_name=ev.get("home_name"),
+                    away_name=ev.get("away_name"),
+                    kickoff_utc=ev.get("kickoff_utc"),
+                )
+                _record_narrative_context_counter(c, payload)
 
                 upsert_matchup_snapshot_v1(
                     conn,
@@ -837,7 +974,7 @@ def rebuild_matchup_snapshots_v1(
                     home_name=ev["home_name"],
                     away_name=ev["away_name"],
                     fixture_id=None,
-                    source_captured_at_utc=totals["source_captured_at_utc"],
+                    source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
                     payload=payload,
                     model_version=model_version,
                 )
@@ -858,7 +995,17 @@ def rebuild_matchup_snapshots_v1(
                     fixture_id=None,
                     home_team_id=int(home_team_id),
                     away_team_id=int(away_team_id),
+                    one_x_two=one_x_two,
                 )
+                payload = _attach_narrative_context_to_payload(
+                    conn,
+                    payload=payload,
+                    sport_key=ev["sport_key"],
+                    home_name=ev.get("home_name"),
+                    away_name=ev.get("away_name"),
+                    kickoff_utc=ev.get("kickoff_utc"),
+                )
+                _record_narrative_context_counter(c, payload)
 
                 upsert_matchup_snapshot_v1(
                     conn,
@@ -868,7 +1015,7 @@ def rebuild_matchup_snapshots_v1(
                     home_name=ev["home_name"],
                     away_name=ev["away_name"],
                     fixture_id=None,
-                    source_captured_at_utc=totals["source_captured_at_utc"],
+                    source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
                     payload=payload,
                     model_version=model_version,
                 )
@@ -929,7 +1076,16 @@ def rebuild_matchup_snapshots_v1(
                 ),
                 "matrix": mx.matrix,
                 "markets": {
-                    "1x2": {"p_model": p_1x2},
+                    "1x2": {
+                        "p_model": p_1x2,
+                        "best_odds": dict(one_x_two.get("best_odds") or {}),
+                        "source_captured_at_utc": (
+                            one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
+                            if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
+                            else one_x_two.get("source_captured_at_utc")
+                        ),
+                        "odds_status": one_x_two.get("status"),
+                    },
                     "btts": {"p_model": p_btts},
                     "totals": {
                         "main_line": totals["main_line"],
@@ -946,6 +1102,16 @@ def rebuild_matchup_snapshots_v1(
                 },
             }
 
+            payload = _attach_narrative_context_to_payload(
+                conn,
+                payload=payload,
+                sport_key=ev["sport_key"],
+                home_name=ev.get("home_name"),
+                away_name=ev.get("away_name"),
+                kickoff_utc=ev.get("kickoff_utc"),
+            )
+            _record_narrative_context_counter(c, payload)
+
             upsert_matchup_snapshot_v1(
                 conn,
                 event_id=event_id,
@@ -954,7 +1120,7 @@ def rebuild_matchup_snapshots_v1(
                 home_name=ev["home_name"],
                 away_name=ev["away_name"],
                 fixture_id=None,
-                source_captured_at_utc=totals["source_captured_at_utc"],
+                source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
                 payload=payload,
                 model_version=model_version,
             )
@@ -1022,7 +1188,16 @@ def rebuild_matchup_snapshots_v1(
             # 7x7 (0..6) => 49 entradas, ok salvar como dict
             "matrix": mx.matrix,
             "markets": {
-                "1x2": {"p_model": p_1x2},
+                "1x2": {
+                    "p_model": p_1x2,
+                    "best_odds": dict(one_x_two.get("best_odds") or {}),
+                    "source_captured_at_utc": (
+                        one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
+                        if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
+                        else one_x_two.get("source_captured_at_utc")
+                    ),
+                    "odds_status": one_x_two.get("status"),
+                },
                 "btts": {"p_model": p_btts},
                 "totals": {
                     "main_line": totals["main_line"],
@@ -1041,6 +1216,16 @@ def rebuild_matchup_snapshots_v1(
             },
         }
 
+        payload = _attach_narrative_context_to_payload(
+            conn,
+            payload=payload,
+            sport_key=ev["sport_key"],
+            home_name=ev.get("home_name"),
+            away_name=ev.get("away_name"),
+            kickoff_utc=fx["kickoff_utc"],
+        )
+        _record_narrative_context_counter(c, payload)
+
         upsert_matchup_snapshot_v1(
             conn,
             event_id=event_id,
@@ -1049,7 +1234,7 @@ def rebuild_matchup_snapshots_v1(
             home_name=ev["home_name"],
             away_name=ev["away_name"],
             fixture_id=fx["fixture_id"],
-            source_captured_at_utc=totals["source_captured_at_utc"],
+            source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
             payload=payload,
             model_version=model_version,
         )

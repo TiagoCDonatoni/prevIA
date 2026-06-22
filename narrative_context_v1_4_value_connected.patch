@@ -1,0 +1,1661 @@
+--- a/backend/src/product/matchup_snapshot_builder_v1.py
++++ b/backend/src/product/matchup_snapshot_builder_v1.py
+@@ -249,6 +249,76 @@
+         "source_captured_at_utc": source_ts,
+     }
+ 
++
++def _select_1x2_best_odds(conn, *, event_id: str) -> Dict[str, Any]:
++    """
++    Lê as melhores odds 1x2 no último timestamp disponível para o evento.
++
++    Snapshot narrativo usa isso para sair do "se o preço ajudar" e registrar
++    uma leitura de preço baseada no dado de mercado disponível no momento da
++    materialização. Mantém fallback seguro quando a tabela/odds não existem.
++    """
++    try:
++        with conn.cursor() as cur:
++            cur.execute("SELECT to_regclass('odds.odds_snapshots_1x2')")
++            table_exists = bool((cur.fetchone() or [None])[0])
++    except Exception:
++        table_exists = False
++
++    if not table_exists:
++        return {
++            "best_odds": {"home": None, "draw": None, "away": None},
++            "source_captured_at_utc": None,
++            "status": "unavailable",
++            "reason": "odds_snapshots_1x2_missing",
++        }
++
++    sql = """
++      WITH last_ts AS (
++        SELECT event_id, MAX(captured_at_utc) AS max_ts
++        FROM odds.odds_snapshots_1x2
++        WHERE event_id = %(event_id)s
++        GROUP BY event_id
++      )
++      SELECT
++        lt.max_ts,
++        MAX(s.odds_home) AS odds_home,
++        MAX(s.odds_draw) AS odds_draw,
++        MAX(s.odds_away) AS odds_away
++      FROM last_ts lt
++      JOIN odds.odds_snapshots_1x2 s
++        ON s.event_id = lt.event_id
++       AND s.captured_at_utc = lt.max_ts
++      GROUP BY lt.max_ts
++      LIMIT 1
++    """
++    with conn.cursor() as cur:
++        cur.execute(sql, {"event_id": str(event_id)})
++        row = cur.fetchone()
++
++    if not row:
++        return {
++            "best_odds": {"home": None, "draw": None, "away": None},
++            "source_captured_at_utc": None,
++            "status": "unavailable",
++            "reason": "no_1x2_odds_for_event",
++        }
++
++    source_ts, odds_home, odds_draw, odds_away = row
++    best_odds = {
++        "home": float(odds_home) if odds_home is not None else None,
++        "draw": float(odds_draw) if odds_draw is not None else None,
++        "away": float(odds_away) if odds_away is not None else None,
++    }
++    has_any = any(v is not None for v in best_odds.values())
++
++    return {
++        "best_odds": best_odds,
++        "source_captured_at_utc": source_ts,
++        "status": "available" if has_any else "unavailable",
++        "reason": None if has_any else "empty_1x2_odds_for_event",
++    }
++
+ def _resolve_matchup_payload_column(conn) -> str:
+     """
+     Detecta o nome da coluna JSONB onde o payload do snapshot é armazenado.
+@@ -730,7 +800,10 @@
+     fixture_id: Optional[int],
+     home_team_id: Optional[int],
+     away_team_id: Optional[int],
++    one_x_two: Optional[Dict[str, Any]] = None,
+ ) -> Dict[str, Any]:
++    one_x_two = one_x_two or {}
++    one_x_two_best = dict(one_x_two.get("best_odds") or {})
+     return {
+         "model_version": model_version,
+         "calc_version": calc_version,
+@@ -758,7 +831,20 @@
+         },
+         "matrix": None,
+         "markets": {
+-            "1x2": {"p_model": {"home": None, "draw": None, "away": None}},
++            "1x2": {
++                "p_model": {"home": None, "draw": None, "away": None},
++                "best_odds": {
++                    "home": one_x_two_best.get("home"),
++                    "draw": one_x_two_best.get("draw"),
++                    "away": one_x_two_best.get("away"),
++                },
++                "source_captured_at_utc": (
++                    one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
++                    if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
++                    else one_x_two.get("source_captured_at_utc")
++                ),
++                "odds_status": one_x_two.get("status"),
++            },
+             "btts": {"p_model": {"yes": None, "no": None}},
+             "totals": {
+                 "main_line": totals.get("main_line"),
+@@ -839,11 +925,17 @@
+         )
+ 
+         totals = _select_totals_main_line_and_best(conn, event_id=event_id)
++        one_x_two = _select_1x2_best_odds(conn, event_id=event_id)
+         print(
+             f"[SNAPSHOT] totals main_line={totals.get('main_line')} "
+             f"source_ts={totals.get('source_captured_at_utc')}",
+             flush=True,
+         )
++        print(
++            f"[SNAPSHOT] 1x2 odds_status={one_x_two.get('status')} "
++            f"source_ts={one_x_two.get('source_captured_at_utc')}",
++            flush=True,
++        )
+ 
+         if fixture_id is None:
+             # Novo fluxo: se temos team_ids resolvidos, geramos snapshot completo (team-first).
+@@ -863,6 +955,7 @@
+                     fixture_id=None,
+                     home_team_id=None,
+                     away_team_id=None,
++                    one_x_two=one_x_two,
+                 )
+ 
+                 upsert_matchup_snapshot_v1(
+@@ -873,7 +966,7 @@
+                     home_name=ev["home_name"],
+                     away_name=ev["away_name"],
+                     fixture_id=None,
+-                    source_captured_at_utc=totals["source_captured_at_utc"],
++                    source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
+                     payload=payload,
+                     model_version=model_version,
+                 )
+@@ -894,6 +987,7 @@
+                     fixture_id=None,
+                     home_team_id=int(home_team_id),
+                     away_team_id=int(away_team_id),
++                    one_x_two=one_x_two,
+                 )
+ 
+                 upsert_matchup_snapshot_v1(
+@@ -904,7 +998,7 @@
+                     home_name=ev["home_name"],
+                     away_name=ev["away_name"],
+                     fixture_id=None,
+-                    source_captured_at_utc=totals["source_captured_at_utc"],
++                    source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
+                     payload=payload,
+                     model_version=model_version,
+                 )
+@@ -965,7 +1059,16 @@
+                 ),
+                 "matrix": mx.matrix,
+                 "markets": {
+-                    "1x2": {"p_model": p_1x2},
++                    "1x2": {
++                        "p_model": p_1x2,
++                        "best_odds": dict(one_x_two.get("best_odds") or {}),
++                        "source_captured_at_utc": (
++                            one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
++                            if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
++                            else one_x_two.get("source_captured_at_utc")
++                        ),
++                        "odds_status": one_x_two.get("status"),
++                    },
+                     "btts": {"p_model": p_btts},
+                     "totals": {
+                         "main_line": totals["main_line"],
+@@ -990,7 +1093,7 @@
+                 home_name=ev["home_name"],
+                 away_name=ev["away_name"],
+                 fixture_id=None,
+-                source_captured_at_utc=totals["source_captured_at_utc"],
++                source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
+                 payload=payload,
+                 model_version=model_version,
+             )
+@@ -1058,7 +1161,16 @@
+             # 7x7 (0..6) => 49 entradas, ok salvar como dict
+             "matrix": mx.matrix,
+             "markets": {
+-                "1x2": {"p_model": p_1x2},
++                "1x2": {
++                    "p_model": p_1x2,
++                    "best_odds": dict(one_x_two.get("best_odds") or {}),
++                    "source_captured_at_utc": (
++                        one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
++                        if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
++                        else one_x_two.get("source_captured_at_utc")
++                    ),
++                    "odds_status": one_x_two.get("status"),
++                },
+                 "btts": {"p_model": p_btts},
+                 "totals": {
+                     "main_line": totals["main_line"],
+@@ -1085,7 +1197,7 @@
+             home_name=ev["home_name"],
+             away_name=ev["away_name"],
+             fixture_id=fx["fixture_id"],
+-            source_captured_at_utc=totals["source_captured_at_utc"],
++            source_captured_at_utc=totals["source_captured_at_utc"] or one_x_two.get("source_captured_at_utc"),
+             payload=payload,
+             model_version=model_version,
+         )
+--- a/backend/src/product/narrative_context_builder_v1.py
++++ b/backend/src/product/narrative_context_builder_v1.py
+@@ -1,7 +1,8 @@
+ from __future__ import annotations
+ 
++import hashlib
+ from datetime import datetime, timezone
+-from typing import Any, Dict, Optional
++from typing import Any, Dict, Optional, Tuple
+ 
+ NARRATIVE_CONTEXT_VERSION = "narrative_context_v1"
+ MIN_SEASON_GAMES = 5
+@@ -35,27 +36,1220 @@
+     return s or fallback
+ 
+ 
++
++
++
++def _word(n: Optional[int], singular: str, plural: str) -> str:
++    return singular if int(n or 0) == 1 else plural
++
++
++def _as_float(v: Any) -> Optional[float]:
++    try:
++        return float(v) if v is not None else None
++    except Exception:
++        return None
++
++
++def _edge_from_delta(left: Optional[float], right: Optional[float], *, clear: float = 15.0, slight: float = 7.5) -> str:
++    if left is None or right is None:
++        return "unknown"
++    delta = float(left) - float(right)
++    if delta >= clear:
++        return "home_clear"
++    if delta >= slight:
++        return "home_slight"
++    if delta <= -clear:
++        return "away_clear"
++    if delta <= -slight:
++        return "away_slight"
++    return "balanced"
++
++
++def _context_side_from_edges(*edges: str) -> str:
++    score = 0
++    for edge in edges:
++        if edge == "home_clear":
++            score += 2
++        elif edge == "home_slight":
++            score += 1
++        elif edge == "away_clear":
++            score -= 2
++        elif edge == "away_slight":
++            score -= 1
++    if score >= 2:
++        return "home"
++    if score <= -2:
++        return "away"
++    return "balanced"
++
++
++
++VALUE_CLEAR_EV_DECIMAL = 0.03
++VALUE_THIN_EV_DECIMAL = 0.005
++NO_VALUE_EV_DECIMAL = -0.015
++
++
++def _prob_to_fair_odd(prob: Optional[float]) -> Optional[float]:
++    p = _as_float(prob)
++    if p is None or p <= 0.0 or p >= 1.0:
++        return None
++    return round(1.0 / p, 4)
++
++
++def _price_ev_decimal(prob: Optional[float], odd: Optional[float]) -> Optional[float]:
++    p = _as_float(prob)
++    o = _as_float(odd)
++    if p is None or o is None or p <= 0.0 or o <= 1.0:
++        return None
++    return round((p * o) - 1.0, 6)
++
++
++def _classify_price_ev(ev_decimal: Optional[float]) -> str:
++    if ev_decimal is None:
++        return "missing_price"
++    ev = float(ev_decimal)
++    if ev >= VALUE_CLEAR_EV_DECIMAL:
++        return "value"
++    if ev >= VALUE_THIN_EV_DECIMAL:
++        return "thin_value"
++    if ev >= NO_VALUE_EV_DECIMAL:
++        return "fair"
++    return "no_value"
++
++
++def _build_context_price_read(
++    *,
++    payload: Dict[str, Any],
++    context_side: str,
++    home: str,
++    away: str,
++) -> Dict[str, Any]:
++    if context_side not in ("home", "away"):
++        return {
++            "status": "balanced_context",
++            "market": "1x2",
++            "outcome": None,
++            "side_name": None,
++            "reason": "no_clear_context_side",
++        }
++
++    outcome = "home" if context_side == "home" else "away"
++    side_name = home if outcome == "home" else away
++    one_x_two = (((payload or {}).get("markets") or {}).get("1x2") or {})
++    probs = one_x_two.get("p_model") or {}
++    odds = one_x_two.get("best_odds") or {}
++
++    model_prob = _as_float(probs.get(outcome))
++    best_odd = _as_float(odds.get(outcome))
++    fair_odd = _prob_to_fair_odd(model_prob)
++    ev_decimal = _price_ev_decimal(model_prob, best_odd)
++
++    if model_prob is None:
++        status = "missing_model"
++        reason = "missing_model_probability"
++    elif best_odd is None:
++        status = "missing_price"
++        reason = "missing_market_odd"
++    else:
++        status = _classify_price_ev(ev_decimal)
++        reason = None
++
++    return {
++        "status": status,
++        "market": "1x2",
++        "outcome": outcome,
++        "side_name": side_name,
++        "model_prob": round(float(model_prob), 6) if model_prob is not None else None,
++        "best_odd": round(float(best_odd), 4) if best_odd is not None else None,
++        "fair_odd": fair_odd,
++        "ev_decimal": ev_decimal,
++        "ev_percent": round(float(ev_decimal) * 100.0, 2) if ev_decimal is not None else None,
++        "reason": reason,
++        "source": "snapshot_markets_1x2_best_odds",
++    }
++
++
++def _variant_index(*, seed: str, section_key: str, count: int) -> int:
++    if count <= 1:
++        return 0
++    raw = f"{NARRATIVE_CONTEXT_VERSION}:natural_multilang_v1_final:{seed}:{section_key}".encode("utf-8")
++    digest = hashlib.sha256(raw).hexdigest()
++    return int(digest[:8], 16) % int(count)
++
++
++def _pick_variant(*, seed: str, section_key: str, variants: Tuple[str, ...]) -> Tuple[str, int]:
++    idx = _variant_index(seed=seed, section_key=section_key, count=len(variants))
++    return variants[idx], idx
++
++
++def _variant_seed(
++    *,
++    sport_key: Optional[str],
++    league_id: Optional[int],
++    season: Optional[int],
++    home_team_id: Optional[int],
++    away_team_id: Optional[int],
++    kickoff_utc: Any,
++) -> str:
++    return "|".join(
++        [
++            str(sport_key or ""),
++            str(league_id or ""),
++            str(season or ""),
++            str(home_team_id or ""),
++            str(away_team_id or ""),
++            str(kickoff_utc or ""),
++        ]
++    )
++
++
++def _games_word(n: Optional[int]) -> str:
++    return _word(n, "jogo", "jogos")
++
++
++def _wins_word(n: Optional[int]) -> str:
++    return _word(n, "vitória", "vitórias")
++
++
++def _record_compact(wins: Optional[int], played: Optional[int], pct_value: Optional[float], *, include_pct: bool = False) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    pct = f" ({_fmt_pct(pct_value)} de aproveitamento)" if include_pct and pct_value is not None else ""
++    if p <= 0:
++        return "ainda tem poucos jogos nesse recorte"
++    if w == 0:
++        return f"ainda não venceu em {p} {_games_word(p)}{pct}"
++    if p == 1:
++        return f"venceu o único jogo do recorte{pct}"
++    return f"venceu {w} dos {p} jogos{pct}"
++
++
++def _record_count(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "poucos jogos no recorte"
++    if w == 0:
++        return f"nenhuma vitória em {p} {_games_word(p)}"
++    return f"{w} {_wins_word(w)} em {p} {_games_word(p)}"
++
++
++def _record_plain(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "tem poucos jogos no recorte"
++    if w == 0:
++        return f"ainda não venceu em {p} {_games_word(p)}"
++    if p == 1:
++        return "venceu o único jogo do recorte"
++    return f"venceu {w} dos {p} jogos"
++
++
++def _split_plain(*, wins: Optional[int], played: Optional[int], side: str) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return f"tem poucos jogos {side} nesse recorte"
++    if w == 0:
++        return f"ainda não venceu {side} nesse recorte"
++    if p == 1:
++        return f"venceu o único jogo {side} do recorte"
++    return f"venceu {w} dos {p} jogos {side}"
++
++
++def _build_headline_pt(
++    *,
++    home: str,
++    away: str,
++    context_side: str,
++    season_edge: str,
++    home_away_edge: str,
++    h2h_status: str,
++    seed: str,
++) -> Tuple[str, int]:
++    if context_side == "home":
++        if home_away_edge in ("home_clear", "home_slight"):
++            variants = (
++                f"{home} x {away}: o contexto favorece o mandante, com o mando pesando na leitura.",
++                f"{home} x {away}: {home} chega com sinais melhores, principalmente pelo jogo em casa.",
++                f"{home} x {away}: o cenário favorece {home}, mas sem transformar isso em entrada automática.",
++            )
++        else:
++            variants = (
++                f"{home} x {away}: o contexto ajuda mais {home}, mas o preço ainda precisa acompanhar.",
++                f"{home} x {away}: {home} aparece um pouco melhor no recorte, sem vantagem absoluta.",
++                f"{home} x {away}: leitura levemente favorável ao mandante, mas com margem para cautela.",
++            )
++    elif context_side == "away":
++        if home_away_edge in ("away_clear", "away_slight"):
++            variants = (
++                f"{home} x {away}: o visitante chega com sinais melhores, mesmo fora de casa.",
++                f"{home} x {away}: {away} aparece melhor no recorte e chega competitivo fora.",
++                f"{home} x {away}: o contexto favorece mais {away}, apesar do mando adversário.",
++            )
++        else:
++            variants = (
++                f"{home} x {away}: o contexto recente favorece mais {away} do que o mandante.",
++                f"{home} x {away}: {away} chega com leitura um pouco mais positiva.",
++                f"{home} x {away}: o visitante tem sinais melhores, mas o jogo ainda pede cuidado.",
++            )
++    elif h2h_status == "unavailable":
++        variants = (
++            f"{home} x {away}: jogo com leitura mais equilibrada e pouco histórico direto recente.",
++            f"{home} x {away}: sem um lado muito claro no contexto e sem retrospecto forte entre eles.",
++            f"{home} x {away}: cenário equilibrado, com poucos sinais fortes para separar os times.",
++        )
++    else:
++        variants = (
++            f"{home} x {away}: contexto mais equilibrado, sem um lado claramente dominante.",
++            f"{home} x {away}: os dados deixam o jogo mais aberto do que unilateral.",
++            f"{home} x {away}: leitura equilibrada, com sinais divididos entre os lados.",
++        )
++    return _pick_variant(seed=seed, section_key="headline", variants=variants)
++
++
++def _build_current_season_text_pt(
++    *,
++    home: str,
++    away: str,
++    home_stats: Dict[str, Any],
++    away_stats: Dict[str, Any],
++    edge: str,
++    seed: str,
++) -> Tuple[str, int]:
++    hp = _as_int(home_stats.get("played")) or 0
++    ap = _as_int(away_stats.get("played")) or 0
++    home_compact = _record_compact(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")))
++    away_compact = _record_compact(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")))
++    home_compact_pct = _record_compact(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")), include_pct=True)
++    away_compact_pct = _record_compact(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")), include_pct=True)
++    home_plain = _record_plain(_as_int(home_stats.get("wins")), hp)
++    away_plain = _record_plain(_as_int(away_stats.get("wins")), ap)
++    home_count = _record_count(_as_int(home_stats.get("wins")), hp)
++    away_count = _record_count(_as_int(away_stats.get("wins")), ap)
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"{home} chega em melhor momento nos jogos analisados. {home_plain.capitalize()}; do outro lado, {away} {away_compact}.",
++            f"Os números favorecem {home}: foram {home_count}. Do outro lado, {away} {away_compact}.",
++            f"Nos jogos analisados, o mandante mostra uma base mais forte: {home_compact_pct}. Do outro lado, o visitante {away_compact}.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"{away} chega em melhor momento nos jogos analisados. {away_plain.capitalize()}; do outro lado, {home} {home_compact}.",
++            f"Os números favorecem {away}: foram {away_count}. Do outro lado, {home} {home_compact}.",
++            f"Nos jogos analisados, o visitante mostra uma base mais forte: {away_compact_pct}. Do outro lado, o mandante {home_compact}.",
++        )
++    else:
++        variants = (
++            f"A campanha dos dois times está mais próxima no recorte analisado. {home} {home_compact}; {away} {away_compact}.",
++            f"Nos jogos analisados, não aparece uma diferença grande de campanha. {home} {home_compact}; {away} {away_compact}.",
++            f"O momento geral é mais equilibrado. O mandante {home_compact}, e o visitante {away_compact}.",
++        )
++    return _pick_variant(seed=seed, section_key="current_season", variants=variants)
++
++
++def _build_home_away_text_pt(
++    *,
++    home: str,
++    away: str,
++    home_stats: Dict[str, Any],
++    away_stats: Dict[str, Any],
++    edge: str,
++    seed: str,
++) -> Tuple[str, int]:
++    hhp = _as_int(home_stats.get("home_played")) or 0
++    aap = _as_int(away_stats.get("away_played")) or 0
++    hw = _as_int(home_stats.get("home_wins")) or 0
++    aw = _as_int(away_stats.get("away_wins")) or 0
++    hpct = _fmt_pct(_as_float(home_stats.get("home_points_pct")))
++    apct = _fmt_pct(_as_float(away_stats.get("away_points_pct")))
++    home_home = _split_plain(wins=hw, played=hhp, side="em casa")
++    away_away = _split_plain(wins=aw, played=aap, side="fora")
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"O mando ajuda nessa leitura: {home} {home_home}. Como visitante, {away} {away_away}.",
++            f"Em casa, {home} tem um recorte melhor: {home_home}. Do outro lado, o visitante {away_away}.",
++            f"O jogo em casa pesa a favor do mandante. {home} {home_home} ({hpct}); {away} {away_away} ({apct}).",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"O mando não tem ajudado tanto {home}: o time {home_home}. Do outro lado, {away} chega competitivo fora e {away_away}.",
++            f"Na comparação entre casa e fora, o recorte favorece mais o visitante. {home} {home_home}; {away} {away_away}.",
++            f"Mesmo fora de casa, {away} aparece melhor nesse ponto. O visitante {away_away}; o mandante {home_home}.",
++        )
++    else:
++        variants = (
++            f"Na comparação entre casa e fora, o cenário não aponta uma vantagem tão forte de um lado só. {home} {home_home}; {away} {away_away}.",
++            f"O recorte de mando e visita está mais dividido. O mandante {home_home}, e o visitante {away_away}.",
++            f"Casa e fora não separam tanto os times neste jogo: {home} {home_home}; {away} {away_away}.",
++        )
++    return _pick_variant(seed=seed, section_key="home_away", variants=variants)
++
++
++def _h2h_edge(h2h: Dict[str, Any]) -> str:
++    hw = int(h2h.get("home_wins") or 0)
++    aw = int(h2h.get("away_wins") or 0)
++    diff = hw - aw
++    if diff >= 3:
++        return "home_clear"
++    if diff >= 1:
++        return "home_slight"
++    if diff <= -3:
++        return "away_clear"
++    if diff <= -1:
++        return "away_slight"
++    return "balanced"
++
++
++def _join_pt(parts: Tuple[str, ...]) -> str:
++    clean = [p for p in parts if p]
++    if not clean:
++        return ""
++    if len(clean) == 1:
++        return clean[0]
++    return ", ".join(clean[:-1]) + " e " + clean[-1]
++
++
++def _h2h_summary(*, home: str, away: str, h2h: Dict[str, Any]) -> str:
++    hw = int(h2h.get("home_wins") or 0)
++    aw = int(h2h.get("away_wins") or 0)
++    draws = int(h2h.get("draws") or 0)
++    parts = []
++    if hw > 0:
++        parts.append(f"{hw} {_wins_word(hw)} de {home}")
++    if draws > 0:
++        parts.append(f"{draws} {_word(draws, 'empate', 'empates')}")
++    if aw > 0:
++        parts.append(f"{aw} {_wins_word(aw)} de {away}")
++    return _join_pt(tuple(parts)) or "sem vitórias registradas para os lados"
++
++
++def _build_h2h_text_pt(*, home: str, away: str, h2h: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    matches = int(h2h.get("matches") or 0)
++    summary = _h2h_summary(home=home, away=away, h2h=h2h)
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"O histórico recente também ajuda {home}: nos últimos {matches} confrontos, foram {summary}. Ainda assim, isso entra como contexto, não como garantia.",
++            f"Entre eles, o recorte recente pende para o mandante. Nos últimos {matches} jogos, foram {summary}. É um dado útil, mas não decide a entrada sozinho.",
++            f"O confronto direto recente reforça um pouco a leitura para {home}. Nos últimos {matches} jogos registrados, foram {summary}, mas retrospecto não é promessa de repetição.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"O histórico recente favorece mais {away}: nos últimos {matches} confrontos, foram {summary}. Mesmo assim, esse dado entra como apoio, não como garantia.",
++            f"No confronto direto, o visitante leva alguma vantagem recente. Nos últimos {matches} jogos, foram {summary}, mas isso não muda sozinho a leitura do jogo.",
++            f"O retrospecto entre eles dá mais força para {away}. Nos últimos {matches} confrontos, foram {summary}. Ainda assim, isso tem peso limitado na decisão.",
++        )
++    else:
++        variants = (
++            f"O histórico recente entre eles é mais equilibrado. Nos últimos {matches} confrontos, foram {summary}. Por isso, esse dado ajuda pouco a separar os lados.",
++            f"Entre eles, o retrospecto recente não mostra domínio claro: nos últimos {matches} jogos, foram {summary}. É contexto, mas não muda a leitura sozinho.",
++            f"O confronto direto recente deixa o jogo mais aberto. Nos últimos {matches} encontros, foram {summary}, sem domínio forte de um lado só.",
++        )
++    return _pick_variant(seed=seed, section_key="head_to_head", variants=variants)
++
++
++def _build_market_connection_text_pt(*, context_side: str, home: str, away: str, seed: str, price_read: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
++    side = home if context_side == "home" else away if context_side == "away" else None
++    pricing_status = str((price_read or {}).get("status") or "unknown")
++
++    if side and pricing_status == "value":
++        variants = (
++            f"O contexto favorece {side} e o preço atual ajuda. Nesse cenário, a entrada ganha força.",
++            f"A leitura pende para {side} e a odd disponível ainda compensa o risco. É uma entrada que faz sentido acompanhar de perto.",
++            f"Os sinais ajudam {side} e o preço não estraga a leitura. Aqui, a entrada fica mais interessante.",
++        )
++    elif side and pricing_status == "thin_value":
++        variants = (
++            f"O contexto favorece {side} e o preço ainda deixa algum espaço. Não é uma folga enorme, mas a leitura merece atenção.",
++            f"A leitura pende para {side} e a odd ainda ajuda um pouco. Faz sentido olhar com carinho, sem exagerar na confiança.",
++            f"Os sinais favorecem {side} e o preço não está ruim. É uma entrada com algum espaço, mas sem cara de oportunidade clara.",
++        )
++    elif side and pricing_status == "fair":
++        variants = (
++            f"O contexto favorece {side}, mas o preço está bem ajustado. Não parece ruim, só não dá muito espaço para forçar entrada.",
++            f"A leitura ajuda {side}, mas a odd não entrega muita folga. É mais jogo de cautela do que de pressa.",
++            f"Os sinais puxam para {side}, só que o preço já parece perto do limite. Melhor não tratar como entrada forte.",
++        )
++    elif side and pricing_status == "no_value":
++        variants = (
++            f"O contexto favorece {side}, mas a odd não compensa o risco. Melhor passar do que forçar entrada.",
++            f"A leitura pende para {side}, só que o preço não ajuda. Nesse cenário, é melhor não comprar a ideia a qualquer odd.",
++            f"Os sinais ajudam {side}, mas a odd atual tira força da aposta. Melhor acompanhar sem forçar.",
++        )
++    elif side and pricing_status in ("missing_price", "missing_model"):
++        variants = (
++            f"O contexto favorece {side}, mas falta uma odd confiável para cravar a entrada. Sem preço claro, melhor manter cautela.",
++            f"A leitura pende para {side}, mas ainda falta preço suficiente para transformar isso em entrada. Por enquanto, é mais contexto do que aposta.",
++            f"Os sinais ajudam {side}, mas sem uma odd confiável a decisão fica incompleta. Melhor esperar um preço mais claro.",
++        )
++    elif side:
++        variants = (
++            f"No geral, o contexto favorece {side}. Ainda assim, não é entrada automática: se a odd não compensar o risco, melhor não forçar.",
++            f"A leitura pende para {side}, mas o preço precisa ajudar. Se a odd pagar bem pelo risco, o cenário fica mais interessante; se não pagar, perde força.",
++            f"O contexto ajuda {side}, mas a aposta só faz sentido quando o risco compensa. Se o preço não ajudar, melhor passar.",
++        )
++    else:
++        variants = (
++            "No geral, o jogo pede mais cuidado do que pressa. Sem um lado muito claro no contexto, só vale considerar entrada se o preço vier realmente bom.",
++            "A leitura é mais equilibrada, então não vale forçar só por intuição. Aqui, a odd precisa entregar uma vantagem bem clara.",
++            "Sem vantagem contextual forte, o melhor é ser seletivo. Se a odd não compensar bem, é jogo para passar ou acompanhar de fora.",
++        )
++    return _pick_variant(seed=seed, section_key="market_connection", variants=variants)
++
++
++
++# -----------------------------
++# English narrative builders
++# -----------------------------
++
++def _games_word_en(n: Optional[int]) -> str:
++    return "game" if int(n or 0) == 1 else "games"
++
++
++def _wins_word_en(n: Optional[int]) -> str:
++    return "win" if int(n or 0) == 1 else "wins"
++
++
++def _record_compact_en(wins: Optional[int], played: Optional[int], pct_value: Optional[float], *, include_pct: bool = False) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    pct = f" ({float(pct_value):.1f}% of available points)" if include_pct and pct_value is not None else ""
++    if p <= 0:
++        return "does not have enough games in this stretch yet"
++    if w == 0:
++        return f"has not won in {p} {_games_word_en(p)}{pct}"
++    if p == 1:
++        return f"won the only game in this stretch{pct}"
++    return f"won {w} of the {p} games{pct}"
++
++
++def _record_count_en(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "not enough games in this stretch"
++    if w == 0:
++        return f"no wins in {p} {_games_word_en(p)}"
++    return f"{w} {_wins_word_en(w)} in {p} {_games_word_en(p)}"
++
++
++def _record_plain_en(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "does not have enough games in this stretch yet"
++    if w == 0:
++        return f"has not won in {p} {_games_word_en(p)}"
++    if p == 1:
++        return "won the only game in this stretch"
++    return f"won {w} of the {p} games"
++
++
++def _split_plain_en(*, wins: Optional[int], played: Optional[int], side: str) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    side_label = 'at home' if side == 'home' else 'away from home' if side == 'away' else str(side)
++    if p <= 0:
++        return f"does not have enough games {side_label} yet"
++    if w == 0:
++        return f"has not won {side_label} in this stretch"
++    if p == 1:
++        return f"won its only game {side_label}"
++    return f"won {w} of the {p} games {side_label}"
++
++
++def _join_en(parts: Tuple[str, ...]) -> str:
++    clean = [p for p in parts if p]
++    if not clean:
++        return ""
++    if len(clean) == 1:
++        return clean[0]
++    return ", ".join(clean[:-1]) + " and " + clean[-1]
++
++
++def _h2h_summary_en(*, home: str, away: str, h2h: Dict[str, Any]) -> str:
++    hw = int(h2h.get("home_wins") or 0)
++    aw = int(h2h.get("away_wins") or 0)
++    draws = int(h2h.get("draws") or 0)
++    parts = []
++    if hw > 0:
++        parts.append(f"{hw} {_wins_word_en(hw)} for {home}")
++    if draws > 0:
++        parts.append(f"{draws} {'draw' if draws == 1 else 'draws'}")
++    if aw > 0:
++        parts.append(f"{aw} {_wins_word_en(aw)} for {away}")
++    return _join_en(tuple(parts)) or "no wins recorded for either side"
++
++
++def _build_headline_en(*, home: str, away: str, context_side: str, season_edge: str, home_away_edge: str, h2h_status: str, seed: str) -> Tuple[str, int]:
++    if context_side == "home":
++        if home_away_edge in ("home_clear", "home_slight"):
++            variants = (
++                f"{home} vs {away}: the context leans toward the home side, helped by the game at home.",
++                f"{home} vs {away}: {home} comes in with stronger signs, especially at home.",
++                f"{home} vs {away}: the context favors {home}, but it is not an automatic bet.",
++            )
++        else:
++            variants = (
++                f"{home} vs {away}: the context helps {home} a bit more, but the odds still have to make sense.",
++                f"{home} vs {away}: {home} looks slightly better in the recent numbers, without a huge edge.",
++                f"{home} vs {away}: a slight lean to the home side, but still a game to treat with care.",
++            )
++    elif context_side == "away":
++        if home_away_edge in ("away_clear", "away_slight"):
++            variants = (
++                f"{home} vs {away}: the away side comes in with stronger signs, even on the road.",
++                f"{home} vs {away}: {away} looks stronger in the recent numbers and travels well.",
++                f"{home} vs {away}: the context leans more toward {away}, even with the home field against them.",
++            )
++        else:
++            variants = (
++                f"{home} vs {away}: the recent context points more to {away} than to the home side.",
++                f"{home} vs {away}: {away} comes in with a slightly better context.",
++                f"{home} vs {away}: the away side has stronger signs, but the game still needs care.",
++            )
++    elif h2h_status == "unavailable":
++        variants = (
++            f"{home} vs {away}: a more balanced context, with little recent head-to-head history.",
++            f"{home} vs {away}: no clear side in the context and no strong recent history between them.",
++            f"{home} vs {away}: a balanced context, with few strong signs separating the teams.",
++        )
++    else:
++        variants = (
++            f"{home} vs {away}: a more balanced context, with no side clearly taking over.",
++            f"{home} vs {away}: the data makes this look more open than one-sided.",
++            f"{home} vs {away}: a balanced picture, with signals split between the two sides.",
++        )
++    return _pick_variant(seed=seed, section_key="headline", variants=variants)
++
++
++def _build_current_season_text_en(*, home: str, away: str, home_stats: Dict[str, Any], away_stats: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    hp = _as_int(home_stats.get("played")) or 0
++    ap = _as_int(away_stats.get("played")) or 0
++    home_compact = _record_compact_en(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")))
++    away_compact = _record_compact_en(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")))
++    home_compact_pct = _record_compact_en(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")), include_pct=True)
++    away_compact_pct = _record_compact_en(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")), include_pct=True)
++    home_plain = _record_plain_en(_as_int(home_stats.get("wins")), hp)
++    away_plain = _record_plain_en(_as_int(away_stats.get("wins")), ap)
++    home_count = _record_count_en(_as_int(home_stats.get("wins")), hp)
++    away_count = _record_count_en(_as_int(away_stats.get("wins")), ap)
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"{home} looks stronger in the games analyzed. {home_plain.capitalize()}; on the other side, {away} {away_compact}.",
++            f"The recent numbers favor {home}: {home_count}. On the other side, {away} {away_compact}.",
++            f"In the games analyzed, the home side has the stronger numbers: {home_compact_pct}. The away side {away_compact}.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"{away} looks stronger in the games analyzed. {away_plain.capitalize()}; on the other side, {home} {home_compact}.",
++            f"The recent numbers favor {away}: {away_count}. On the other side, {home} {home_compact}.",
++            f"In the games analyzed, the away side has the stronger numbers: {away_compact_pct}. The home side {home_compact}.",
++        )
++    else:
++        variants = (
++            f"The two teams are closer in the recent numbers. {home} {home_compact}; {away} {away_compact}.",
++            f"There is no big gap in the games analyzed. {home} {home_compact}; {away} {away_compact}.",
++            f"The overall picture is more balanced. The home side {home_compact}, and the away side {away_compact}.",
++        )
++    return _pick_variant(seed=seed, section_key="current_season", variants=variants)
++
++
++def _build_home_away_text_en(*, home: str, away: str, home_stats: Dict[str, Any], away_stats: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    hhp = _as_int(home_stats.get("home_played")) or 0
++    aap = _as_int(away_stats.get("away_played")) or 0
++    hw = _as_int(home_stats.get("home_wins")) or 0
++    aw = _as_int(away_stats.get("away_wins")) or 0
++    hpct = f"{_as_float(home_stats.get('home_points_pct')):.1f}%" if _as_float(home_stats.get("home_points_pct")) is not None else "n/a"
++    apct = f"{_as_float(away_stats.get('away_points_pct')):.1f}%" if _as_float(away_stats.get("away_points_pct")) is not None else "n/a"
++    home_home = _split_plain_en(wins=hw, played=hhp, side="home")
++    away_away = _split_plain_en(wins=aw, played=aap, side="away")
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"Playing at home helps the picture: {home} {home_home}. As the away team, {away} {away_away}.",
++            f"At home, {home} has the better numbers: {home_home}. On the other side, the visitor {away_away}.",
++            f"The home game matters here. {home} {home_home} ({hpct}); {away} {away_away} ({apct}).",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"Home field has not helped {home} much in the recent numbers: the team {home_home}. On the other side, {away} has traveled well and {away_away}.",
++            f"Looking at home and away form, the numbers lean more toward the visitor. {home} {home_home}; {away} {away_away}.",
++            f"Even away from home, {away} looks better in this part of the context. The visitor {away_away}; the home side {home_home}.",
++        )
++    else:
++        variants = (
++            f"Home and away form does not point strongly to one side. {home} {home_home}; {away} {away_away}.",
++            f"The home/away split is more divided. The home side {home_home}, and the visitor {away_away}.",
++            f"Home and away form does not separate the teams that much here: {home} {home_home}; {away} {away_away}.",
++        )
++    return _pick_variant(seed=seed, section_key="home_away", variants=variants)
++
++
++def _build_h2h_text_en(*, home: str, away: str, h2h: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    matches = int(h2h.get("matches") or 0)
++    summary = _h2h_summary_en(home=home, away=away, h2h=h2h)
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"The recent head-to-head also helps {home}: over the last {matches} meetings, there were {summary}. Still, this is context, not a guarantee.",
++            f"Between these teams, the recent meetings lean toward the home side. Over the last {matches} games, there were {summary}. It is useful, but it does not decide the bet on its own.",
++            f"The recent head-to-head gives a bit more support to {home}. Over the last {matches} recorded games, there were {summary}, but history is not a promise of a repeat.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"The recent head-to-head favors {away} a bit more: over the last {matches} meetings, there were {summary}. Still, it is support, not a guarantee.",
++            f"In the head-to-head, the visitor has a slight recent edge. Over the last {matches} games, there were {summary}, but that does not change the game context by itself.",
++            f"The head-to-head gives {away} a bit more weight. Over the last {matches} meetings, there were {summary}. It still has limited weight in the decision.",
++        )
++    else:
++        variants = (
++            f"The recent head-to-head is more balanced. Over the last {matches} meetings, there were {summary}. That does not do much to separate the sides.",
++            f"Between them, the recent history does not show a clear edge: over the last {matches} games, there were {summary}. It is context, but it does not move the context on its own.",
++            f"The recent head-to-head keeps the game more open. Over the last {matches} meetings, there were {summary}, without one side clearly taking over.",
++        )
++    return _pick_variant(seed=seed, section_key="head_to_head", variants=variants)
++
++
++def _build_market_connection_text_en(*, context_side: str, home: str, away: str, seed: str, price_read: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
++    side = home if context_side == "home" else away if context_side == "away" else None
++    pricing_status = str((price_read or {}).get("status") or "unknown")
++
++    if side and pricing_status == "value":
++        variants = (
++            f"The context favors {side}, and the current odds help. In this spot, the bet gets stronger.",
++            f"The picture leans toward {side}, and the available odds still make the risk worthwhile. This is one to watch closely.",
++            f"The signals help {side}, and the price does not hurt the case. This makes the bet more interesting.",
++        )
++    elif side and pricing_status == "thin_value":
++        variants = (
++            f"The context favors {side}, and the price still leaves some room. It is not a huge cushion, but it is worth a closer look.",
++            f"The picture leans toward {side}, and the odds help a bit. It makes sense to look closely, without getting carried away.",
++            f"The signals favor {side}, and the price is not bad. There is some room here, but not enough to call it a clear opportunity.",
++        )
++    elif side and pricing_status == "fair":
++        variants = (
++            f"The context favors {side}, but the price looks fairly tight. It is not a bad read, but there is not much room to force it.",
++            f"The context helps {side}, but the odds do not leave much cushion. This is more a spot for caution than urgency.",
++            f"The signs point toward {side}, but the price already looks close to the limit. Better not treat it as a strong play.",
++        )
++    elif side and pricing_status == "no_value":
++        variants = (
++            f"The context favors {side}, but the odds do not make the risk worthwhile. Passing is the better call.",
++            f"The picture leans toward {side}, but the price does not help. In this spot, it is better not to chase it at any number.",
++            f"The signals help {side}, but the current odds weaken the bet. Better to watch without forcing it.",
++        )
++    elif side and pricing_status in ("missing_price", "missing_model"):
++        variants = (
++            f"The context favors {side}, but there is not enough reliable pricing to call it a bet. Without a clear price, caution is better.",
++            f"The picture leans toward {side}, but the price is not clear enough to turn it into a play. For now, it is more context than bet.",
++            f"The signals help {side}, but without reliable odds the decision is incomplete. Better to wait for a clearer price.",
++        )
++    elif side:
++        variants = (
++            f"Overall, the context favors {side}. Still, it is not an automatic bet: if the odds do not make the risk worthwhile, it is better to pass.",
++            f"The context leans toward {side}, but the odds still have to make sense. If the odds are good enough for the risk, the picture gets more interesting; if not, it loses strength.",
++            f"The context helps {side}, but the bet only makes sense when the odds are good enough. If the odds are not good enough, passing is the better call.",
++        )
++    else:
++        variants = (
++            "Overall, this game calls for patience more than urgency. With no clear contextual edge, it only becomes interesting if the odds are genuinely good.",
++            "The context is more balanced, so it is not worth forcing a play on instinct alone. Here, the odds need to offer a clear advantage.",
++            "Without a strong contextual edge, being selective matters. If the odds do not compensate well enough, it is better to pass or just watch.",
++        )
++    return _pick_variant(seed=seed, section_key="market_connection", variants=variants)
++
++
++
++# -----------------------------
++# Spanish narrative builders
++# -----------------------------
++
++def _games_word_es(n: Optional[int]) -> str:
++    return "partido" if int(n or 0) == 1 else "partidos"
++
++
++def _wins_word_es(n: Optional[int]) -> str:
++    return "victoria" if int(n or 0) == 1 else "victorias"
++
++
++def _record_compact_es(wins: Optional[int], played: Optional[int], pct_value: Optional[float], *, include_pct: bool = False) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    pct = f" ({float(pct_value):.1f}% de aprovechamiento)" if include_pct and pct_value is not None else ""
++    if p <= 0:
++        return "todavía tiene pocos partidos en este recorte"
++    if w == 0:
++        return f"todavía no ganó en {p} {_games_word_es(p)}{pct}"
++    if p == 1:
++        return f"ganó el único partido de este recorte{pct}"
++    return f"ganó {w} de los {p} partidos{pct}"
++
++
++def _record_count_es(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "pocos partidos en este recorte"
++    if w == 0:
++        return f"ninguna victoria en {p} {_games_word_es(p)}"
++    return f"{w} {_wins_word_es(w)} en {p} {_games_word_es(p)}"
++
++
++def _record_plain_es(wins: Optional[int], played: Optional[int]) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return "tiene pocos partidos en este recorte"
++    if w == 0:
++        return f"todavía no ganó en {p} {_games_word_es(p)}"
++    if p == 1:
++        return "ganó el único partido de este recorte"
++    return f"ganó {w} de los {p} partidos"
++
++
++def _split_plain_es(*, wins: Optional[int], played: Optional[int], side: str) -> str:
++    w = int(wins or 0)
++    p = int(played or 0)
++    if p <= 0:
++        return f"tiene pocos partidos {side} en este recorte"
++    if w == 0:
++        return f"todavía no ganó {side} en este recorte"
++    if p == 1:
++        return f"ganó su único partido {side} en este recorte"
++    return f"ganó {w} de los {p} partidos {side}"
++
++
++def _join_es(parts: Tuple[str, ...]) -> str:
++    clean = [p for p in parts if p]
++    if not clean:
++        return ""
++    if len(clean) == 1:
++        return clean[0]
++    return ", ".join(clean[:-1]) + " y " + clean[-1]
++
++
++def _h2h_summary_es(*, home: str, away: str, h2h: Dict[str, Any]) -> str:
++    hw = int(h2h.get("home_wins") or 0)
++    aw = int(h2h.get("away_wins") or 0)
++    draws = int(h2h.get("draws") or 0)
++    parts = []
++    if hw > 0:
++        parts.append(f"{hw} {_wins_word_es(hw)} de {home}")
++    if draws > 0:
++        parts.append(f"{draws} {_word(draws, 'empate', 'empates')}")
++    if aw > 0:
++        parts.append(f"{aw} {_wins_word_es(aw)} de {away}")
++    return _join_es(tuple(parts)) or "sin victorias registradas para ninguno de los lados"
++
++
++def _build_headline_es(*, home: str, away: str, context_side: str, season_edge: str, home_away_edge: str, h2h_status: str, seed: str) -> Tuple[str, int]:
++    if context_side == "home":
++        if home_away_edge in ("home_clear", "home_slight"):
++            variants = (
++                f"{home} vs {away}: el contexto favorece al local, con el partido en casa pesando en el contexto.",
++                f"{home} vs {away}: {home} llega con mejores señales, sobre todo por jugar en casa.",
++                f"{home} vs {away}: el escenario favorece a {home}, pero no lo convierte en entrada automática.",
++            )
++        else:
++            variants = (
++                f"{home} vs {away}: el contexto ayuda más a {home}, pero la cuota todavía tiene que acompañar.",
++                f"{home} vs {away}: {home} aparece un poco mejor en los números recientes, sin una ventaja enorme.",
++                f"{home} vs {away}: contexto levemente favorable al local, pero con margen para cuidarse.",
++            )
++    elif context_side == "away":
++        if home_away_edge in ("away_clear", "away_slight"):
++            variants = (
++                f"{home} vs {away}: el visitante llega con mejores señales, incluso jugando fuera.",
++                f"{home} vs {away}: {away} aparece mejor en los números recientes y llega competitivo fuera.",
++                f"{home} vs {away}: el contexto se inclina más hacia {away}, pese al campo rival.",
++            )
++        else:
++            variants = (
++                f"{home} vs {away}: el contexto reciente apunta más a {away} que al local.",
++                f"{home} vs {away}: {away} llega con un contexto un poco más positivo.",
++                f"{home} vs {away}: el visitante tiene mejores señales, pero el partido todavía pide cuidado.",
++            )
++    elif h2h_status == "unavailable":
++        variants = (
++            f"{home} vs {away}: contexto más equilibrado y poco historial directo reciente.",
++            f"{home} vs {away}: sin un lado muy claro en el contexto y sin historial reciente fuerte entre ellos.",
++            f"{home} vs {away}: escenario equilibrado, con pocas señales fuertes para separar a los equipos.",
++        )
++    else:
++        variants = (
++            f"{home} vs {away}: contexto más equilibrado, sin un lado claramente dominante.",
++            f"{home} vs {away}: los datos dejan el partido más abierto que unilateral.",
++            f"{home} vs {away}: contexto equilibrado, con señales repartidas entre los dos lados.",
++        )
++    return _pick_variant(seed=seed, section_key="headline", variants=variants)
++
++
++def _build_current_season_text_es(*, home: str, away: str, home_stats: Dict[str, Any], away_stats: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    hp = _as_int(home_stats.get("played")) or 0
++    ap = _as_int(away_stats.get("played")) or 0
++    home_compact = _record_compact_es(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")))
++    away_compact = _record_compact_es(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")))
++    home_compact_pct = _record_compact_es(_as_int(home_stats.get("wins")), hp, _as_float(home_stats.get("points_pct")), include_pct=True)
++    away_compact_pct = _record_compact_es(_as_int(away_stats.get("wins")), ap, _as_float(away_stats.get("points_pct")), include_pct=True)
++    home_plain = _record_plain_es(_as_int(home_stats.get("wins")), hp)
++    away_plain = _record_plain_es(_as_int(away_stats.get("wins")), ap)
++    home_count = _record_count_es(_as_int(home_stats.get("wins")), hp)
++    away_count = _record_count_es(_as_int(away_stats.get("wins")), ap)
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"{home} llega en mejor momento en los partidos analizados. {home_plain.capitalize()}; del otro lado, {away} {away_compact}.",
++            f"Los números favorecen a {home}: fueron {home_count}. Del otro lado, {away} {away_compact}.",
++            f"En los partidos analizados, el local muestra una base más fuerte: {home_compact_pct}. El visitante {away_compact}.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"{away} llega en mejor momento en los partidos analizados. {away_plain.capitalize()}; del otro lado, {home} {home_compact}.",
++            f"Los números favorecen a {away}: fueron {away_count}. Del otro lado, {home} {home_compact}.",
++            f"En los partidos analizados, el visitante muestra una base más fuerte: {away_compact_pct}. El local {home_compact}.",
++        )
++    else:
++        variants = (
++            f"La campaña de los dos equipos está más cerca en este recorte. {home} {home_compact}; {away} {away_compact}.",
++            f"En los partidos analizados, no aparece una diferencia grande de campaña. {home} {home_compact}; {away} {away_compact}.",
++            f"El momento general es más equilibrado. El local {home_compact}, y el visitante {away_compact}.",
++        )
++    return _pick_variant(seed=seed, section_key="current_season", variants=variants)
++
++
++def _build_home_away_text_es(*, home: str, away: str, home_stats: Dict[str, Any], away_stats: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    hhp = _as_int(home_stats.get("home_played")) or 0
++    aap = _as_int(away_stats.get("away_played")) or 0
++    hw = _as_int(home_stats.get("home_wins")) or 0
++    aw = _as_int(away_stats.get("away_wins")) or 0
++    hpct = f"{_as_float(home_stats.get('home_points_pct')):.1f}%" if _as_float(home_stats.get("home_points_pct")) is not None else "n/d"
++    apct = f"{_as_float(away_stats.get('away_points_pct')):.1f}%" if _as_float(away_stats.get("away_points_pct")) is not None else "n/d"
++    home_home = _split_plain_es(wins=hw, played=hhp, side="en casa")
++    away_away = _split_plain_es(wins=aw, played=aap, side="fuera")
++
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"Jugar en casa ayuda en este contexto: {home} {home_home}. Como visitante, {away} {away_away}.",
++            f"En casa, {home} tiene mejores números: {home_home}. Del otro lado, el visitante {away_away}.",
++            f"El partido en casa pesa a favor del local. {home} {home_home} ({hpct}); {away} {away_away} ({apct}).",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"El campo no ha ayudado tanto a {home} en este recorte: el equipo {home_home}. Del otro lado, {away} llega competitivo fuera y {away_away}.",
++            f"En la comparación entre casa y fuera, los números favorecen más al visitante. {home} {home_home}; {away} {away_away}.",
++            f"Incluso fuera de casa, {away} aparece mejor en este punto. El visitante {away_away}; el local {home_home}.",
++        )
++    else:
++        variants = (
++            f"Casa y fuera no apuntan con fuerza a un solo lado. {home} {home_home}; {away} {away_away}.",
++            f"El recorte de local y visitante está más dividido. El local {home_home}, y el visitante {away_away}.",
++            f"Casa y fuera no separan tanto a los equipos en este partido: {home} {home_home}; {away} {away_away}.",
++        )
++    return _pick_variant(seed=seed, section_key="home_away", variants=variants)
++
++
++def _build_h2h_text_es(*, home: str, away: str, h2h: Dict[str, Any], edge: str, seed: str) -> Tuple[str, int]:
++    matches = int(h2h.get("matches") or 0)
++    summary = _h2h_summary_es(home=home, away=away, h2h=h2h)
++    if edge in ("home_clear", "home_slight"):
++        variants = (
++            f"El historial reciente también ayuda a {home}: en los últimos {matches} enfrentamientos, fueron {summary}. Aun así, eso entra como contexto, no como garantía.",
++            f"Entre ellos, el historial reciente se inclina hacia el local. En los últimos {matches} partidos, fueron {summary}. Es un dato útil, pero no decide la entrada por sí solo.",
++            f"El duelo directo reciente refuerza un poco el contexto para {home}. En los últimos {matches} partidos registrados, fueron {summary}, pero el historial no promete repetición.",
++        )
++    elif edge in ("away_clear", "away_slight"):
++        variants = (
++            f"El historial reciente favorece más a {away}: en los últimos {matches} enfrentamientos, fueron {summary}. Aun así, es apoyo, no garantía.",
++            f"En el duelo directo, el visitante tiene una pequeña ventaja reciente. En los últimos {matches} partidos, fueron {summary}, pero eso no cambia por sí solo la lectura del partido.",
++            f"El retrospecto entre ellos le da algo más de peso a {away}. En los últimos {matches} enfrentamientos, fueron {summary}. Aun así, tiene peso limitado para decidir la entrada.",
++        )
++    else:
++        variants = (
++            f"El historial reciente entre ellos es más equilibrado. En los últimos {matches} enfrentamientos, fueron {summary}. Por eso, este dato ayuda poco a separar los lados.",
++            f"Entre ellos, el historial reciente no muestra una ventaja clara: en los últimos {matches} partidos, fueron {summary}. Es contexto, pero no mueve el contexto por sí solo.",
++            f"El duelo directo reciente deja el partido más abierto. En los últimos {matches} encuentros, fueron {summary}, sin dominio fuerte de un lado.",
++        )
++    return _pick_variant(seed=seed, section_key="head_to_head", variants=variants)
++
++
++def _build_market_connection_text_es(*, context_side: str, home: str, away: str, seed: str, price_read: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
++    side = home if context_side == "home" else away if context_side == "away" else None
++    pricing_status = str((price_read or {}).get("status") or "unknown")
++
++    if side and pricing_status == "value":
++        variants = (
++            f"El contexto favorece a {side} y la cuota actual ayuda. En este escenario, la entrada gana fuerza.",
++            f"El panorama se inclina hacia {side} y la cuota disponible todavía compensa el riesgo. Es una entrada para mirar de cerca.",
++            f"Las señales ayudan a {side} y la cuota no arruina la lectura. Aquí, la entrada se vuelve más interesante.",
++        )
++    elif side and pricing_status == "thin_value":
++        variants = (
++            f"El contexto favorece a {side} y la cuota todavía deja algo de espacio. No es una ventaja enorme, pero merece atención.",
++            f"El panorama se inclina hacia {side} y la cuota ayuda un poco. Tiene sentido mirarlo con cariño, sin exagerar la confianza.",
++            f"Las señales favorecen a {side} y la cuota no está mal. Hay algo de espacio, pero no como para llamarlo una oportunidad clara.",
++        )
++    elif side and pricing_status == "fair":
++        variants = (
++            f"El contexto favorece a {side}, pero la cuota parece bastante ajustada. No es una mala lectura, solo que no deja mucho margen para forzar.",
++            f"El contexto ayuda a {side}, pero la cuota no deja demasiada ventaja. Es más un partido para cautela que para prisa.",
++            f"Las señales apuntan a {side}, pero la cuota ya parece cerca del límite. Mejor no tratarlo como una entrada fuerte.",
++        )
++    elif side and pricing_status == "no_value":
++        variants = (
++            f"El contexto favorece a {side}, pero la cuota no compensa el riesgo. Mejor pasar que forzar la entrada.",
++            f"El panorama se inclina hacia {side}, pero la cuota no ayuda. En este escenario, mejor no comprar la idea a cualquier precio.",
++            f"Las señales ayudan a {side}, pero la cuota actual le quita fuerza a la apuesta. Mejor mirar sin forzar.",
++        )
++    elif side and pricing_status in ("missing_price", "missing_model"):
++        variants = (
++            f"El contexto favorece a {side}, pero falta una cuota confiable para cerrar la entrada. Sin precio claro, mejor mantener cautela.",
++            f"El panorama se inclina hacia {side}, pero todavía falta precio para convertirlo en entrada. Por ahora, es más contexto que apuesta.",
++            f"Las señales ayudan a {side}, pero sin una cuota confiable la decisión queda incompleta. Mejor esperar un precio más claro.",
++        )
++    elif side:
++        variants = (
++            f"En general, el contexto favorece a {side}. Aun así, no es apuesta automática: si la cuota no compensa el riesgo, mejor no forzar.",
++            f"El contexto se inclina hacia {side}, pero la cuota tiene que acompañar. Si la cuota paga bien el riesgo, el escenario gana fuerza; si no, pierde interés.",
++            f"El contexto ayuda a {side}, pero la apuesta solo tiene sentido cuando la cuota compensa. Si la cuota no ayuda, mejor pasar.",
++        )
++    else:
++        variants = (
++            "En general, este partido pide más paciencia que prisa. Sin una ventaja clara en el contexto, solo vale considerar entrada si la cuota viene realmente buena.",
++            "El panorama es más equilibrado, así que no vale forzar solo por intuición. Aquí, la cuota tiene que entregar una ventaja clara.",
++            "Sin una ventaja contextual fuerte, conviene ser selectivo. Si la cuota no compensa bien, mejor pasar o mirar desde fuera.",
++        )
++    return _pick_variant(seed=seed, section_key="market_connection", variants=variants)
++
++
++
++def _localized_limited_current_text(lang: str) -> str:
++    if lang == "en":
++        return "There are still too few games in this stretch to compare both teams with confidence."
++    if lang == "es":
++        return "Todavía hay pocos partidos en este recorte para comparar a los dos equipos con confianza."
++    return "Ainda há poucos jogos no recorte analisado para comparar a campanha das duas equipes com segurança."
++
++
++def _localized_limited_home_away_text(lang: str) -> str:
++    if lang == "en":
++        return "The home/away split still has too few games to become a strong conclusion. For now, it enters the context with caution."
++    if lang == "es":
++        return "El recorte casa/fuera todavía tiene pocos partidos para convertirse en una conclusión fuerte. Por ahora, entra con cautela en el contexto."
++    return "O casa/fora ainda tem poucos jogos para virar uma conclusão forte. Por enquanto, esse ponto entra com cautela na leitura."
++
++
++def _localized_h2h_limited_text(lang: str, matches: int) -> str:
++    if lang == "en":
++        if matches == 1:
++            return "There is only 1 recent head-to-head game recorded, which is not enough to call it a pattern between the teams."
++        return f"There are only {matches} recent head-to-head games recorded, which is not enough to call it a pattern between the teams."
++    if lang == "es":
++        if matches == 1:
++            return "Hay solo 1 enfrentamiento directo reciente registrado, poco para decir que existe un patrón entre los equipos."
++        return f"Hay solo {matches} enfrentamientos directos recientes registrados, poco para decir que existe un patrón entre los equipos."
++    if matches == 1:
++        return "Há só 1 confronto direto recente registrado, pouco para dizer que existe um padrão entre as equipes."
++    return f"Há só {matches} confrontos diretos recentes registrados, pouco para dizer que existe um padrão entre as equipes."
++
++
++def _localized_h2h_unavailable_text(lang: str) -> str:
++    if lang == "en":
++        return "There is not enough recent head-to-head history for it to carry weight in this context."
++    if lang == "es":
++        return "No hay suficientes enfrentamientos directos recientes para que ese historial pese en el contexto."
++    return "Não há confrontos diretos recentes suficientes para esse histórico pesar na análise."
++
++
++def _build_headline_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
++    if lang == "en":
++        return _build_headline_en(**kwargs)
++    if lang == "es":
++        return _build_headline_es(**kwargs)
++    return _build_headline_pt(**kwargs)
++
++
++def _build_current_season_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
++    if lang == "en":
++        return _build_current_season_text_en(**kwargs)
++    if lang == "es":
++        return _build_current_season_text_es(**kwargs)
++    return _build_current_season_text_pt(**kwargs)
++
++
++def _build_home_away_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
++    if lang == "en":
++        return _build_home_away_text_en(**kwargs)
++    if lang == "es":
++        return _build_home_away_text_es(**kwargs)
++    return _build_home_away_text_pt(**kwargs)
++
++
++def _build_h2h_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
++    if lang == "en":
++        return _build_h2h_text_en(**kwargs)
++    if lang == "es":
++        return _build_h2h_text_es(**kwargs)
++    return _build_h2h_text_pt(**kwargs)
++
++
++def _build_market_connection_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
++    if lang == "en":
++        return _build_market_connection_text_en(**kwargs)
++    if lang == "es":
++        return _build_market_connection_text_es(**kwargs)
++    return _build_market_connection_text_pt(**kwargs)
++
++
++def _compose_language_texts(
++    *,
++    lang: str,
++    home: str,
++    away: str,
++    home_stats: Optional[Dict[str, Any]],
++    away_stats: Optional[Dict[str, Any]],
++    h2h: Dict[str, Any],
++    season_edge: str,
++    home_away_edge: str,
++    h2h_edge: str,
++    context_side: str,
++    price_read: Optional[Dict[str, Any]],
++    variant_seed: str,
++    collect_variants: Optional[Dict[str, int]] = None,
++) -> Dict[str, Any]:
++    sections: Dict[str, Dict[str, Any]] = {}
++    paragraphs = []
++
++    hp = _as_int((home_stats or {}).get("played")) or 0
++    ap = _as_int((away_stats or {}).get("played")) or 0
++    if home_stats and away_stats and hp >= MIN_SEASON_GAMES and ap >= MIN_SEASON_GAMES:
++        text, variant_idx = _build_current_season_text_for_lang(
++            lang,
++            home=home,
++            away=away,
++            home_stats=home_stats,
++            away_stats=away_stats,
++            edge=season_edge,
++            seed=variant_seed,
++        )
++        if collect_variants is not None:
++            collect_variants["current_season"] = variant_idx
++        sections["current_season"] = {"status": "available", "quality": "good", "sample_size": {"home": hp, "away": ap}, "text": text}
++    else:
++        text = _localized_limited_current_text(lang)
++        sections["current_season"] = {"status": "limited" if home_stats or away_stats else "unavailable", "quality": "limited", "sample_size": {"home": hp, "away": ap}, "text": text}
++    paragraphs.append(text)
++
++    hhp = _as_int((home_stats or {}).get("home_played")) or 0
++    aap = _as_int((away_stats or {}).get("away_played")) or 0
++    if home_stats and away_stats and hhp >= MIN_SPLIT_GAMES and aap >= MIN_SPLIT_GAMES:
++        text, variant_idx = _build_home_away_text_for_lang(
++            lang,
++            home=home,
++            away=away,
++            home_stats=home_stats,
++            away_stats=away_stats,
++            edge=home_away_edge,
++            seed=variant_seed,
++        )
++        if collect_variants is not None:
++            collect_variants["home_away"] = variant_idx
++        sections["home_away"] = {"status": "available", "quality": "good", "sample_size": {"home_home": hhp, "away_away": aap}, "text": text}
++    else:
++        text = _localized_limited_home_away_text(lang)
++        sections["home_away"] = {"status": "limited" if home_stats or away_stats else "unavailable", "quality": "limited", "sample_size": {"home_home": hhp, "away_away": aap}, "text": text}
++    paragraphs.append(text)
++
++    if h2h["status"] == "available":
++        text, variant_idx = _build_h2h_text_for_lang(lang, home=home, away=away, h2h=h2h, edge=h2h_edge, seed=variant_seed)
++        if collect_variants is not None:
++            collect_variants["head_to_head"] = variant_idx
++        sections["head_to_head"] = {"status": "available", "quality": "good", "sample_size": h2h["matches"], "text": text}
++    elif h2h["status"] == "limited":
++        matches = int(h2h.get("matches") or 0)
++        text = _localized_h2h_limited_text(lang, matches)
++        sections["head_to_head"] = {"status": "limited", "quality": "limited", "sample_size": h2h["matches"], "text": text}
++    else:
++        text = _localized_h2h_unavailable_text(lang)
++        sections["head_to_head"] = {"status": "unavailable", "quality": "unavailable", "sample_size": 0, "text": text}
++    paragraphs.append(text)
++
++    market_text, variant_idx = _build_market_connection_text_for_lang(
++        lang,
++        context_side=context_side,
++        home=home,
++        away=away,
++        seed=variant_seed,
++        price_read=price_read,
++    )
++    if collect_variants is not None:
++        collect_variants["market_connection"] = variant_idx
++    sections["market_connection"] = {"status": "available", "quality": "good", "text": market_text}
++    paragraphs.append(market_text)
++
++    headline, variant_idx = _build_headline_for_lang(
++        lang,
++        home=home,
++        away=away,
++        context_side=context_side,
++        season_edge=season_edge,
++        home_away_edge=home_away_edge,
++        h2h_status=str(h2h.get("status") or "unknown"),
++        seed=variant_seed,
++    )
++    if collect_variants is not None:
++        collect_variants["headline"] = variant_idx
++
++    return {"headline": headline, "paragraphs": paragraphs, "sections": sections}
++
++
+ def _fallback_context(*, reason: str, home_name: Optional[str], away_name: Optional[str]) -> Dict[str, Any]:
+     home = _team(home_name, "mandante")
+     away = _team(away_name, "visitante")
++    pt = {
++        "headline": "Contexto narrativo indisponível para esta partida.",
++        "paragraphs": [
++            f"Ainda não há dados contextuais suficientes para montar uma leitura confiável de {home} x {away}. "
++            "A análise probabilística segue disponível normalmente, mas o panorama narrativo fica limitado neste momento."
++        ],
++        "sections": {},
++    }
++    en = {
++        "headline": "Narrative context is unavailable for this match.",
++        "paragraphs": [
++            f"There is still not enough context data to build reliable context for {home} vs {away}. "
++            "The probability analysis remains available, but the narrative view is limited for now."
++        ],
++        "sections": {},
++    }
++    es = {
++        "headline": "El contexto narrativo no está disponible para este partido.",
++        "paragraphs": [
++            f"Todavía no hay datos contextuales suficientes para armar un contexto confiable de {home} vs {away}. "
++            "El análisis probabilístico sigue disponible, pero el panorama narrativo queda limitado por ahora."
++        ],
++        "sections": {},
++    }
+     return {
+         "version": NARRATIVE_CONTEXT_VERSION,
+         "status": "unavailable",
+         "quality": "unavailable",
+         "language": "pt-BR",
++        "default_language": "pt-BR",
++        "languages": ["pt-BR", "en", "es"],
+         "generated_at_utc": _now_iso(),
+-        "headline": "Contexto narrativo indisponível para esta partida.",
+-        "paragraphs": [
+-            f"Ainda não há dados contextuais suficientes para montar uma leitura confiável de {home} x {away}. "
+-            "A análise probabilística segue disponível normalmente, mas o panorama narrativo fica limitado neste momento."
+-        ],
++        "headline": pt["headline"],
++        "paragraphs": pt["paragraphs"],
+         "sections": {},
++        "texts": {"pt-BR": pt, "en": en, "es": es},
+         "facts": {},
+         "data_gaps": [reason],
+         "warnings": ["A leitura contextual não representa promessa ou garantia de resultado."],
+     }
+ 
+-
+ def _load_team_stats(conn, *, league_id: int, season: int, team_id: int) -> Optional[Dict[str, Any]]:
+     sql = """
+       SELECT
+@@ -174,90 +1368,130 @@
+     away_stats = _load_team_stats(conn, league_id=league_id, season=season, team_id=away_team_id)
+     h2h = _load_h2h(conn, home_team_id=home_team_id, away_team_id=away_team_id, before_utc=kickoff_utc)
+ 
+-    sections: Dict[str, Dict[str, Any]] = {}
+-    paragraphs = []
+     data_gaps = []
++    selected_variants: Dict[str, int] = {}
++    variant_seed = _variant_seed(
++        sport_key=sport_key,
++        league_id=league_id,
++        season=season,
++        home_team_id=home_team_id,
++        away_team_id=away_team_id,
++        kickoff_utc=kickoff_utc,
++    )
+ 
+     hp = _as_int((home_stats or {}).get("played")) or 0
+     ap = _as_int((away_stats or {}).get("played")) or 0
++    season_edge = "unknown"
+     if home_stats and away_stats and hp >= MIN_SEASON_GAMES and ap >= MIN_SEASON_GAMES:
+-        text = (
+-            f"Na temporada monitorada, {home} soma {_as_int(home_stats.get('wins')) or 0} vitórias em {hp} jogos "
+-            f"({_fmt_pct(home_stats.get('points_pct'))} de aproveitamento), enquanto {away} registra "
+-            f"{_as_int(away_stats.get('wins')) or 0} vitórias em {ap} jogos "
+-            f"({_fmt_pct(away_stats.get('points_pct'))}). Esse recorte ajuda a contextualizar o momento competitivo "
+-            "das equipes antes da comparação com as odds."
+-        )
+-        sections["current_season"] = {"status": "available", "quality": "good", "sample_size": {"home": hp, "away": ap}, "text": text}
++        season_edge = _edge_from_delta(_as_float(home_stats.get("points_pct")), _as_float(away_stats.get("points_pct")))
+     else:
+-        text = "Ainda há poucos dados consolidados da temporada monitorada para comparar a campanha das duas equipes com segurança."
+-        sections["current_season"] = {"status": "limited" if home_stats or away_stats else "unavailable", "quality": "limited", "sample_size": {"home": hp, "away": ap}, "text": text}
+         data_gaps.append("current_season_limited")
+-    paragraphs.append(text)
+ 
+     hhp = _as_int((home_stats or {}).get("home_played")) or 0
+     aap = _as_int((away_stats or {}).get("away_played")) or 0
++    home_away_edge = "unknown"
+     if home_stats and away_stats and hhp >= MIN_SPLIT_GAMES and aap >= MIN_SPLIT_GAMES:
+-        text = (
+-            f"O fator mando também entra no panorama: {home} tem {_as_int(home_stats.get('home_wins')) or 0} vitórias em "
+-            f"{hhp} jogos como mandante ({_fmt_pct(home_stats.get('home_points_pct'))} de aproveitamento). "
+-            f"Fora de casa, {away} tem {_as_int(away_stats.get('away_wins')) or 0} vitórias em {aap} jogos "
+-            f"({_fmt_pct(away_stats.get('away_points_pct'))})."
+-        )
+-        sections["home_away"] = {"status": "available", "quality": "good", "sample_size": {"home_home": hhp, "away_away": aap}, "text": text}
++        home_away_edge = _edge_from_delta(_as_float(home_stats.get("home_points_pct")), _as_float(away_stats.get("away_points_pct")))
+     else:
+-        text = "O recorte casa/fora ainda tem amostra limitada e deve ser lido com cautela."
+-        sections["home_away"] = {"status": "limited" if home_stats or away_stats else "unavailable", "quality": "limited", "sample_size": {"home_home": hhp, "away_away": aap}, "text": text}
+         data_gaps.append("home_away_limited")
+-    paragraphs.append(text)
+ 
++    h2h_edge = "unknown"
+     if h2h["status"] == "available":
+-        text = (
+-            f"Nos últimos {h2h['matches']} confrontos diretos registrados, foram {h2h['home_wins']} vitórias de {home}, "
+-            f"{h2h['draws']} empates e {h2h['away_wins']} vitórias de {away}. Esse retrospecto ajuda a dar contexto, "
+-            "mas não deve pesar mais do que o momento atual e o preço oferecido pelo mercado."
+-        )
+-        sections["head_to_head"] = {"status": "available", "quality": "good", "sample_size": h2h["matches"], "text": text}
++        h2h_edge = _h2h_edge(h2h)
+     elif h2h["status"] == "limited":
+-        text = f"Há apenas {h2h['matches']} confronto(s) direto(s) recente(s) registrado(s), uma amostra pequena para formar padrão confiável."
+-        sections["head_to_head"] = {"status": "limited", "quality": "limited", "sample_size": h2h["matches"], "text": text}
+         data_gaps.append("head_to_head_limited")
+     else:
+-        text = "Não encontramos confrontos diretos recentes suficientes entre essas equipes."
+-        sections["head_to_head"] = {"status": "unavailable", "quality": "unavailable", "sample_size": 0, "text": text}
+         data_gaps.append("head_to_head_unavailable")
+-    paragraphs.append(text)
+ 
+-    market_text = (
+-        "Em resumo, o contexto deve ser lido como apoio à análise probabilística. Mesmo quando o cenário favorece uma equipe, "
+-        "a entrada só faz sentido se a odd disponível estiver acima do preço justo estimado pelo modelo."
++    context_side = _context_side_from_edges(season_edge, home_away_edge, h2h_edge)
++    price_read = _build_context_price_read(
++        payload=payload or {},
++        context_side=context_side,
++        home=home,
++        away=away,
++    )
++
++    pt = _compose_language_texts(
++        lang="pt-BR",
++        home=home,
++        away=away,
++        home_stats=home_stats,
++        away_stats=away_stats,
++        h2h=h2h,
++        season_edge=season_edge,
++        home_away_edge=home_away_edge,
++        h2h_edge=h2h_edge,
++        context_side=context_side,
++        price_read=price_read,
++        variant_seed=variant_seed,
++        collect_variants=selected_variants,
++    )
++    en = _compose_language_texts(
++        lang="en",
++        home=home,
++        away=away,
++        home_stats=home_stats,
++        away_stats=away_stats,
++        h2h=h2h,
++        season_edge=season_edge,
++        home_away_edge=home_away_edge,
++        h2h_edge=h2h_edge,
++        context_side=context_side,
++        price_read=price_read,
++        variant_seed=variant_seed,
++    )
++    es = _compose_language_texts(
++        lang="es",
++        home=home,
++        away=away,
++        home_stats=home_stats,
++        away_stats=away_stats,
++        h2h=h2h,
++        season_edge=season_edge,
++        home_away_edge=home_away_edge,
++        h2h_edge=h2h_edge,
++        context_side=context_side,
++        price_read=price_read,
++        variant_seed=variant_seed,
+     )
+-    sections["market_connection"] = {"status": "available", "quality": "good", "text": market_text}
+-    paragraphs.append(market_text)
+ 
+     available = sum(
+         1
+-        for key, section in sections.items()
++        for key, section in (pt.get("sections") or {}).items()
+         if key != "market_connection" and section.get("status") == "available"
+     )
+     status = "available" if available >= 2 else "limited"
+     quality = "good" if status == "available" else "limited"
+-    headline = (
+-        f"{home} x {away}: panorama contextual disponível com dados de temporada, mando e retrospecto recente."
+-        if status == "available"
+-        else f"{home} x {away}: contexto parcial disponível, com algumas limitações de amostra."
+-    )
+ 
+     return {
+         "version": NARRATIVE_CONTEXT_VERSION,
+         "status": status,
+         "quality": quality,
+         "language": "pt-BR",
++        "default_language": "pt-BR",
++        "languages": ["pt-BR", "en", "es"],
+         "generated_at_utc": _now_iso(),
+         "sport_key": str(sport_key) if sport_key else None,
+-        "headline": headline,
+-        "paragraphs": paragraphs,
+-        "sections": sections,
++        # Backward compatible: top-level text remains pt-BR.
++        "headline": pt["headline"],
++        "paragraphs": pt["paragraphs"],
++        "sections": pt["sections"],
++        # New multilingual payload for frontend selection later.
++        "texts": {
++            "pt-BR": pt,
++            "en": en,
++            "es": es,
++        },
++        "signals": {
++            "tone": "natural_multilang_v1_4",
++            "pricing_status": price_read.get("status"),
++            "pricing_outcome": price_read.get("outcome"),
++            "context_side": context_side,
++            "season_edge": season_edge,
++            "home_away_edge": home_away_edge,
++            "head_to_head_edge": h2h_edge,
++        },
++        "selected_variants": selected_variants,
+         "facts": {
+             "league_id": league_id,
+             "season": season,
+@@ -266,6 +1500,7 @@
+             "home_team": _public_stats(home_stats),
+             "away_team": _public_stats(away_stats),
+             "head_to_head": h2h,
++            "pricing": price_read,
+         },
+         "data_gaps": sorted(set(data_gaps)),
+         "warnings": [
+@@ -274,7 +1509,6 @@
+         ],
+     }
+ 
+-
+ def attach_narrative_context_v1(
+     conn,
+     *,
+@@ -285,7 +1519,7 @@
+     kickoff_utc: Any = None,
+     language: str = "pt-BR",
+ ) -> Dict[str, Any]:
+-    # language fica reservado para v2 multilíngue; v1 materializa pt-BR.
++    # language fica reservado para seleção futura; v1 mantém pt-BR no topo e materializa textos em pt-BR, en e es.
+     out = dict(payload or {})
+     try:
+         with conn.cursor() as cur:

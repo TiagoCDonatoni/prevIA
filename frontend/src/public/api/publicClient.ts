@@ -385,6 +385,9 @@ export type WorldCupPoolRankingItem = {
   exact_score_hits: number;
   outcome_hits: number;
   exact_team_score_hits: number;
+  previous_rank?: number | null;
+  rank_delta?: number | null;
+  rank_movement?: "up" | "down" | "same" | null;
   last_prediction_at_utc?: string | null;
   is_me: boolean;
 };
@@ -548,6 +551,7 @@ export async function fetchWorldCupPoolParticipantMatches(
     pageSize?: number;
     filter?: WorldCupPoolMatchFilter;
     round?: WorldCupPoolRoundFilter;
+    autoPage?: boolean;
   }
 ): Promise<WorldCupPoolParticipantMatchesResponse> {
   const url = new URL(
@@ -559,6 +563,10 @@ export async function fetchWorldCupPoolParticipantMatches(
   url.searchParams.set("page_size", String(options?.pageSize || 10));
   url.searchParams.set("filter", options?.filter || "all");
   url.searchParams.set("round", options?.round || "all");
+
+  if (options?.autoPage) {
+    url.searchParams.set("auto_page", "true");
+  }
 
   return fetchJson<WorldCupPoolParticipantMatchesResponse>(url.toString(), {
     method: "GET",

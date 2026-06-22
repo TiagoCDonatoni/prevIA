@@ -284,6 +284,9 @@ class WorldCupPoolRankingItem(BaseModel):
     exact_score_hits: int = 0
     outcome_hits: int = 0
     exact_team_score_hits: int = 0
+    previous_rank: Optional[int] = None
+    rank_delta: Optional[int] = None
+    rank_movement: Optional[str] = None
     last_prediction_at_utc: Optional[str] = None
     is_me: bool = False
 
@@ -3506,11 +3509,11 @@ def list_worldcup_pool_participant_matches(
     page_size: int = Query(10, ge=1, le=10),
     match_filter: WorldCupPoolMatchFilter = Query("all", alias="filter"),
     round_filter: WorldCupPoolMatchRoundFilter = Query("all", alias="round"),
+    auto_page: bool = Query(False),
 ) -> WorldCupPoolParticipantMatchesResponse:
     pool, participant = _require_participant_context(invite_token, request)
 
     current_lang = str(pool.lang or "pt")
-    offset = (page - 1) * page_size
 
     lock_expr = """
       (
@@ -3627,6 +3630,38 @@ def list_worldcup_pool_participant_matches(
       OFFSET %s
     """
 
+    auto_page_sql = f"""
+      WITH ordered_matches AS (
+        SELECT
+          m.id,
+          m.kickoff_utc,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              m.display_order ASC,
+              m.kickoff_utc NULLS LAST,
+              m.id ASC
+          )::int AS row_number
+        FROM worldcup_pool.matches m
+        LEFT JOIN worldcup_pool.predictions pr
+          ON pr.match_id = m.id
+         AND pr.pool_id = %s
+         AND pr.participant_id = %s
+        WHERE m.competition_key = 'fifa_world_cup_2026'
+          AND m.status <> 'cancelled'
+          {filter_sql}
+          {round_sql}
+      )
+      SELECT GREATEST(1, CEIL(row_number::numeric / %s)::int) AS page
+      FROM ordered_matches
+      ORDER BY
+        CASE WHEN kickoff_utc IS NULL THEN 1 ELSE 0 END,
+        ABS(EXTRACT(EPOCH FROM (kickoff_utc - NOW()))) ASC NULLS LAST,
+        CASE WHEN kickoff_utc >= NOW() THEN 0 ELSE 1 END,
+        kickoff_utc ASC NULLS LAST,
+        row_number ASC
+      LIMIT 1
+    """
+
     try:
         with pg_conn() as conn:
             with conn.cursor() as cur:
@@ -3635,6 +3670,22 @@ def list_worldcup_pool_participant_matches(
 
                 cur.execute(count_sql, (pool.id, participant.id))
                 total_items = int((cur.fetchone() or [0])[0] or 0)
+
+                total_pages = (total_items + page_size - 1) // page_size if total_items > 0 else 0
+
+                if auto_page and total_items > 0:
+                    cur.execute(auto_page_sql, (pool.id, participant.id, page_size))
+                    auto_page_row = cur.fetchone()
+
+                    if auto_page_row and auto_page_row[0] is not None:
+                        page = int(auto_page_row[0])
+
+                if total_items > 0:
+                    page = min(max(page, 1), max(total_pages, 1))
+                else:
+                    page = 1
+
+                offset = (page - 1) * page_size
 
                 cur.execute(
                     items_sql,
@@ -3659,8 +3710,6 @@ def list_worldcup_pool_participant_matches(
                 "message": f"Failed to load participant matches: {e}",
             },
         )
-
-    total_pages = (total_items + page_size - 1) // page_size if total_items > 0 else 0
 
     items: list[WorldCupPoolParticipantMatch] = []
     for row in rows:
@@ -3929,7 +3978,32 @@ def get_worldcup_pool_participant_ranking(
     """
 
     ranking_cte = """
-      WITH participant_scores AS (
+      WITH last_finished_match AS (
+        SELECT
+          m.id,
+          m.display_order
+        FROM worldcup_pool.matches m
+        WHERE m.competition_key = 'fifa_world_cup_2026'
+          AND m.status = 'finished'
+          AND m.home_score IS NOT NULL
+          AND m.away_score IS NOT NULL
+        ORDER BY
+          m.display_order DESC,
+          m.kickoff_utc DESC NULLS LAST,
+          m.id DESC
+        LIMIT 1
+      ),
+      previous_finished_match_state AS (
+        SELECT COUNT(m.id)::int AS previous_finished_matches
+        FROM last_finished_match lfm
+        JOIN worldcup_pool.matches m
+          ON m.competition_key = 'fifa_world_cup_2026'
+         AND m.status = 'finished'
+         AND m.home_score IS NOT NULL
+         AND m.away_score IS NOT NULL
+         AND m.display_order < lfm.display_order
+      ),
+      participant_scores AS (
         SELECT
           pt.id AS participant_id,
           pt.display_name,
@@ -3998,7 +4072,7 @@ def get_worldcup_pool_participant_ranking(
           pt.display_name,
           pt.joined_at_utc
       ),
-      ranked AS (
+      current_ranked AS (
         SELECT
           participant_id,
           display_name,
@@ -4019,6 +4093,142 @@ def get_worldcup_pool_participant_ranking(
               participant_id ASC
           )::int AS rank_position
         FROM participant_scores
+      ),
+      previous_participant_scores AS (
+        SELECT
+          pt.id AS participant_id,
+          pt.display_name,
+          pt.joined_at_utc,
+          COALESCE(SUM(
+            CASE
+              WHEN lfm.id IS NOT NULL
+               AND m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND m.display_order < lfm.display_order
+              THEN pr.points ELSE 0
+            END
+          ), 0)::int AS points,
+          COUNT(DISTINCT pr.id)::int AS predictions_count,
+          COALESCE(SUM(
+            CASE
+              WHEN lfm.id IS NOT NULL
+               AND m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND m.display_order < lfm.display_order
+               AND pr.predicted_home_score = m.home_score
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_score_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN lfm.id IS NOT NULL
+               AND m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND m.display_order < lfm.display_order
+               AND (
+                 CASE
+                   WHEN pr.predicted_home_score > pr.predicted_away_score THEN 'H'
+                   WHEN pr.predicted_home_score < pr.predicted_away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               ) = (
+                 CASE
+                   WHEN m.home_score > m.away_score THEN 'H'
+                   WHEN m.home_score < m.away_score THEN 'A'
+                   ELSE 'D'
+                 END
+               )
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS outcome_hits,
+          COALESCE(SUM(
+            CASE
+              WHEN lfm.id IS NOT NULL
+               AND m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND m.display_order < lfm.display_order
+               AND pr.predicted_home_score = m.home_score
+              THEN 1 ELSE 0
+            END
+            +
+            CASE
+              WHEN lfm.id IS NOT NULL
+               AND m.status = 'finished'
+               AND m.home_score IS NOT NULL
+               AND m.away_score IS NOT NULL
+               AND m.display_order < lfm.display_order
+               AND pr.predicted_away_score = m.away_score
+              THEN 1 ELSE 0
+            END
+          ), 0)::int AS exact_team_score_hits
+        FROM worldcup_pool.participants pt
+        LEFT JOIN worldcup_pool.predictions pr
+          ON pr.pool_id = pt.pool_id
+         AND pr.participant_id = pt.id
+        LEFT JOIN worldcup_pool.matches m
+          ON m.id = pr.match_id
+        LEFT JOIN last_finished_match lfm
+          ON TRUE
+        WHERE pt.pool_id = %s
+          AND pt.status = 'active'
+        GROUP BY
+          pt.id,
+          pt.display_name,
+          pt.joined_at_utc
+      ),
+      previous_ranked AS (
+        SELECT
+          participant_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              points DESC,
+              exact_score_hits DESC,
+              outcome_hits DESC,
+              exact_team_score_hits DESC,
+              predictions_count DESC,
+              joined_at_utc ASC,
+              participant_id ASC
+          )::int AS previous_rank_position
+        FROM previous_participant_scores
+      ),
+      ranked AS (
+        SELECT
+          cr.participant_id,
+          cr.display_name,
+          cr.points,
+          cr.predictions_count,
+          cr.exact_score_hits,
+          cr.outcome_hits,
+          cr.exact_team_score_hits,
+          cr.last_prediction_at_utc,
+          cr.rank_position,
+          CASE
+            WHEN COALESCE(pfms.previous_finished_matches, 0) > 0 THEN pr.previous_rank_position
+            ELSE NULL
+          END AS previous_rank_position,
+          CASE
+            WHEN COALESCE(pfms.previous_finished_matches, 0) > 0
+             AND pr.previous_rank_position IS NOT NULL
+            THEN (pr.previous_rank_position - cr.rank_position)::int
+            ELSE NULL
+          END AS rank_delta,
+          CASE
+            WHEN COALESCE(pfms.previous_finished_matches, 0) <= 0
+              OR pr.previous_rank_position IS NULL
+            THEN NULL
+            WHEN pr.previous_rank_position > cr.rank_position THEN 'up'
+            WHEN pr.previous_rank_position < cr.rank_position THEN 'down'
+            ELSE 'same'
+          END AS rank_movement
+        FROM current_ranked cr
+        LEFT JOIN previous_ranked pr
+          ON pr.participant_id = cr.participant_id
+        CROSS JOIN previous_finished_match_state pfms
       )
     """
 
@@ -4033,6 +4243,9 @@ def get_worldcup_pool_participant_ranking(
         outcome_hits,
         exact_team_score_hits,
         last_prediction_at_utc,
+        previous_rank_position,
+        rank_delta,
+        rank_movement,
         participant_id = %s AS is_me
       FROM ranked
       ORDER BY rank_position ASC
@@ -4051,6 +4264,9 @@ def get_worldcup_pool_participant_ranking(
         outcome_hits,
         exact_team_score_hits,
         last_prediction_at_utc,
+        previous_rank_position,
+        rank_delta,
+        rank_movement,
         true AS is_me
       FROM ranked
       WHERE participant_id = %s
@@ -4067,6 +4283,7 @@ def get_worldcup_pool_participant_ranking(
                     items_sql,
                     (
                         pool.id,
+                        pool.id,
                         participant.id,
                         page_size,
                         offset,
@@ -4077,6 +4294,7 @@ def get_worldcup_pool_participant_ranking(
                 cur.execute(
                     me_sql,
                     (
+                        pool.id,
                         pool.id,
                         participant.id,
                     ),
@@ -4113,7 +4331,10 @@ def get_worldcup_pool_participant_ranking(
             outcome_hits=int(row[6] or 0),
             exact_team_score_hits=int(row[7] or 0),
             last_prediction_at_utc=_iso(row[8]),
-            is_me=bool(row[9]),
+            previous_rank=int(row[9]) if row[9] is not None else None,
+            rank_delta=int(row[10]) if row[10] is not None else None,
+            rank_movement=str(row[11]) if row[11] is not None else None,
+            is_me=bool(row[12]),
         )
 
     total_pages = (total_items + page_size - 1) // page_size if total_items > 0 else 0
@@ -4225,9 +4446,9 @@ def get_worldcup_pool_participant_locked_predictions(
         AND m.status <> 'cancelled'
         AND {lock_expr}
       ORDER BY
-        m.display_order ASC,
-        m.kickoff_utc NULLS LAST,
-        m.id ASC
+        m.kickoff_utc DESC NULLS LAST,
+        m.display_order DESC,
+        m.id DESC
       LIMIT %s
       OFFSET %s
     """

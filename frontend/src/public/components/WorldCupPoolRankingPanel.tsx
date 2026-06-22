@@ -33,6 +33,9 @@ const COPY = {
     of: "de",
     previous: "Anterior",
     next: "Próxima",
+    movedUp: "Subiu",
+    movedDown: "Caiu",
+    maintained: "Manteve a posição",
     viewPredictions: "Ver palpites bloqueados",
     modalKicker: "Palpites visíveis",
     modalTitle: "Palpites de",
@@ -64,6 +67,9 @@ const COPY = {
     of: "of",
     previous: "Previous",
     next: "Next",
+    movedUp: "Moved up",
+    movedDown: "Moved down",
+    maintained: "Held position",
     viewPredictions: "View locked predictions",
     modalKicker: "Visible predictions",
     modalTitle: "Predictions by",
@@ -95,6 +101,9 @@ const COPY = {
     of: "de",
     previous: "Anterior",
     next: "Siguiente",
+    movedUp: "Subió",
+    movedDown: "Bajó",
+    maintained: "Mantuvo la posición",
     viewPredictions: "Ver pronósticos bloqueados",
     modalKicker: "Pronósticos visibles",
     modalTitle: "Pronósticos de",
@@ -221,6 +230,36 @@ export function WorldCupPoolRankingPanel({ lang, inviteToken }: Props) {
     setPage(safePage);
   }
 
+  function renderRankMovementBadge(item: WorldCupPoolRankingResponse["items"][number]) {
+    const movement = item.rank_movement;
+    const delta = typeof item.rank_delta === "number" ? item.rank_delta : null;
+
+    if (!movement || delta === null) return null;
+
+    const absoluteDelta = Math.abs(delta);
+    const label =
+      movement === "up"
+        ? `${copy.movedUp} ${absoluteDelta}`
+        : movement === "down"
+          ? `${copy.movedDown} ${absoluteDelta}`
+          : copy.maintained;
+
+    return (
+      <span
+        className={`worldcup-pool-rank-movement is-${movement}`}
+        title={label}
+        aria-label={label}
+      >
+        <span className="worldcup-pool-rank-movement-symbol" aria-hidden="true" />
+        {movement !== "same" ? (
+          <span className="worldcup-pool-rank-movement-value" aria-hidden="true">
+            {absoluteDelta}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
   function openParticipantPredictions(participant: RankingParticipant) {
     setSelectedParticipant(participant);
     setLockedPredictionsPage(1);
@@ -283,6 +322,7 @@ export function WorldCupPoolRankingPanel({ lang, inviteToken }: Props) {
             <small>
               {data.me.points} {copy.points} · {data.me.predictions_count} {copy.predictions}
             </small>
+            {renderRankMovementBadge(data.me)}
           </div>
         ) : null}
       </div>
@@ -327,6 +367,7 @@ export function WorldCupPoolRankingPanel({ lang, inviteToken }: Props) {
                   <div className="worldcup-pool-ranking-points">
                     <strong>{item.points}</strong>
                     <span>{copy.points}</span>
+                    {renderRankMovementBadge(item)}
                   </div>
                 </button>
               </li>

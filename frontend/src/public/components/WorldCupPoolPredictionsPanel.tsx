@@ -321,6 +321,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
   const [filter, setFilter] = React.useState<WorldCupPoolMatchFilter>("all");
   const [roundFilter, setRoundFilter] = React.useState<WorldCupPoolRoundFilter>("all");
   const [page, setPage] = React.useState(1);
+  const [autoPage, setAutoPage] = React.useState(true);
   const [data, setData] = React.useState<WorldCupPoolParticipantMatchesResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(false);
@@ -347,6 +348,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
         pageSize: PAGE_SIZE,
         filter,
         round: roundFilter,
+        autoPage,
       });
 
       const nextDrafts: Record<number, DraftScore> = {};
@@ -360,13 +362,21 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
       setData(response);
       setDrafts(nextDrafts);
       setStatuses(nextStatuses);
+
+      if (response.pagination.page !== page) {
+        setPage(response.pagination.page);
+      }
+
+      if (autoPage) {
+        setAutoPage(false);
+      }
     } catch (err) {
       console.error("failed to load world cup pool matches", err);
       setLoadError(true);
     } finally {
       setLoading(false);
     }
-  }, [filter, inviteToken, page, roundFilter]);
+  }, [autoPage, filter, inviteToken, page, roundFilter]);
 
   React.useEffect(() => {
     void loadMatches();
@@ -462,10 +472,12 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
   function changePage(nextPage: number) {
     if (!data) return;
 
+    const currentPage = data.pagination.page || page;
     const safePage = Math.min(Math.max(nextPage, 1), Math.max(data.pagination.total_pages, 1));
-    if (safePage === page) return;
+    if (safePage === currentPage) return;
 
     flushVisibleDirtyScores();
+    setAutoPage(false);
     setPage(safePage);
   }
 
@@ -474,6 +486,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
 
     flushVisibleDirtyScores();
     setFilter(nextFilter);
+    setAutoPage(true);
     setPage(1);
   }
 
@@ -482,12 +495,14 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
 
     flushVisibleDirtyScores();
     setRoundFilter(nextRoundFilter);
+    setAutoPage(true);
     setPage(1);
   }
 
   const totalPages = data?.pagination.total_pages || 0;
-  const canGoPrevious = page > 1;
-  const canGoNext = totalPages > 0 && page < totalPages;
+  const activePage = data?.pagination.page || page;
+  const canGoPrevious = activePage > 1;
+  const canGoNext = totalPages > 0 && activePage < totalPages;
 
   const filterOptions: Array<{ value: WorldCupPoolMatchFilter; label: string }> = [
     { value: "all", label: copy.all },
@@ -575,7 +590,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
 
         {data ? (
           <div className="worldcup-pool-predictions-page-indicator">
-            {copy.page} {totalPages === 0 ? 0 : page} {copy.of} {totalPages}
+            {copy.page} {totalPages === 0 ? 0 : activePage} {copy.of} {totalPages}
           </div>
         ) : null}
       </div>
@@ -715,20 +730,20 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
         <button
           type="button"
           className="public-btn public-btn-secondary"
-          onClick={() => changePage(page - 1)}
+          onClick={() => changePage(activePage - 1)}
           disabled={!canGoPrevious || loading}
         >
           {copy.previous}
         </button>
 
         <span>
-          {copy.page} {totalPages === 0 ? 0 : page} {copy.of} {totalPages}
+          {copy.page} {totalPages === 0 ? 0 : activePage} {copy.of} {totalPages}
         </span>
 
         <button
           type="button"
           className="public-btn public-btn-secondary"
-          onClick={() => changePage(page + 1)}
+          onClick={() => changePage(activePage + 1)}
           disabled={!canGoNext || loading}
         >
           {copy.next}

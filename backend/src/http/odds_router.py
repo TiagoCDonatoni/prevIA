@@ -283,6 +283,10 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
     confidence = snapshot_payload_obj.get("confidence") or {}
     guardrails = snapshot_payload_obj.get("guardrails") or {}
 
+    narrative_context = snapshot_payload_obj.get("narrative_context")
+    if not isinstance(narrative_context, dict):
+        narrative_context = None
+
     snapshot_summary_candidate = {
         "totals": {
             "line": totals_line,
@@ -309,14 +313,15 @@ def _build_snapshot_summary(snapshot_payload_obj: Dict[str, Any]) -> Optional[Di
             "reasons": confidence.get("reasons") or [],
         },
         "guardrails": guardrails if isinstance(guardrails, dict) and guardrails else None,
+        "narrative_context": narrative_context,
     }
 
     has_snapshot_data = any(
         v is not None
-        for group in snapshot_summary_candidate.values()
-        if isinstance(group, dict)
+        for key, group in snapshot_summary_candidate.items()
+        if key != "narrative_context" and isinstance(group, dict)
         for v in group.values()
-    )
+    ) or narrative_context is not None
 
     return snapshot_summary_candidate if has_snapshot_data else None
 

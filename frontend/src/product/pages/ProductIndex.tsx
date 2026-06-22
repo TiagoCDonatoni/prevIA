@@ -7,6 +7,7 @@ import type {
   ProductOddsEvent,
   ProductOddsQuoteResponse,
   ProductOdds1x2,
+  ProductNarrativeContext,
 } from "../../api/contracts";
 import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
@@ -254,6 +255,325 @@ function narrativeStyleFromInternalView(
   if (view === "PROFESSIONAL") return "equilibrado";
   if (view === "CREATOR") return "pro";
   return undefined;
+}
+
+type MatchNarrativeCard = {
+  key: "context" | "model" | "price" | "conclusion";
+  label: string;
+  value: string;
+  tone?: "neutral" | "positive" | "caution";
+};
+
+type MatchNarrativeView = {
+  headline: string;
+  paragraphs: string[];
+  cards: MatchNarrativeCard[];
+  chips: Array<{ label: string; value: string }>;
+  isCompact: boolean;
+};
+
+function getMatchContextTitle(lang: Lang) {
+  if (lang === "en") return "Match context";
+  if (lang === "es") return "Contexto del partido";
+  return "Contexto da partida";
+}
+
+function getNarrativeContextLanguageKey(lang: Lang) {
+  if (lang === "en") return "en";
+  if (lang === "es") return "es";
+  return "pt-BR";
+}
+
+function isFullNarrativeContextPlan(plan: PlanId) {
+  return plan === "LIGHT" || plan === "PRO";
+}
+
+function getGuidedNarrativeLabels(lang: Lang) {
+  if (lang === "en") {
+    return {
+      context: "Context",
+      model: "Model",
+      price: "Odds",
+      conclusion: "prevIA read",
+      balanced: "Balanced",
+      missing: "Not clear",
+      draw: "Draw",
+      valueLabel: "Value read",
+      alignedValue: "Model and odds aligned",
+      contextValue: "Context and odds aligned",
+      contrarianValue: "Price against favorite",
+      balancedValue: "Price matters more",
+      noValue: "More caution",
+      contextBalancedText: "The recent context does not separate the teams that much.",
+      contextMissingText: "There is not enough context to point clearly to one side.",
+      modelMissingText: "The model does not have a clear main side for this match.",
+      priceMissingText: "The odds do not add enough information to call a price read.",
+    };
+  }
+
+  if (lang === "es") {
+    return {
+      context: "Contexto",
+      model: "Modelo",
+      price: "Cuota",
+      conclusion: "Lectura prevIA",
+      balanced: "Equilibrado",
+      missing: "Sin lado claro",
+      draw: "Empate",
+      valueLabel: "Lectura de valor",
+      alignedValue: "Modelo y cuota alineados",
+      contextValue: "Contexto y cuota alineados",
+      contrarianValue: "Precio contra el favorito",
+      balancedValue: "El precio pesa más",
+      noValue: "Más cautela",
+      contextBalancedText: "El contexto reciente no separa tanto a los equipos.",
+      contextMissingText: "Todavía no hay contexto suficiente para apuntar claramente a un lado.",
+      modelMissingText: "El modelo no tiene un lado principal claro para este partido.",
+      priceMissingText: "Las cuotas no suman lo suficiente para cerrar una lectura de precio.",
+    };
+  }
+
+  return {
+    context: "Contexto",
+    model: "Modelo",
+    price: "Odd",
+    conclusion: "Leitura prevIA",
+    balanced: "Equilibrado",
+    missing: "Sem lado claro",
+    draw: "Empate",
+    valueLabel: "Leitura de valor",
+    alignedValue: "Modelo e odd alinhados",
+    contextValue: "Contexto e odd alinhados",
+    contrarianValue: "Preço contra o favorito",
+    balancedValue: "Preço pesa mais",
+    noValue: "Mais cautela",
+    contextBalancedText: "O contexto recente não separa tanto os times.",
+    contextMissingText: "Ainda não há contexto suficiente para apontar claramente para um lado.",
+    modelMissingText: "O modelo não tem um lado principal claro para esta partida.",
+    priceMissingText: "As odds não acrescentam o bastante para fechar uma leitura de preço.",
+  };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripNarrativeMatchupPrefix(headline: string, home: string, away: string) {
+  const text = String(headline || "").trim();
+  if (!text) return "";
+
+  const homePattern = escapeRegExp(home);
+  const awayPattern = escapeRegExp(away);
+
+  const patterns = [
+    new RegExp(`^${homePattern}\\s+(?:x|vs\\.?|v\\.?|versus)\\s+${awayPattern}\\s*[:：-]\\s*`, "i"),
+    new RegExp(`^${homePattern}\\s*[–—-]\\s*${awayPattern}\\s*[:：-]\\s*`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const cleaned = text.replace(pattern, "").trim();
+    if (cleaned !== text) return cleaned;
+  }
+
+  return text;
+}
+
+function outcomeNameForNarrative(
+  outcome: string | null | undefined,
+  home: string,
+  away: string,
+  lang: Lang
+) {
+  const labels = getGuidedNarrativeLabels(lang);
+  if (outcome === "home") return home;
+  if (outcome === "away") return away;
+  if (outcome === "draw") return labels.draw;
+  return labels.missing;
+}
+
+function shortOutcomeRole(outcome: string | null | undefined, lang: Lang) {
+  if (outcome === "home") return lang === "en" ? "Home" : lang === "es" ? "Local" : "Mandante";
+  if (outcome === "away") return lang === "en" ? "Away" : lang === "es" ? "Visitante" : "Visitante";
+  if (outcome === "draw") return lang === "en" ? "Draw" : lang === "es" ? "Empate" : "Empate";
+  return "—";
+}
+
+function getNarrativeOutcomeProb(
+  narrativeContext: ProductNarrativeContext,
+  outcome: string | null | undefined,
+  fallbackProbs: ProductOdds1x2 | null | undefined
+) {
+  if (!outcome) return null;
+
+  const pricing =
+    narrativeContext.facts && "pricing" in narrativeContext.facts
+      ? narrativeContext.facts.pricing
+      : null;
+
+  const fromPricing =
+    pricing && typeof pricing === "object" && "outcomes" in pricing
+      ? pricing.outcomes?.[outcome]?.model_prob
+      : null;
+
+  if (typeof fromPricing === "number" && Number.isFinite(fromPricing)) {
+    return fromPricing;
+  }
+
+  if (outcome === "home") return fallbackProbs?.H ?? null;
+  if (outcome === "draw") return fallbackProbs?.D ?? null;
+  if (outcome === "away") return fallbackProbs?.A ?? null;
+
+  return null;
+}
+
+function narrativeValueLabel(alignment: string | null | undefined, lang: Lang) {
+  const labels = getGuidedNarrativeLabels(lang);
+
+  if (alignment === "aligned_value") return labels.alignedValue;
+  if (alignment === "context_value") return labels.contextValue;
+  if (alignment === "contrarian_value") return labels.contrarianValue;
+  if (alignment === "balanced_value") return labels.balancedValue;
+
+  return labels.noValue;
+}
+
+function isPositivePriceAlignment(alignment: string | null | undefined) {
+  return alignment === "aligned_value" || alignment === "context_value" || alignment === "contrarian_value" || alignment === "balanced_value";
+}
+
+function pickSnapshotNarrativeContext(
+  narrativeContext: ProductNarrativeContext | null | undefined,
+  lang: Lang,
+  plan: PlanId,
+  home: string,
+  away: string,
+  fallbackProbs: ProductOdds1x2 | null | undefined
+): MatchNarrativeView | null {
+  if (!narrativeContext) return null;
+
+  const status = String(narrativeContext.status ?? "");
+  if (status !== "available" && status !== "limited") return null;
+
+  const requestedLanguage = getNarrativeContextLanguageKey(lang);
+  const defaultLanguage = String(narrativeContext.default_language || "pt-BR");
+  const texts = narrativeContext.texts ?? {};
+
+  const localized =
+    texts[requestedLanguage] ??
+    texts[defaultLanguage] ??
+    texts["pt-BR"] ??
+    texts.en ??
+    texts.es ??
+    null;
+
+  const rawHeadline = String(localized?.headline ?? narrativeContext.headline ?? "").trim();
+  const headline = stripNarrativeMatchupPrefix(rawHeadline, home, away);
+
+  const rawParagraphs = Array.isArray(localized?.paragraphs)
+    ? localized?.paragraphs
+    : Array.isArray(narrativeContext.paragraphs)
+      ? narrativeContext.paragraphs
+      : [];
+
+  const paragraphs = (rawParagraphs ?? [])
+    .map((paragraph) => String(paragraph ?? "").trim())
+    .filter(Boolean);
+
+  if (!headline && !paragraphs.length) return null;
+
+  const isCompact = !isFullNarrativeContextPlan(plan);
+  const visibleParagraphs = isCompact
+    ? paragraphs.length <= 2
+      ? paragraphs
+      : [paragraphs[0], paragraphs[paragraphs.length - 1]].filter(Boolean)
+    : paragraphs;
+
+  const sections = localized?.sections ?? narrativeContext.sections ?? {};
+  const marketConclusion = String(
+    sections?.market_connection?.text ?? paragraphs[paragraphs.length - 1] ?? ""
+  ).trim();
+
+  const labels = getGuidedNarrativeLabels(lang);
+  const signals = narrativeContext.signals ?? {};
+
+  const contextSide = signals.context_side ?? null;
+  const likelyOutcome = signals.most_likely_outcome ?? null;
+  const pricingOutcome = signals.pricing_outcome ?? null;
+  const valueOutcome = signals.value_outcome ?? pricingOutcome ?? null;
+  const priceAlignment = signals.price_context_alignment ?? null;
+
+  const contextName = outcomeNameForNarrative(contextSide, home, away, lang);
+  const likelyName = outcomeNameForNarrative(likelyOutcome, home, away, lang);
+  const valueName = outcomeNameForNarrative(valueOutcome, home, away, lang);
+  const likelyProb = getNarrativeOutcomeProb(narrativeContext, likelyOutcome, fallbackProbs);
+
+  const contextText =
+    contextSide === "balanced"
+      ? labels.contextBalancedText
+      : contextSide === "home" || contextSide === "away"
+        ? lang === "en"
+          ? `The recent context favors ${contextName}.`
+          : lang === "es"
+            ? `El contexto reciente favorece a ${contextName}.`
+            : `O contexto recente favorece ${contextName}.`
+        : labels.contextMissingText;
+
+  const modelText =
+    likelyOutcome === "home" || likelyOutcome === "away" || likelyOutcome === "draw"
+      ? lang === "en"
+        ? `The model puts ${likelyName} as the most likely outcome${typeof likelyProb === "number" ? ` (${fmtPct(likelyProb)})` : ""}.`
+        : lang === "es"
+          ? `El modelo coloca a ${likelyName} como el resultado más probable${typeof likelyProb === "number" ? ` (${fmtPct(likelyProb)})` : ""}.`
+          : `O modelo coloca ${likelyName} como resultado mais provável${typeof likelyProb === "number" ? ` (${fmtPct(likelyProb)})` : ""}.`
+      : labels.modelMissingText;
+
+  const priceText =
+    priceAlignment === "favorite_no_value" && valueOutcome
+      ? lang === "en"
+        ? `The odds on ${valueName} look short for the risk.`
+        : lang === "es"
+          ? `La cuota de ${valueName} parece corta para el riesgo.`
+          : `A odd de ${valueName} parece curta para o risco.`
+      : valueOutcome === "home" || valueOutcome === "away" || valueOutcome === "draw"
+        ? lang === "en"
+          ? `The most interesting price is on ${valueName}.`
+          : lang === "es"
+            ? `El precio más interesante aparece en ${valueName}.`
+            : `O preço mais interessante aparece em ${valueName}.`
+        : labels.priceMissingText;
+
+  const positivePrice = isPositivePriceAlignment(priceAlignment);
+
+  return {
+    headline,
+    paragraphs: visibleParagraphs,
+    isCompact,
+    cards: [
+      { key: "context", label: labels.context, value: contextText, tone: "neutral" },
+      { key: "model", label: labels.model, value: modelText, tone: "neutral" },
+      {
+        key: "price",
+        label: labels.price,
+        value: priceText,
+        tone: positivePrice ? "positive" : "caution",
+      },
+      {
+        key: "conclusion",
+        label: labels.conclusion,
+        value: marketConclusion,
+        tone: positivePrice ? "positive" : "caution",
+      },
+    ],
+    chips: [
+      {
+        label: labels.context,
+        value: contextSide === "balanced" ? labels.balanced : shortOutcomeRole(contextSide, lang),
+      },
+      { label: labels.model, value: shortOutcomeRole(likelyOutcome, lang) },
+      { label: labels.price, value: shortOutcomeRole(valueOutcome, lang) },
+      { label: labels.valueLabel, value: narrativeValueLabel(priceAlignment, lang) },
+    ],
+  };
 }
 
 function fmtPct(x: number | null | undefined) {
@@ -2269,6 +2589,19 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const selectedSnapshot =
     quote?.snapshot_summary ?? selectedUnlockedSnapshot ?? null;
 
+  const matchNarrativeContext = useMemo(() => {
+    if (!selected) return null;
+
+    return pickSnapshotNarrativeContext(
+      selectedSnapshot?.narrative_context,
+      lang,
+      plan,
+      selected.home_name,
+      selected.away_name,
+      effectiveProbs
+    );
+  }, [effectiveProbs, lang, plan, selected, selectedSnapshot]);
+
   const effectiveModelConfidence = selectedSnapshot?.confidence ?? null;
   const effectiveModelGuardrails = selectedSnapshot?.guardrails ?? null;
   const effectiveModelConfidenceOverall =
@@ -2350,12 +2683,14 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
   const hasEffectiveAnalysis =
     !!effectiveProbs ||
     !!effectiveEdgeSummary ||
+    !!matchNarrativeContext ||
     effectiveMatchStatus === "MODEL_FOUND" ||
     !!selected?.has_model;
 
   const selectedHasUnlockedPayload =
     !!selectedUnlockedProbs ||
     !!selectedUnlockedSnapshot ||
+    !!matchNarrativeContext ||
     !!effectiveEdgeSummary;
 
   const analysisOpened =
@@ -2493,8 +2828,52 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
               <div className="pi-muted">{t(lang, "odds.revealHint")}</div>
             ) : (
               <>
-                {/* ===== Narrativa (destaque) ===== */}
-                {(() => {
+
+                {/* ===== Contexto narrativo do snapshot ===== */}
+                {matchNarrativeContext ? (
+                  <section className="pi-match-context" aria-label={getMatchContextTitle(lang)}>
+                    <div className="pi-match-context-topline">
+                      <div className="pi-match-context-label">{getMatchContextTitle(lang)}</div>
+
+                      <div className="pi-match-context-chips">
+                        {matchNarrativeContext.chips.map((chip) => (
+                          <span className="pi-match-context-chip" key={`${chip.label}:${chip.value}`}>
+                            <b>{chip.label}</b> {chip.value}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {matchNarrativeContext.headline ? (
+                      <div className="pi-match-context-headline">
+                        {matchNarrativeContext.headline}
+                      </div>
+                    ) : null}
+
+                    <div className="pi-match-context-grid">
+                      {matchNarrativeContext.cards.map((card) => (
+                        <div
+                          className={`pi-match-context-card pi-match-context-card--${card.tone ?? "neutral"}`}
+                          key={card.key}
+                        >
+                          <div className="pi-match-context-card-label">{card.label}</div>
+                          <div className="pi-match-context-card-value">{card.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {matchNarrativeContext.paragraphs.length ? (
+                      <div className="pi-match-context-paragraphs">
+                        {matchNarrativeContext.paragraphs.map((paragraph, index) => (
+                          <p key={`${index}:${paragraph}`}>{paragraph}</p>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                {/* ===== Narrativa legada: fallback quando não houver narrative_context ===== */}
+                {!matchNarrativeContext ? (() => {
                   const oddsBest =
                     quote?.odds?.best
                       ? {
@@ -2575,7 +2954,7 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                       ) : null}
                     </div>
                   );
-                })()}
+                })() : null}
 
                 {/* ===== Painéis técnicos com accordions no mobile ===== */}
 
