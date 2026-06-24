@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
 
-from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
+from src.product.snapshot_materialization_router_v1 import rebuild_product_snapshots_for_model_v1
 from src.db.pg import connect_pg
 from src.product.model_registry import get_active_model_version
 
@@ -26,12 +26,12 @@ def snapshots_materialize(
 
     conn = connect_pg()
     try:
-        counters = rebuild_matchup_snapshots_v1(
+        counters = rebuild_product_snapshots_for_model_v1(
             conn,
             sport_key=sport_key,
             hours_ahead=int(hours_ahead),
             limit=int(limit),
-            model_version=effective_model_version,
+            model_version=str(effective_model_version),
             event_ids=event_ids,
         )
         conn.commit()
@@ -42,6 +42,7 @@ def snapshots_materialize(
             "hours_ahead": int(hours_ahead),
             "limit": int(limit),
             "model_version": effective_model_version,
+            "model_builder": counters.get("model_builder"),
             "counters": counters,
         }
     finally:

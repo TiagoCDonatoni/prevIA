@@ -30,7 +30,7 @@ from src.ops.job_runs import (
     get_last_success_finished_at,
     start_job_run,
 )
-from src.product.matchup_snapshot_builder_v1 import rebuild_matchup_snapshots_v1
+from src.product.snapshot_materialization_router_v1 import rebuild_product_snapshots_for_model_v1
 from src.product.model_registry import get_active_model_version, get_calc_version
 
 router = APIRouter(
