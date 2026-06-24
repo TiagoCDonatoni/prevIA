@@ -545,20 +545,22 @@ def admin_ops_oddspapi_enrichment_status():
 
 @router.get("/odds/enrichment/oddspapi/dry-run")
 def admin_ops_oddspapi_enrichment_dry_run(
-    window_hours: int = Query(default=72, ge=1, le=72),
+    window_hours: int = Query(default=720, ge=1, le=720),
     limit: int = Query(default=50, ge=1, le=200),
     respect_refresh_log: bool = Query(default=True),
+    only_product_snapshots: bool = Query(default=True),
 ):
     return oddspapi_enrichment_dry_run(
         window_hours=window_hours,
         limit=limit,
         respect_refresh_log=respect_refresh_log,
+        only_product_snapshots=only_product_snapshots,
     )
 
 
 @router.post("/odds/enrichment/oddspapi/diagnostics/fixture-match")
 def admin_ops_oddspapi_fixture_match_diagnostic(
-    window_hours: int = Query(default=72, ge=1, le=72),
+    window_hours: int = Query(default=720, ge=1, le=720),
     max_candidates: int = Query(default=10, ge=1, le=25),
     min_score: float = Query(default=0.65, ge=0.0, le=1.0),
 ):
@@ -577,6 +579,7 @@ def admin_ops_oddspapi_manual_confirm_mapping(
         payload=payload,
     )
 
+
 @router.post("/odds/enrichment/oddspapi/diagnostics/odds")
 def admin_ops_oddspapi_odds_diagnostic(
     core_fixture_id: Optional[int] = Query(default=None),
@@ -588,6 +591,7 @@ def admin_ops_oddspapi_odds_diagnostic(
         include_raw=include_raw,
         verbosity=verbosity,
     )
+
 
 @router.post("/odds/enrichment/oddspapi/write/1x2")
 def admin_ops_oddspapi_write_1x2_snapshots(
@@ -611,6 +615,7 @@ def admin_ops_oddspapi_write_1x2_snapshots(
         include_inactive_markets=include_inactive_markets,
     )
 
+
 @router.get("/odds/enrichment/oddspapi/events/status")
 def admin_ops_oddspapi_enrichment_events_status(
     core_fixture_id: Optional[int] = Query(default=None),
@@ -623,10 +628,11 @@ def admin_ops_oddspapi_enrichment_events_status(
         limit=limit,
     )
 
+
 @router.post("/odds/enrichment/oddspapi/batch/1x2")
 def admin_ops_oddspapi_batch_write_1x2_mapped_events(
-    window_hours: int = Query(default=72, ge=1, le=72),
-    max_events: int = Query(default=3, ge=1, le=50),
+    window_hours: int = Query(default=720, ge=1, le=720),
+    max_events: int = Query(default=50, ge=1, le=200),
     max_external_requests: int = Query(default=3, ge=0, le=20),
     allowed_bookmakers: Optional[str] = Query(default=None),
     max_bookmakers_per_event: int = Query(default=10, ge=1, le=40),
@@ -635,6 +641,7 @@ def admin_ops_oddspapi_batch_write_1x2_mapped_events(
     verbosity: int = Query(default=2, ge=1, le=5),
     allow_root_bookmaker_match: bool = Query(default=False),
     include_inactive_markets: bool = Query(default=False),
+    only_product_snapshots: bool = Query(default=True),
 ):
     return oddspapi_batch_write_1x2_mapped_events(
         window_hours=window_hours,
@@ -647,31 +654,37 @@ def admin_ops_oddspapi_batch_write_1x2_mapped_events(
         verbosity=verbosity,
         allow_root_bookmaker_match=allow_root_bookmaker_match,
         include_inactive_markets=include_inactive_markets,
+        only_product_snapshots=only_product_snapshots,
     )
+
 
 @router.post("/odds/enrichment/oddspapi/diagnostics/auto-match")
 def admin_ops_oddspapi_auto_match_diagnostic(
-    window_hours: int = Query(default=72, ge=1, le=72),
-    max_events: int = Query(default=10, ge=1, le=100),
+    window_hours: int = Query(default=720, ge=1, le=720),
+    max_events: int = Query(default=100, ge=1, le=200),
     max_candidates_per_event: int = Query(default=3, ge=1, le=10),
     min_score: float = Query(default=0.90, ge=0.0, le=1.0),
+    only_product_snapshots: bool = Query(default=True),
 ):
     return oddspapi_auto_match_diagnostic(
         window_hours=window_hours,
         max_events=max_events,
         max_candidates_per_event=max_candidates_per_event,
         min_score=min_score,
+        only_product_snapshots=only_product_snapshots,
     )
+
 
 @router.post("/odds/enrichment/oddspapi/mappings/auto-confirm")
 def admin_ops_oddspapi_auto_confirm_mappings(
-    window_hours: int = Query(default=72, ge=1, le=72),
-    max_events: int = Query(default=10, ge=1, le=100),
+    window_hours: int = Query(default=720, ge=1, le=720),
+    max_events: int = Query(default=100, ge=1, le=200),
     max_candidates_per_event: int = Query(default=3, ge=1, le=10),
     min_score: float = Query(default=0.90, ge=0.0, le=1.0),
     min_score_gap: float = Query(default=0.15, ge=0.0, le=1.0),
-    max_confirmations: int = Query(default=10, ge=1, le=50),
+    max_confirmations: int = Query(default=50, ge=1, le=50),
     dry_run: bool = Query(default=True),
+    only_product_snapshots: bool = Query(default=True),
 ):
     return oddspapi_auto_confirm_mappings(
         window_hours=window_hours,
@@ -681,24 +694,27 @@ def admin_ops_oddspapi_auto_confirm_mappings(
         min_score_gap=min_score_gap,
         max_confirmations=max_confirmations,
         dry_run=dry_run,
+        only_product_snapshots=only_product_snapshots,
     )
+
 
 @router.post("/odds/enrichment/oddspapi/run")
 def admin_ops_oddspapi_run_controlled_enrichment(
-    window_hours: int = Query(default=72, ge=1, le=72),
-    max_events: int = Query(default=10, ge=1, le=100),
-    max_external_requests: int = Query(default=5, ge=0, le=20),
+    window_hours: int = Query(default=720, ge=1, le=720),
+    max_events: int = Query(default=200, ge=1, le=200),
+    max_external_requests: int = Query(default=4, ge=0, le=20),
     max_candidates_per_event: int = Query(default=3, ge=1, le=10),
     min_score: float = Query(default=0.90, ge=0.0, le=1.0),
     min_score_gap: float = Query(default=0.15, ge=0.0, le=1.0),
-    max_confirmations: int = Query(default=10, ge=1, le=50),
+    max_confirmations: int = Query(default=50, ge=1, le=50),
     allowed_bookmakers: Optional[str] = Query(default=None),
-    max_bookmakers_per_event: int = Query(default=8, ge=1, le=40),
+    max_bookmakers_per_event: int = Query(default=12, ge=1, le=40),
     dry_run: bool = Query(default=True),
     force: bool = Query(default=False),
     verbosity: int = Query(default=2, ge=1, le=5),
-    allow_root_bookmaker_match: bool = Query(default=False),
+    allow_root_bookmaker_match: bool = Query(default=True),
     include_inactive_markets: bool = Query(default=False),
+    only_product_snapshots: bool = Query(default=True),
 ):
     return oddspapi_run_controlled_enrichment(
         window_hours=window_hours,
@@ -715,6 +731,7 @@ def admin_ops_oddspapi_run_controlled_enrichment(
         verbosity=verbosity,
         allow_root_bookmaker_match=allow_root_bookmaker_match,
         include_inactive_markets=include_inactive_markets,
+        only_product_snapshots=only_product_snapshots,
     )
 
 @router.post("/odds/refresh")

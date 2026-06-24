@@ -82,6 +82,14 @@ def run(
             "snapshots_shadow_dry_run": sum(int(r.get("snapshots_shadow_dry_run") or 0) for r in results),
             "shadow_action_use_hist5": sum(int(r.get("shadow_action_use_hist5") or 0) for r in results),
             "shadow_action_fallback_to_v0": sum(int(r.get("shadow_action_fallback_to_v0") or 0) for r in results),
+            "narrative_status_available": sum(int(r.get("narrative_status_available") or 0) for r in results),
+            "narrative_status_limited": sum(int(r.get("narrative_status_limited") or 0) for r in results),
+            "narrative_status_unavailable": sum(int(r.get("narrative_status_unavailable") or 0) for r in results),
+            "narrative_status_unknown": sum(int(r.get("narrative_status_unknown") or 0) for r in results),
+            "narrative_quality_good": sum(int(r.get("narrative_quality_good") or 0) for r in results),
+            "narrative_quality_limited": sum(int(r.get("narrative_quality_limited") or 0) for r in results),
+            "narrative_quality_unavailable": sum(int(r.get("narrative_quality_unavailable") or 0) for r in results),
+            "narrative_quality_unknown": sum(int(r.get("narrative_quality_unknown") or 0) for r in results),
             "errors": sum(int(r.get("errors") or 0) for r in results),
         }
 

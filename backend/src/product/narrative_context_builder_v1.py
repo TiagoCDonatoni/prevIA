@@ -4,7 +4,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-NARRATIVE_CONTEXT_VERSION = "narrative_context_v1"
+NARRATIVE_CONTEXT_VERSION = "narrative_context_v2"
+NARRATIVE_CONTEXT_TONE = "natural_multilang_v2"
 MIN_SEASON_GAMES = 5
 MIN_SPLIT_GAMES = 3
 MIN_H2H_GAMES = 3
@@ -320,7 +321,7 @@ def _build_context_price_read(
 def _variant_index(*, seed: str, section_key: str, count: int) -> int:
     if count <= 1:
         return 0
-    raw = f"{NARRATIVE_CONTEXT_VERSION}:natural_multilang_v1_final:{seed}:{section_key}".encode("utf-8")
+    raw = f"{NARRATIVE_CONTEXT_VERSION}:{NARRATIVE_CONTEXT_TONE}:{seed}:{section_key}".encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     return int(digest[:8], 16) % int(count)
 
@@ -1492,6 +1493,11 @@ def _fallback_context(*, reason: str, home_name: Optional[str], away_name: Optio
         "paragraphs": pt["paragraphs"],
         "sections": {},
         "texts": {"pt-BR": pt, "en": en, "es": es},
+        "signals": {
+            "tone": NARRATIVE_CONTEXT_TONE,
+            "context_side": "unknown",
+            "price_context_alignment": "missing_context",
+        },
         "facts": {},
         "data_gaps": [reason],
         "warnings": ["A leitura contextual não representa promessa ou garantia de resultado."],
@@ -1731,7 +1737,7 @@ def build_narrative_context_v1(
             "es": es,
         },
         "signals": {
-            "tone": "natural_multilang_v1_5",
+            "tone": NARRATIVE_CONTEXT_TONE,
             "pricing_status": price_read.get("status"),
             "pricing_outcome": price_read.get("outcome"),
             "context_side": context_side,

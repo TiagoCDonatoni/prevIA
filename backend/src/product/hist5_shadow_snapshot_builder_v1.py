@@ -10,14 +10,17 @@ from src.product.hist5_candidate_policy_v1 import (
 )
 from src.product.matchup_model_v0 import estimate_lambdas_with_fallback
 from src.product.matchup_snapshot_builder_v1 import (
+    _attach_narrative_context_to_payload,
     _build_empty_snapshot_payload,
     _build_inputs_dict,
     _build_snapshot_confidence,
     _load_fixture_context,
     _load_snapshot_season_policy_context,
+    _record_narrative_context_counter,
     _resolve_league_and_season_from_sport_key,
     _select_candidates,
     _select_candidates_by_event_ids,
+    _select_1x2_best_odds,
     _select_totals_main_line_and_best,
     upsert_matchup_snapshot_v1,
 )
@@ -152,6 +155,7 @@ def _build_payload_from_lambdas(
     model_version: str,
     calc_version: str,
     totals: Dict[str, Any],
+    one_x_two: Optional[Dict[str, Any]],
     league_id: Optional[int],
     season: Optional[int],
     fixture_id: Optional[int],
@@ -162,7 +166,8 @@ def _build_payload_from_lambdas(
     lambda_source: str,
     lambda_meta: Dict[str, Any],
     confidence: Dict[str, Any],
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:    
+    one_x_two = one_x_two or {}
     mx = generate_score_matrix_v1(float(lambda_home), float(lambda_away), max_goals=6)
     p_1x2 = derive_1x2(mx.matrix)
     p_btts = derive_btts(mx.matrix)
@@ -197,7 +202,16 @@ def _build_payload_from_lambdas(
         "confidence": confidence,
         "matrix": mx.matrix,
         "markets": {
-            "1x2": {"p_model": p_1x2},
+            "1x2": {
+                "p_model": p_1x2,
+                "best_odds": dict((one_x_two or {}).get("best_odds") or {}),
+                "source_captured_at_utc": (
+                    one_x_two.get("source_captured_at_utc").isoformat().replace("+00:00", "Z")
+                    if hasattr(one_x_two.get("source_captured_at_utc"), "isoformat")
+                    else one_x_two.get("source_captured_at_utc")
+                ),
+                "odds_status": one_x_two.get("status"),
+            },
             "btts": {"p_model": p_btts},
             "totals": {
                 "main_line": totals.get("main_line"),
@@ -228,6 +242,7 @@ def _build_hist5_or_v0_shadow_payload(
     model_version: str,
     calc_version: str,
     totals: Dict[str, Any],
+    one_x_two: Optional[Dict[str, Any]],
     league_id: int,
     season: int,
     fixture_id: Optional[int],
@@ -290,6 +305,7 @@ def _build_hist5_or_v0_shadow_payload(
             model_version=model_version,
             calc_version=calc_version,
             totals=totals,
+            one_x_two=one_x_two,
             league_id=int(league_id),
             season=int(season),
             fixture_id=fixture_id,
@@ -345,6 +361,7 @@ def _build_hist5_or_v0_shadow_payload(
         model_version=model_version,
         calc_version=calc_version,
         totals=totals,
+        one_x_two=one_x_two,
         league_id=int(league_id),
         season=int(season),
         fixture_id=fixture_id,
@@ -397,6 +414,14 @@ def rebuild_hist5_shadow_snapshots_v1(
         "skipped_no_league_map": 0,
         "shadow_action_use_hist5": 0,
         "shadow_action_fallback_to_v0": 0,
+        "narrative_status_available": 0,
+        "narrative_status_limited": 0,
+        "narrative_status_unavailable": 0,
+        "narrative_status_unknown": 0,
+        "narrative_quality_good": 0,
+        "narrative_quality_limited": 0,
+        "narrative_quality_unavailable": 0,
+        "narrative_quality_unknown": 0,
         "errors": 0,
         "errors_sample": [],
     }
@@ -424,6 +449,7 @@ def rebuild_hist5_shadow_snapshots_v1(
         event_id = str(ev["event_id"])
         fixture_id = ev.get("fixture_id")
         totals = _select_totals_main_line_and_best(conn, event_id=event_id)
+        one_x_two = _select_1x2_best_odds(conn, event_id=event_id)
 
         try:
             if fixture_id is None:
@@ -441,6 +467,7 @@ def rebuild_hist5_shadow_snapshots_v1(
                         fixture_id=None,
                         home_team_id=None,
                         away_team_id=None,
+                        one_x_two=one_x_two,
                     )
                     counters["snapshots_event_fallback"] += 1
                     upsert_fixture_id = None
@@ -463,6 +490,7 @@ def rebuild_hist5_shadow_snapshots_v1(
                             fixture_id=None,
                             home_team_id=int(home_team_id),
                             away_team_id=int(away_team_id),
+                            one_x_two=one_x_two,
                         )
                         counters["snapshots_event_fallback"] += 1
                         upsert_fixture_id = None
@@ -482,6 +510,7 @@ def rebuild_hist5_shadow_snapshots_v1(
                             model_version=str(model_version),
                             calc_version=str(calc_version),
                             totals=totals,
+                            one_x_two=one_x_two,
                             league_id=league_id,
                             season=season,
                             fixture_id=None,
@@ -513,6 +542,7 @@ def rebuild_hist5_shadow_snapshots_v1(
                     model_version=str(model_version),
                     calc_version=str(calc_version),
                     totals=totals,
+                    one_x_two=one_x_two,
                     league_id=int(fx["league_id"]),
                     season=int(fx["season"]),
                     fixture_id=int(fx["fixture_id"]),
@@ -532,6 +562,16 @@ def rebuild_hist5_shadow_snapshots_v1(
                 counters["shadow_action_use_hist5"] += 1
             elif lambda_source.startswith("v0_fallback:"):
                 counters["shadow_action_fallback_to_v0"] += 1
+
+            payload = _attach_narrative_context_to_payload(
+                conn,
+                payload=payload,
+                sport_key=str(ev["sport_key"]),
+                home_name=ev.get("home_name"),
+                away_name=ev.get("away_name"),
+                kickoff_utc=kickoff_utc,
+            )
+            _record_narrative_context_counter(counters, payload)
 
             if apply:
                 upsert_matchup_snapshot_v1(

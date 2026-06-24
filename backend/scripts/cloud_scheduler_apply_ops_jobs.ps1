@@ -190,6 +190,32 @@ $jobs = @(
         job_kwargs = @{}
         payload = @{}
     }
+    @{
+        id = "$jobPrefix-oddspapi-enrichment"
+        schedule = "10 7,19 * * *"
+        job_key = "oddspapi_run_controlled_enrichment"
+        requested_by = "cloud_scheduler_oddspapi_enrichment"
+        attempt_deadline = "900s"
+        description = "prevIA: enriquece odds via OddsPapi para jogos disponiveis no produto, respeitando cap mensal"
+        job_kwargs = @{
+            window_hours = 720
+            max_events = 200
+            max_external_requests = 4
+            max_candidates_per_event = 3
+            min_score = 0.90
+            min_score_gap = 0.15
+            max_confirmations = 50
+            allowed_bookmakers = $null
+            max_bookmakers_per_event = 12
+            dry_run = $false
+            force = $false
+            verbosity = 2
+            allow_root_bookmaker_match = $true
+            include_inactive_markets = $false
+            only_product_snapshots = $true
+        }
+        payload = @{}
+    }
 )
 
 $updatePipelineShardSchedules = @(

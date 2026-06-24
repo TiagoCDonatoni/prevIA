@@ -140,8 +140,8 @@ def load_settings() -> Settings:
     oddspapi_base_url = _env_str("ODDSPAPI_BASE_URL", "https://v5.oddspapi.io/pt")
     oddspapi_api_key = _env_str("ODDSPAPI_API_KEY")
     oddspapi_enrichment_enabled = _env_bool("ODDSPAPI_ENRICHMENT_ENABLED", default=False)
-    oddspapi_monthly_hard_cap = max(0, _env_int("ODDSPAPI_MONTHLY_HARD_CAP", 250))
-    oddspapi_monthly_reserve = max(0, _env_int("ODDSPAPI_MONTHLY_RESERVE", 20))
+    oddspapi_monthly_hard_cap = max(0, _env_int("ODDSPAPI_MONTHLY_HARD_CAP", 230))
+    oddspapi_monthly_reserve = max(0, _env_int("ODDSPAPI_MONTHLY_RESERVE", 0))
     if oddspapi_monthly_reserve > oddspapi_monthly_hard_cap:
         oddspapi_monthly_reserve = oddspapi_monthly_hard_cap
 

@@ -73,12 +73,36 @@ def _empty_decision_counts() -> Dict[str, int]:
         "skipped_not_eligible": 0,
     }
 
+def _bool_param(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    safe = str(value).strip().lower()
+    if safe in {"1", "true", "yes", "y", "on"}:
+        return True
+    if safe in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _window_hours(value: Any, default: int = 720) -> int:
+    return max(1, min(int(value or default), 720))
+
+
+def _oddspapi_fixture_lookup_window_hours(value: Any, default: int = 216) -> int:
+    """
+    A OddsPapi rejeita /fixtures com 'from' e 'to' >= 10 dias quando só usamos sportId.
+    Usamos 216h (9 dias) como margem segura.
+    """
+    return max(1, min(int(value or default), 216))
 
 def oddspapi_enrichment_dry_run(
     *,
-    window_hours: int = 72,
+    window_hours: int = 720,
     limit: int = 50,
     respect_refresh_log: bool = True,
+    only_product_snapshots: bool = True,
 ) -> Dict[str, Any]:
     """
     Lista eventos elegíveis para enriquecimento OddsPapi sem chamar provider externo.
@@ -94,8 +118,9 @@ def oddspapi_enrichment_dry_run(
       por já terem status terminal no bucket operacional.
     """
 
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    limit = max(1, min(int(limit or 50), 200))
+    window_hours = _window_hours(window_hours, 720)
+    limit = max(1, min(int(limit or 20), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
 
     sql = """
       WITH eligible AS (
@@ -147,6 +172,16 @@ def oddspapi_enrichment_dry_run(
           ON oddspapi_1x2.event_id = oe.event_id
         WHERE oe.resolved_fixture_id IS NOT NULL
           AND oe.sport_key LIKE 'soccer_%%'
+          AND (
+            %(only_product_snapshots)s = false
+            OR EXISTS (
+              SELECT 1
+              FROM product.matchup_snapshot_v1 s
+              WHERE s.event_id = oe.event_id
+                AND s.fixture_id = f.fixture_id
+              LIMIT 1
+            )
+          )
           AND f.kickoff_utc > now()
           AND f.kickoff_utc <= now() + (%(window_hours)s || ' hours')::interval
           AND COALESCE(f.is_finished, false) = false
@@ -193,6 +228,7 @@ def oddspapi_enrichment_dry_run(
                 {
                     "window_hours": int(window_hours),
                     "limit": int(limit),
+                    "only_product_snapshots": bool(only_product_snapshots),
                 },
             )
             rows = cur.fetchall() or []
@@ -283,6 +319,7 @@ def oddspapi_enrichment_dry_run(
         "decisions": decisions,
         "event_level_provider_call_candidates": decisions["would_call_provider"],
         "respect_refresh_log": bool(respect_refresh_log),
+        "only_product_snapshots": bool(only_product_snapshots),
         "policy": {
             "runs_inside_pipeline_run_all": False,
             "calls_oddspapi": False,
@@ -2278,9 +2315,11 @@ def _select_mapped_events_for_oddspapi_batch(
     *,
     window_hours: int,
     limit: int,
+    only_product_snapshots: bool = False,
 ) -> List[Dict[str, Any]]:
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    limit = max(1, min(int(limit or 20), 200))
+    window_hours = _window_hours(window_hours, 720)
+    limit = max(1, min(int(limit or 50), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
 
     sql = """
       SELECT
@@ -2331,6 +2370,16 @@ def _select_mapped_events_for_oddspapi_batch(
 
       WHERE pem.provider = %(provider)s
         AND pem.active = true
+        AND (
+          %(only_product_snapshots)s = false
+          OR EXISTS (
+            SELECT 1
+            FROM product.matchup_snapshot_v1 s
+            WHERE s.event_id = pem.canonical_event_id
+              AND s.fixture_id = pem.core_fixture_id
+            LIMIT 1
+          )
+        )
         AND f.kickoff_utc > now()
         AND f.kickoff_utc <= now() + (%(window_hours)s || ' hours')::interval
         AND COALESCE(f.is_finished, false) = false
@@ -2350,6 +2399,7 @@ def _select_mapped_events_for_oddspapi_batch(
                 "provider": PROVIDER_ODDSPAPI,
                 "window_hours": int(window_hours),
                 "limit": int(limit),
+                "only_product_snapshots": bool(only_product_snapshots),
             },
         )
         rows = cur.fetchall() or []
@@ -2395,8 +2445,8 @@ def _select_mapped_events_for_oddspapi_batch(
 
 def oddspapi_batch_write_1x2_mapped_events(
     *,
-    window_hours: int = 72,
-    max_events: int = 3,
+    window_hours: int = 720,
+    max_events: int = 50,
     max_external_requests: int = 3,
     allowed_bookmakers: Optional[str] = None,
     max_bookmakers_per_event: int = 10,
@@ -2405,6 +2455,7 @@ def oddspapi_batch_write_1x2_mapped_events(
     verbosity: int = 2,
     allow_root_bookmaker_match: bool = False,
     include_inactive_markets: bool = False,
+    only_product_snapshots: bool = True,
 ) -> Dict[str, Any]:
     """
     Batch manual de OddsPapi para eventos já mapeados.
@@ -2417,11 +2468,12 @@ def oddspapi_batch_write_1x2_mapped_events(
     - Não entra no run_all.
     """
 
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    max_events = max(1, min(int(max_events or 3), 50))
+    window_hours = _window_hours(window_hours, 720)
+    max_events = max(1, min(int(max_events or 50), 200))
     max_external_requests = max(0, min(int(max_external_requests or 0), 20))
     max_bookmakers_per_event = max(1, min(int(max_bookmakers_per_event or 10), 40))
     verbosity = max(1, min(int(verbosity or 2), 5))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
 
     settings = load_settings()
 
@@ -2446,6 +2498,7 @@ def oddspapi_batch_write_1x2_mapped_events(
             conn,
             window_hours=window_hours,
             limit=max_events,
+            only_product_snapshots=only_product_snapshots,
         )
 
         usage_before = get_provider_usage_status(
@@ -2606,6 +2659,7 @@ def oddspapi_batch_write_1x2_mapped_events(
             "verbosity": int(verbosity),
             "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
             "include_inactive_markets": bool(include_inactive_markets),
+            "only_product_snapshots": bool(only_product_snapshots),
         },
         "usage_before": usage_before,
         "usage_after": usage_after,
@@ -2630,9 +2684,11 @@ def _select_unmapped_core_events_for_oddspapi_auto_match(
     *,
     window_hours: int,
     limit: int,
+    only_product_snapshots: bool = False,
 ) -> List[Dict[str, Any]]:
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    limit = max(1, min(int(limit or 10), 100))
+    window_hours = _window_hours(window_hours, 720)
+    limit = max(1, min(int(limit or 10), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, False)
 
     sql = """
       SELECT
@@ -2676,6 +2732,16 @@ def _select_unmapped_core_events_for_oddspapi_auto_match(
       WHERE oe.resolved_fixture_id IS NOT NULL
         AND oe.sport_key LIKE 'soccer_%%'
         AND pem.provider_event_id IS NULL
+        AND (
+          %(only_product_snapshots)s = false
+          OR EXISTS (
+            SELECT 1
+            FROM product.matchup_snapshot_v1 s
+            WHERE s.event_id = oe.event_id
+              AND s.fixture_id = f.fixture_id
+            LIMIT 1
+          )
+        )
         AND f.kickoff_utc > now()
         AND f.kickoff_utc <= now() + (%(window_hours)s || ' hours')::interval
         AND COALESCE(f.is_finished, false) = false
@@ -2695,6 +2761,7 @@ def _select_unmapped_core_events_for_oddspapi_auto_match(
                 "provider": PROVIDER_ODDSPAPI,
                 "window_hours": int(window_hours),
                 "limit": int(limit),
+                "only_product_snapshots": bool(only_product_snapshots),
             },
         )
         rows = cur.fetchall() or []
@@ -2769,10 +2836,11 @@ def _score_auto_match_candidates_for_core_event(
 
 def oddspapi_auto_match_diagnostic(
     *,
-    window_hours: int = 72,
-    max_events: int = 10,
+    window_hours: int = 720,
+    max_events: int = 100,
     max_candidates_per_event: int = 3,
     min_score: float = 0.90,
+    only_product_snapshots: bool = True,
 ) -> Dict[str, Any]:
     """
     Diagnóstico conservador de auto-matching OddsPapi.
@@ -2803,13 +2871,15 @@ def oddspapi_auto_match_diagnostic(
             "request_count_consumed": 0,
         }
 
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    max_events = max(1, min(int(max_events or 10), 100))
+    window_hours = _window_hours(window_hours, 720)
+    fixture_lookup_window_hours = _oddspapi_fixture_lookup_window_hours(window_hours)
+    max_events = max(1, min(int(max_events or 100), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
     max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
     min_score = max(0.0, min(float(min_score or 0.90), 1.0))
 
     query_from = datetime.now(timezone.utc).replace(microsecond=0)
-    query_to = query_from + timedelta(hours=window_hours)
+    query_to = query_from + timedelta(hours=fixture_lookup_window_hours)
 
     query_from_iso = query_from.isoformat().replace("+00:00", "Z")
     query_to_iso = query_to.isoformat().replace("+00:00", "Z")
@@ -2819,8 +2889,9 @@ def oddspapi_auto_match_diagnostic(
     with pg_conn() as conn:
         core_events = _select_unmapped_core_events_for_oddspapi_auto_match(
             conn,
-            window_hours=window_hours,
+            window_hours=fixture_lookup_window_hours,
             limit=max_events,
+            only_product_snapshots=only_product_snapshots,
         )
 
         if not core_events:
@@ -2840,6 +2911,14 @@ def oddspapi_auto_match_diagnostic(
                 "reason": "no_unmapped_core_events",
                 "usage": usage,
                 "count": 0,
+                "params": {
+                    "window_hours": int(window_hours),
+                    "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
+                    "max_events": int(max_events),
+                    "max_candidates_per_event": int(max_candidates_per_event),
+                    "min_score": float(min_score),
+                    "only_product_snapshots": bool(only_product_snapshots),
+                },
                 "items": [],
             }
 
@@ -2978,9 +3057,11 @@ def oddspapi_auto_match_diagnostic(
         },
         "params": {
             "window_hours": int(window_hours),
+            "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
             "max_events": int(max_events),
             "max_candidates_per_event": int(max_candidates_per_event),
             "min_score": float(min_score),
+            "only_product_snapshots": bool(only_product_snapshots),
         },
         "counters": counters,
         "items": items,
@@ -2999,13 +3080,14 @@ def oddspapi_auto_match_diagnostic(
 
 def oddspapi_auto_confirm_mappings(
     *,
-    window_hours: int = 72,
-    max_events: int = 10,
+    window_hours: int = 720,
+    max_events: int = 100,
     max_candidates_per_event: int = 3,
     min_score: float = 0.90,
     min_score_gap: float = 0.15,
     max_confirmations: int = 10,
     dry_run: bool = True,
+    only_product_snapshots: bool = True,
 ) -> Dict[str, Any]:
     """
     Auto-confirma mappings OddsPapi para eventos canônicos ainda não mapeados.
@@ -3037,15 +3119,17 @@ def oddspapi_auto_confirm_mappings(
             "request_count_consumed": 0,
         }
 
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    max_events = max(1, min(int(max_events or 10), 100))
+    window_hours = _window_hours(window_hours, 720)
+    fixture_lookup_window_hours = _oddspapi_fixture_lookup_window_hours(window_hours)
+    max_events = max(1, min(int(max_events or 100), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
     max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
     min_score = max(0.0, min(float(min_score or 0.90), 1.0))
     min_score_gap = max(0.0, min(float(min_score_gap or 0.15), 1.0))
     max_confirmations = max(1, min(int(max_confirmations or 10), 50))
 
     query_from = datetime.now(timezone.utc).replace(microsecond=0)
-    query_to = query_from + timedelta(hours=window_hours)
+    query_to = query_from + timedelta(hours=fixture_lookup_window_hours)
 
     query_from_iso = query_from.isoformat().replace("+00:00", "Z")
     query_to_iso = query_to.isoformat().replace("+00:00", "Z")
@@ -3055,8 +3139,9 @@ def oddspapi_auto_confirm_mappings(
     with pg_conn() as conn:
         core_events = _select_unmapped_core_events_for_oddspapi_auto_match(
             conn,
-            window_hours=window_hours,
+            window_hours=fixture_lookup_window_hours,
             limit=max_events,
+            only_product_snapshots=only_product_snapshots,
         )
 
         if not core_events:
@@ -3077,6 +3162,16 @@ def oddspapi_auto_confirm_mappings(
                 "reason": "no_unmapped_core_events",
                 "usage": usage,
                 "count": 0,
+                "params": {
+                    "window_hours": int(window_hours),
+                    "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
+                    "max_events": int(max_events),
+                    "max_candidates_per_event": int(max_candidates_per_event),
+                    "min_score": float(min_score),
+                    "min_score_gap": float(min_score_gap),
+                    "max_confirmations": int(max_confirmations),
+                    "only_product_snapshots": bool(only_product_snapshots),
+                },
                 "items": [],
             }
 
@@ -3130,6 +3225,7 @@ def oddspapi_auto_confirm_mappings(
                 "endpoint": exc.endpoint,
                 "status_code": exc.status_code,
                 "payload": exc.payload,
+                "request_count_consumed": 1,
                 "usage": status,
             }
 
@@ -3292,11 +3388,13 @@ def oddspapi_auto_confirm_mappings(
         },
         "params": {
             "window_hours": int(window_hours),
+            "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
             "max_events": int(max_events),
             "max_candidates_per_event": int(max_candidates_per_event),
             "min_score": float(min_score),
             "min_score_gap": float(min_score_gap),
             "max_confirmations": int(max_confirmations),
+            "only_product_snapshots": bool(only_product_snapshots),
         },
         "counters": counters,
         "items": decisions,
@@ -3314,9 +3412,9 @@ def oddspapi_auto_confirm_mappings(
 
 def oddspapi_run_controlled_enrichment(
     *,
-    window_hours: int = 72,
-    max_events: int = 10,
-    max_external_requests: int = 5,
+    window_hours: int = 720,
+    max_events: int = 200,
+    max_external_requests: int = 4,
     max_candidates_per_event: int = 3,
     min_score: float = 0.90,
     min_score_gap: float = 0.15,
@@ -3328,6 +3426,7 @@ def oddspapi_run_controlled_enrichment(
     verbosity: int = 2,
     allow_root_bookmaker_match: bool = False,
     include_inactive_markets: bool = False,
+    only_product_snapshots: bool = True,
 ) -> Dict[str, Any]:
     """
     Runner controlado da integração OddsPapi.
@@ -3361,8 +3460,10 @@ def oddspapi_run_controlled_enrichment(
             "request_count_consumed": 0,
         }
 
-    window_hours = max(1, min(int(window_hours or 72), 72))
-    max_events = max(1, min(int(max_events or 10), 100))
+    window_hours = _window_hours(window_hours, 720)
+    fixture_lookup_window_hours = _oddspapi_fixture_lookup_window_hours(window_hours)
+    max_events = max(1, min(int(max_events or 200), 200))
+    only_product_snapshots = _bool_param(only_product_snapshots, True)
     max_external_requests = max(0, min(int(max_external_requests or 0), 20))
     max_candidates_per_event = max(1, min(int(max_candidates_per_event or 3), 10))
     min_score = max(0.0, min(float(min_score or 0.90), 1.0))
@@ -3382,8 +3483,9 @@ def oddspapi_run_controlled_enrichment(
 
         unmapped_candidates = _select_unmapped_core_events_for_oddspapi_auto_match(
             conn,
-            window_hours=window_hours,
+            window_hours=fixture_lookup_window_hours,
             limit=max_events,
+            only_product_snapshots=only_product_snapshots,
         )
 
     if dry_run:
@@ -3398,6 +3500,7 @@ def oddspapi_run_controlled_enrichment(
             verbosity=verbosity,
             allow_root_bookmaker_match=allow_root_bookmaker_match,
             include_inactive_markets=include_inactive_markets,
+            only_product_snapshots=only_product_snapshots,
         )
 
         with pg_conn() as conn:
@@ -3419,6 +3522,7 @@ def oddspapi_run_controlled_enrichment(
             "usage_after": usage_after,
             "params": {
                 "window_hours": int(window_hours),
+                "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
                 "max_events": int(max_events),
                 "max_external_requests": int(max_external_requests),
                 "max_candidates_per_event": int(max_candidates_per_event),
@@ -3431,6 +3535,7 @@ def oddspapi_run_controlled_enrichment(
                 "verbosity": int(verbosity),
                 "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
                 "include_inactive_markets": bool(include_inactive_markets),
+                "only_product_snapshots": bool(only_product_snapshots),
             },
             "phases": {
                 "auto_confirm_mappings": {
@@ -3482,13 +3587,14 @@ def oddspapi_run_controlled_enrichment(
         auto_confirm_result["reason"] = "no_unmapped_core_events"
     else:
         auto_confirm_result = oddspapi_auto_confirm_mappings(
-            window_hours=window_hours,
+            window_hours=fixture_lookup_window_hours,
             max_events=max_events,
             max_candidates_per_event=max_candidates_per_event,
             min_score=min_score,
             min_score_gap=min_score_gap,
             max_confirmations=max_confirmations,
             dry_run=False,
+            only_product_snapshots=only_product_snapshots,
         )
 
         consumed = int(auto_confirm_result.get("request_count_consumed") or 0)
@@ -3517,6 +3623,7 @@ def oddspapi_run_controlled_enrichment(
             verbosity=verbosity,
             allow_root_bookmaker_match=allow_root_bookmaker_match,
             include_inactive_markets=include_inactive_markets,
+            only_product_snapshots=only_product_snapshots,
         )
 
         consumed = int(write_result.get("request_count_consumed") or 0)
@@ -3532,17 +3639,28 @@ def oddspapi_run_controlled_enrichment(
             reserve=settings.oddspapi_monthly_reserve,
         )
 
+    usage_before_count = int((usage_before or {}).get("request_count") or 0)
+    usage_after_count = int((usage_after or {}).get("request_count") or 0)
+    observed_request_count_consumed = max(0, usage_after_count - usage_before_count)
+    reported_request_count_consumed = int(request_count_consumed or 0)
+    request_count_consumed_total = max(
+        observed_request_count_consumed,
+        reported_request_count_consumed,
+    )
+
     return {
         "ok": bool(auto_confirm_result.get("ok") is True and write_result.get("ok") is True),
+        "partial_ok": bool(auto_confirm_result.get("ok") is not True and write_result.get("ok") is True),
         "provider": PROVIDER_ODDSPAPI,
         "mode": "controlled_enrichment_run",
         "dry_run": False,
-        "request_count_consumed": int(request_count_consumed),
+        "request_count_consumed": int(request_count_consumed_total),
         "request_budget_remaining": int(request_budget_remaining),
         "usage_before": usage_before,
         "usage_after": usage_after,
         "params": {
             "window_hours": int(window_hours),
+            "fixture_lookup_window_hours": int(fixture_lookup_window_hours),
             "max_events": int(max_events),
             "max_external_requests": int(max_external_requests),
             "max_candidates_per_event": int(max_candidates_per_event),
@@ -3555,6 +3673,7 @@ def oddspapi_run_controlled_enrichment(
             "verbosity": int(verbosity),
             "allow_root_bookmaker_match": bool(allow_root_bookmaker_match),
             "include_inactive_markets": bool(include_inactive_markets),
+            "only_product_snapshots": bool(only_product_snapshots),
         },
         "phases": {
             "auto_confirm_mappings": auto_confirm_result,
@@ -3568,7 +3687,7 @@ def oddspapi_run_controlled_enrichment(
             "write_request_count": int(
                 write_result.get("request_count_consumed") or 0
             ),
-            "request_count_consumed": int(request_count_consumed),
+            "request_count_consumed": int(request_count_consumed_total),
             "auto_confirmed": int(
                 ((auto_confirm_result.get("counters") or {}).get("confirmed")) or 0
             ),
