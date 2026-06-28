@@ -1140,7 +1140,7 @@ def admin_odds_refresh(
             counters["team_ids_fully_resolved"] = int((team_resolve_counters or {}).get("fully_resolved", 0))
             counters["team_ids_queued"] = int((team_resolve_counters or {}).get("queued_for_review", 0))
 
-            snap_counters = rebuild_matchup_snapshots_v1(
+            snap_counters = rebuild_product_snapshots_for_model_v1(
                 conn2,
                 sport_key=sport_key,
                 model_version=mv,
@@ -3203,7 +3203,7 @@ def admin_rebuild_matchup_snapshots(
 
             # Rebuild
             t1 = time.time()
-            counters = rebuild_matchup_snapshots_v1(
+            counters = rebuild_product_snapshots_for_model_v1(
                 conn,
                 sport_key=sport_key,
                 hours_ahead=int(hours_ahead),
@@ -3404,7 +3404,7 @@ def admin_team_resolution_approve(
 
         # 4) rebuild incremental dos snapshots do produto para refletir os team_ids novos
         mv = get_active_model_version()
-        snap_counters = rebuild_matchup_snapshots_v1(
+        snap_counters = rebuild_product_snapshots_for_model_v1(
             conn,
             sport_key=str(body.sport_key),
             model_version=mv,

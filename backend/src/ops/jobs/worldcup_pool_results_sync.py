@@ -77,6 +77,92 @@ def _api_round(item: Dict[str, Any]) -> Optional[str]:
     return str(value).strip() if value is not None else None
 
 
+def _normalize_api_round_phase(api_round: Optional[str]) -> Optional[str]:
+    raw = str(api_round or "").strip().lower()
+
+    if not raw:
+        return None
+
+    normalized = raw
+    normalized = normalized.replace("-", " ")
+    normalized = normalized.replace("_", " ")
+    normalized = " ".join(normalized.split())
+
+    if "group" in normalized:
+        return "group"
+
+    if (
+        "round of 32" in normalized
+        or "last 32" in normalized
+        or "1/16" in normalized
+        or "32" in normalized
+    ):
+        return "round_of_32"
+
+    if (
+        "round of 16" in normalized
+        or "last 16" in normalized
+        or "1/8" in normalized
+        or "16" in normalized
+    ):
+        return "round_of_16"
+
+    if (
+        "quarter" in normalized
+        or "quarter final" in normalized
+        or "quarter finals" in normalized
+        or "1/4" in normalized
+    ):
+        return "quarter_final"
+
+    if (
+        "semi" in normalized
+        or "semi final" in normalized
+        or "semi finals" in normalized
+        or "1/2" in normalized
+    ):
+        return "semi_final"
+
+    if (
+        "third" in normalized
+        or "3rd" in normalized
+        or "third place" in normalized
+        or "3rd place" in normalized
+    ):
+        return "third_place"
+
+    if normalized == "final" or normalized.endswith(" final"):
+        return "final"
+
+    return None
+
+
+def _api_round_phase_diagnostic(
+    *,
+    internal_phase: Optional[str],
+    item: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    api_round = _api_round(item)
+    api_phase = _normalize_api_round_phase(api_round)
+    clean_internal_phase = str(internal_phase or "").strip()
+
+    if not api_round or not api_phase or not clean_internal_phase:
+        return api_phase, None, None
+
+    if api_phase == clean_internal_phase:
+        return api_phase, None, None
+
+    return (
+        api_phase,
+        "api_round_phase_mismatch",
+        (
+            f"API round '{api_round}' maps to phase '{api_phase}', "
+            f"but internal phase is '{clean_internal_phase}'. "
+            "Internal phase was kept as source of truth."
+        ),
+    )
+
+
 def _api_venue_name(item: Dict[str, Any]) -> Optional[str]:
     venue = (item.get("fixture") or {}).get("venue") or {}
     value = venue.get("name")
@@ -106,6 +192,7 @@ def _load_candidate_matches(
       SELECT
         id,
         api_fixture_id,
+        phase,
         kickoff_utc,
         status,
         home_score,
@@ -168,12 +255,13 @@ def _load_candidate_matches(
         {
             "id": int(row[0]),
             "api_fixture_id": int(row[1]),
-            "kickoff_utc": row[2],
-            "status": str(row[3] or ""),
-            "home_score": row[4],
-            "away_score": row[5],
-            "result_source": str(row[6] or "").strip() or None,
-            "api_final_seen_at_utc": row[7],
+            "phase": str(row[2] or "").strip() or None,
+            "kickoff_utc": row[3],
+            "status": str(row[4] or ""),
+            "home_score": row[5],
+            "away_score": row[6],
+            "result_source": str(row[7] or "").strip() or None,
+            "api_final_seen_at_utc": row[8],
         }
         for row in rows
     ]
@@ -192,6 +280,7 @@ def _update_api_snapshot_only(
     match_id: int,
     item: Dict[str, Any],
     mapping_status: Optional[str] = None,
+    mapping_note: Optional[str] = None,
 ) -> None:
     sql = """
       UPDATE worldcup_pool.matches
@@ -205,6 +294,7 @@ def _update_api_snapshot_only(
         api_venue_name = %(api_venue_name)s,
         api_venue_city = %(api_venue_city)s,
         api_mapping_status = COALESCE(%(api_mapping_status)s, api_mapping_status),
+        api_mapping_note = COALESCE(%(api_mapping_note)s, api_mapping_note),
         api_raw_snapshot = %(api_raw_snapshot)s::jsonb,
         api_last_synced_at_utc = NOW(),
         updated_at_utc = NOW()
@@ -226,13 +316,20 @@ def _update_api_snapshot_only(
                     "api_venue_name": _api_venue_name(item),
                     "api_venue_city": _api_venue_city(item),
                     "api_mapping_status": mapping_status,
+                    "api_mapping_note": mapping_note,
                     "api_raw_snapshot": _jsonb(item),
                 },
             )
         conn.commit()
 
 
-def _mark_final_seen(*, match_id: int, item: Dict[str, Any]) -> None:
+def _mark_final_seen(
+    *,
+    match_id: int,
+    item: Dict[str, Any],
+    mapping_status: Optional[str] = None,
+    mapping_note: Optional[str] = None,
+) -> None:
     sql = """
       UPDATE worldcup_pool.matches
       SET
@@ -244,6 +341,8 @@ def _mark_final_seen(*, match_id: int, item: Dict[str, Any]) -> None:
         api_round = %(api_round)s,
         api_venue_name = %(api_venue_name)s,
         api_venue_city = %(api_venue_city)s,
+        api_mapping_status = COALESCE(%(api_mapping_status)s, api_mapping_status),
+        api_mapping_note = COALESCE(%(api_mapping_note)s, api_mapping_note),
         api_final_seen_at_utc = COALESCE(api_final_seen_at_utc, NOW()),
         api_raw_snapshot = %(api_raw_snapshot)s::jsonb,
         api_last_synced_at_utc = NOW(),
@@ -265,6 +364,8 @@ def _mark_final_seen(*, match_id: int, item: Dict[str, Any]) -> None:
                     "api_round": _api_round(item),
                     "api_venue_name": _api_venue_name(item),
                     "api_venue_city": _api_venue_city(item),
+                    "api_mapping_status": mapping_status,
+                    "api_mapping_note": mapping_note,
                     "api_raw_snapshot": _jsonb(item),
                 },
             )
@@ -281,6 +382,10 @@ def _finalize_match_from_api(
     existing_result_source = match.get("result_source")
     existing_home_score = match.get("home_score")
     existing_away_score = match.get("away_score")
+    _, mapping_status, mapping_note = _api_round_phase_diagnostic(
+        internal_phase=match.get("phase"),
+        item=item,
+    )
 
     if (
         existing_result_source
@@ -342,6 +447,8 @@ def _finalize_match_from_api(
         api_round = %(api_round)s,
         api_venue_name = %(api_venue_name)s,
         api_venue_city = %(api_venue_city)s,
+        api_mapping_status = COALESCE(%(api_mapping_status)s, api_mapping_status),
+        api_mapping_note = COALESCE(%(api_mapping_note)s, api_mapping_note),
         api_final_seen_at_utc = COALESCE(api_final_seen_at_utc, NOW()),
         api_final_confirmed_at_utc = NOW(),
         api_raw_snapshot = %(api_raw_snapshot)s::jsonb,
@@ -396,6 +503,8 @@ def _finalize_match_from_api(
                     "api_round": _api_round(item),
                     "api_venue_name": _api_venue_name(item),
                     "api_venue_city": _api_venue_city(item),
+                    "api_mapping_status": mapping_status,
+                    "api_mapping_note": mapping_note,
                     "api_raw_snapshot": _jsonb(item),
                 },
             )
@@ -440,6 +549,8 @@ def _mark_non_final_special_status(
     match_id: int,
     item: Dict[str, Any],
     internal_status: str,
+    mapping_status: Optional[str] = None,
+    mapping_note: Optional[str] = None,
 ) -> None:
     sql = """
       UPDATE worldcup_pool.matches
@@ -448,6 +559,8 @@ def _mark_non_final_special_status(
         api_status_short = %(api_status_short)s,
         api_status_long = %(api_status_long)s,
         api_status_elapsed = %(api_status_elapsed)s,
+        api_mapping_status = COALESCE(%(api_mapping_status)s, api_mapping_status),
+        api_mapping_note = COALESCE(%(api_mapping_note)s, api_mapping_note),
         api_raw_snapshot = %(api_raw_snapshot)s::jsonb,
         api_last_synced_at_utc = NOW(),
         updated_at_utc = NOW()
@@ -465,6 +578,8 @@ def _mark_non_final_special_status(
                     "api_status_short": _status_short(item),
                     "api_status_long": _status_long(item),
                     "api_status_elapsed": _status_elapsed(item),
+                    "api_mapping_status": mapping_status,
+                    "api_mapping_note": mapping_note,
                     "api_raw_snapshot": _jsonb(item),
                 },
             )
@@ -550,6 +665,7 @@ def worldcup_pool_results_sync(
         "cancelled_or_abandoned": 0,
         "missing_score": 0,
         "missing_api_fixture": 0,
+        "api_round_phase_mismatches": 0,
         "conflicts": 0,
         "predictions_locked": 0,
         "events_inserted": 0,
@@ -611,6 +727,14 @@ def worldcup_pool_results_sync(
             match_id = int(match["id"])
             status_short = _status_short(item)
 
+            _, mapping_status, mapping_note = _api_round_phase_diagnostic(
+                internal_phase=match.get("phase"),
+                item=item,
+            )
+
+            if mapping_status == "api_round_phase_mismatch":
+                counters["api_round_phase_mismatches"] += 1
+
             if dry_run:
                 if status_short in FINAL_STATUS_SHORTS:
                     counters["final_seen_first_time"] += 1
@@ -623,6 +747,8 @@ def worldcup_pool_results_sync(
                     match_id=match_id,
                     item=item,
                     internal_status="cancelled",
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
                 )
                 counters["cancelled_or_abandoned"] += 1
                 continue
@@ -632,31 +758,53 @@ def worldcup_pool_results_sync(
                     match_id=match_id,
                     item=item,
                     internal_status="postponed",
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
                 )
                 counters["postponed_or_suspended"] += 1
                 continue
 
             if status_short not in FINAL_STATUS_SHORTS:
-                _update_api_snapshot_only(match_id=match_id, item=item)
+                _update_api_snapshot_only(
+                    match_id=match_id,
+                    item=item,
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
+                )
                 counters["not_final"] += 1
                 continue
 
             home_score, away_score = _score_from_fixture(item)
             if home_score is None or away_score is None:
-                _mark_final_seen(match_id=match_id, item=item)
+                _mark_final_seen(
+                    match_id=match_id,
+                    item=item,
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
+                )
                 counters["missing_score"] += 1
                 continue
 
             final_seen_at = match.get("api_final_seen_at_utc")
             if not final_seen_at:
-                _mark_final_seen(match_id=match_id, item=item)
+                _mark_final_seen(
+                    match_id=match_id,
+                    item=item,
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
+                )
                 counters["final_seen_first_time"] += 1
                 continue
 
             elapsed_after_seen = now - final_seen_at
             delay_seconds = max(0, int(confirmation_delay_minutes or 0)) * 60
             if elapsed_after_seen.total_seconds() < delay_seconds:
-                _mark_final_seen(match_id=match_id, item=item)
+                _mark_final_seen(
+                    match_id=match_id,
+                    item=item,
+                    mapping_status=mapping_status,
+                    mapping_note=mapping_note,
+                )
                 counters["final_seen_first_time"] += 1
                 continue
 

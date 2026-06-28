@@ -52,16 +52,16 @@ const COPY = {
     next: "Próxima",
     match: "Jogo",
     group: "Grupo",
-    roundFilter: "Rodada",
-    allRounds: "Todas as rodadas",
+    roundFilter: "Filtrar jogos",
+    allRounds: "Todas as fases",
     knockout: "Mata-mata",
     round1: "Rodada 1",
     round2: "Rodada 2",
     round3: "Rodada 3",
-    roundOf32: "32 avos",
+    roundOf32: "Fase extra",
     roundOf16: "Oitavas",
     quarterFinal: "Quartas",
-    semiFinal: "Semifinal",
+    semiFinal: "Semifinais",
     thirdPlace: "3º lugar",
     final: "Final",
     kickoffTbd: "Data a definir",
@@ -100,16 +100,16 @@ const COPY = {
     next: "Next",
     match: "Match",
     group: "Group",
-    roundFilter: "Round",
-    allRounds: "All rounds",
+    roundFilter: "Filter matches",
+    allRounds: "All phases",
     knockout: "Knockout",
     round1: "Round 1",
     round2: "Round 2",
     round3: "Round 3",
-    roundOf32: "Round of 32",
+    roundOf32: "Extra knockout round",
     roundOf16: "Round of 16",
     quarterFinal: "Quarter-final",
-    semiFinal: "Semi-final",
+    semiFinal: "Semi-finals",
     thirdPlace: "Third place",
     final: "Final",
     kickoffTbd: "Date TBD",
@@ -148,16 +148,16 @@ const COPY = {
     next: "Siguiente",
     match: "Partido",
     group: "Grupo",
-    roundFilter: "Jornada",
-    allRounds: "Todas las jornadas",
+    roundFilter: "Filtrar partidos",
+    allRounds: "Todas las fases",
     knockout: "Eliminatorias",
     round1: "Jornada 1",
     round2: "Jornada 2",
     round3: "Jornada 3",
-    roundOf32: "Dieciseisavos",
+    roundOf32: "Ronda extra",
     roundOf16: "Octavos",
     quarterFinal: "Cuartos",
-    semiFinal: "Semifinal",
+    semiFinal: "Semifinales",
     thirdPlace: "3º puesto",
     final: "Final",
     kickoffTbd: "Fecha por definir",
@@ -298,9 +298,9 @@ function getPhaseLabel(
     const groupLabel = match.group_code ? `${copy.group} ${match.group_code}` : copy.group;
     const matchNumber = Number(match.match_key.match(/_match_(\d+)$/)?.[1] || 0);
 
-    if (matchNumber >= 1 && matchNumber <= 2) return `${groupLabel} · ${copy.round1}`;
-    if (matchNumber >= 3 && matchNumber <= 4) return `${groupLabel} · ${copy.round2}`;
-    if (matchNumber >= 5 && matchNumber <= 6) return `${groupLabel} · ${copy.round3}`;
+    if (matchNumber >= 1 && matchNumber <= 2) return `${groupLabel} - ${copy.round1}`;
+    if (matchNumber >= 3 && matchNumber <= 4) return `${groupLabel} - ${copy.round2}`;
+    if (matchNumber >= 5 && matchNumber <= 6) return `${groupLabel} - ${copy.round3}`;
 
     return groupLabel;
   }
@@ -516,6 +516,12 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
     { value: "1", label: copy.round1 },
     { value: "2", label: copy.round2 },
     { value: "3", label: copy.round3 },
+    { value: "round_of_32", label: copy.roundOf32 },
+    { value: "round_of_16", label: copy.roundOf16 },
+    { value: "quarter_final", label: copy.quarterFinal },
+    { value: "semi_final", label: copy.semiFinal },
+    { value: "third_place", label: copy.thirdPlace },
+    { value: "final", label: copy.final },
   ];
 
   const dayGroups = data ? groupMatchesByDay(data.items, lang, copy.kickoffTbd) : [];
@@ -651,7 +657,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
                           aria-label={`${match.home_label} score`}
                         />
 
-                        <span className="worldcup-pool-score-separator">×</span>
+                        <span className="worldcup-pool-score-separator">x</span>
 
                         <input
                           type="text"
@@ -694,7 +700,7 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
                             <span>
                               {copy.result}:{" "}
                               <strong>
-                                {match.result_home_score} × {match.result_away_score}
+                                {match.result_home_score} x {match.result_away_score}
                               </strong>
                             </span>
                           ) : (
@@ -752,3 +758,4 @@ export function WorldCupPoolPredictionsPanel({ lang, inviteToken }: Props) {
     </section>
   );
 }
+

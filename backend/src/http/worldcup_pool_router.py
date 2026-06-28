@@ -23,7 +23,18 @@ router = APIRouter(prefix="/public/worldcup-pool", tags=["worldcup-pool"])
 Lang = Literal["pt", "en", "es"]
 WorldCupPoolScoringMode = Literal["classic", "weighted_by_stage"]
 WorldCupPoolMatchFilter = Literal["all", "pending", "predicted", "locked"]
-WorldCupPoolMatchRoundFilter = Literal["all", "1", "2", "3"]
+WorldCupPoolMatchRoundFilter = Literal[
+    "all",
+    "1",
+    "2",
+    "3",
+    "round_of_32",
+    "round_of_16",
+    "quarter_final",
+    "semi_final",
+    "third_place",
+    "final",
+]
 
 PIN_HASH_ITERATIONS = 180_000
 PIN_MAX_FAILED_ATTEMPTS = 5
@@ -3540,6 +3551,15 @@ def list_worldcup_pool_participant_matches(
         round_sql = "AND m.phase = 'group' AND m.match_key ~ '_match_[34]$'"
     elif round_filter == "3":
         round_sql = "AND m.phase = 'group' AND m.match_key ~ '_match_[56]$'"
+    elif round_filter in {
+        "round_of_32",
+        "round_of_16",
+        "quarter_final",
+        "semi_final",
+        "third_place",
+        "final",
+    }:
+        round_sql = f"AND m.phase = '{round_filter}'"
 
     summary_sql = f"""
       SELECT

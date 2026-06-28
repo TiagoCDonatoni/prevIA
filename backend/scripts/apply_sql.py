@@ -19,7 +19,7 @@ def main() -> int:
         print(f"ERROR: SQL file not found: {sql_path}")
         return 2
 
-    sql = sql_path.read_text(encoding="utf-8")
+    sql = sql_path.read_text(encoding="utf-8-sig")
 
     with pg_conn() as conn:
         with conn.cursor() as cur:

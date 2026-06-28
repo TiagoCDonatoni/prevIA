@@ -9,6 +9,7 @@ import {
   fetchWorldCupPoolParticipantDashboard,
   logoutWorldCupPoolParticipant,
   type WorldCupPoolParticipantDashboardResponse,
+  type WorldCupPoolScoringPhaseConfig,
 } from "../api/publicClient";
 import { WorldCupPoolPredictionsPanel } from "../components/WorldCupPoolPredictionsPanel";
 import { WorldCupPoolRankingPanel } from "../components/WorldCupPoolRankingPanel";
@@ -38,6 +39,11 @@ const COPY = {
     outcome: "Resultado correto",
     teamScoreBonus: "Bônus por gols de um time",
     maxPerMatch: "Máximo por jogo",
+    scoringPhase: "Fase",
+    scoringProgressTitle: "Pontuação por fase",
+    scoringProgressBody:
+      "A fase de grupos mantém a base clássica. A partir da fase extra, cada jogo pode valer mais pontos até a final.",
+    pointsShort: "pts",
     scoringClassicMode: "Clássica",
     scoringWeightedMode: "Emoção até a final",
     scoringClassicHint: "Todos os jogos valem igual.",
@@ -73,6 +79,11 @@ const COPY = {
     outcome: "Correct outcome",
     teamScoreBonus: "Team score bonus",
     maxPerMatch: "Maximum per match",
+    scoringPhase: "Stage",
+    scoringProgressTitle: "Scoring by stage",
+    scoringProgressBody:
+      "The group stage keeps the classic base. From the extra knockout round onward, each match can be worth more points until the final.",
+    pointsShort: "pts",
     scoringClassicMode: "Classic",
     scoringWeightedMode: "Drama until the final",
     scoringClassicHint: "Every match is worth the same.",
@@ -108,6 +119,11 @@ const COPY = {
     outcome: "Resultado correcto",
     teamScoreBonus: "Bono por goles de un equipo",
     maxPerMatch: "Máximo por partido",
+    scoringPhase: "Fase",
+    scoringProgressTitle: "Puntuación por fase",
+    scoringProgressBody:
+      "La fase de grupos mantiene la base clásica. Desde la ronda extra, cada partido puede valer más puntos hasta la final.",
+    pointsShort: "pts",
     scoringClassicMode: "Clásica",
     scoringWeightedMode: "Emoción hasta la final",
     scoringClassicHint: "Todos los partidos valen igual.",
@@ -120,6 +136,13 @@ const COPY = {
     openAdmin: "Gestionar porra",
   },
 } as const;
+
+function getScoringPhaseLabel(
+  phase: WorldCupPoolScoringPhaseConfig,
+  lang: Lang
+): string {
+  return phase.phase_label?.[lang] ?? phase.phase_label?.pt ?? phase.phase_key;
+}
 
 export function WorldCupPoolParticipantPage() {
   const { lang, inviteToken } = useParams<{ lang: string; inviteToken: string }>();
@@ -280,6 +303,10 @@ export function WorldCupPoolParticipantPage() {
       ? copy.scoringWeightedHint
       : copy.scoringClassicHint;
 
+  const isWeightedScoring = data.scoring_mode === "weighted_by_stage";
+  const scoringPhases = data.scoring_rules?.phases ?? [];
+  const shouldShowPhaseScoring = isWeightedScoring && scoringPhases.length > 1;
+
   return (
     <div className="worldcup-pool-page">
       <section className="worldcup-pool-participant-shell">
@@ -329,24 +356,63 @@ export function WorldCupPoolParticipantPage() {
               </div>
             </div>
 
-            <dl className="worldcup-pool-scoring-list">
-              <div>
-                <dt>{copy.exactScore}</dt>
-                <dd>{data.scoring.exact_score_points}</dd>
+            {shouldShowPhaseScoring ? (
+              <div className="worldcup-pool-scoring-progress">
+                <div className="worldcup-pool-scoring-progress-intro">
+                  <strong>{copy.scoringProgressTitle}</strong>
+                  <p>{copy.scoringProgressBody}</p>
+                </div>
+
+                <div className="worldcup-pool-scoring-phase-strip">
+                  {scoringPhases.map((phase) => (
+                    <div className="worldcup-pool-scoring-phase-step" key={phase.phase_key}>
+                      <span>{getScoringPhaseLabel(phase, currentLang)}</span>
+                      <strong>{phase.max_points_per_match}</strong>
+                      <small>{copy.pointsShort}</small>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="worldcup-pool-scoring-phase-table" role="table">
+                  <div className="worldcup-pool-scoring-phase-row is-head" role="row">
+                    <span role="columnheader">{copy.scoringPhase}</span>
+                    <span role="columnheader">{copy.exactScore}</span>
+                    <span role="columnheader">{copy.outcome}</span>
+                    <span role="columnheader">{copy.teamScoreBonus}</span>
+                    <span role="columnheader">{copy.maxPerMatch}</span>
+                  </div>
+
+                  {scoringPhases.map((phase) => (
+                    <div className="worldcup-pool-scoring-phase-row" role="row" key={phase.phase_key}>
+                      <strong role="cell">{getScoringPhaseLabel(phase, currentLang)}</strong>
+                      <span role="cell">{phase.exact_score_points}</span>
+                      <span role="cell">{phase.outcome_points}</span>
+                      <span role="cell">{phase.exact_team_score_bonus}</span>
+                      <span role="cell">{phase.max_points_per_match}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div>
-                <dt>{copy.outcome}</dt>
-                <dd>{data.scoring.outcome_points}</dd>
-              </div>
-              <div>
-                <dt>{copy.teamScoreBonus}</dt>
-                <dd>{data.scoring.exact_team_score_bonus}</dd>
-              </div>
-              <div>
-                <dt>{copy.maxPerMatch}</dt>
-                <dd>{data.scoring.max_points_per_match}</dd>
-              </div>
-            </dl>
+            ) : (
+              <dl className="worldcup-pool-scoring-list">
+                <div>
+                  <dt>{copy.exactScore}</dt>
+                  <dd>{data.scoring.exact_score_points}</dd>
+                </div>
+                <div>
+                  <dt>{copy.outcome}</dt>
+                  <dd>{data.scoring.outcome_points}</dd>
+                </div>
+                <div>
+                  <dt>{copy.teamScoreBonus}</dt>
+                  <dd>{data.scoring.exact_team_score_bonus}</dd>
+                </div>
+                <div>
+                  <dt>{copy.maxPerMatch}</dt>
+                  <dd>{data.scoring.max_points_per_match}</dd>
+                </div>
+              </dl>
+            )}
           </article>
         </div>
 

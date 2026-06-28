@@ -20,11 +20,25 @@ def odds_league_gap_scan(*, default_enabled: bool = False) -> Dict[str, Any]:
     # Refino v1: já nasce como ignored quando for ruído estrutural.
     # Mantém pending apenas para soccer + match markets (não-outrights/politics).
     sql_insert = """
+      with candidates as (
+        select
+          c.sport_key,
+          (
+            c.sport_group ilike %s
+            or c.sport_key not like %s
+            or c.sport_key ilike %s
+            or c.sport_key ilike %s
+            or c.sport_key ilike %s
+          ) as should_ignore
+        from odds.odds_sport_catalog c
+        left join odds.odds_league_map m on m.sport_key = c.sport_key
+        where m.sport_key is null
+      )
       insert into odds.odds_league_map
         (sport_key, league_id, season_policy, fixed_season, tol_hours, hours_ahead, regions,
          enabled, mapping_status, mapping_source, confidence, notes, created_at_utc, updated_at_utc)
       select
-        c.sport_key,
+        sport_key,
         0 as league_id,
         'current' as season_policy,
         null as fixed_season,
@@ -32,51 +46,22 @@ def odds_league_gap_scan(*, default_enabled: bool = False) -> Dict[str, Any]:
         720 as hours_ahead,
         'eu' as regions,
         case
-          when (
-            c.sport_group ilike 'Politics%'
-            or c.sport_key not like 'soccer_%'
-            or c.sport_key ilike '%winner%'
-            or c.sport_key ilike '%championship%'
-            or c.sport_key ilike '%world_series%'
-          ) then false
-          else %(enabled)s
+          when should_ignore then false
+          else %s
         end as enabled,
         case
-          when (
-            c.sport_group ilike 'Politics%'
-            or c.sport_key not like 'soccer_%'
-            or c.sport_key ilike '%winner%'
-            or c.sport_key ilike '%championship%'
-            or c.sport_key ilike '%world_series%'
-          ) then 'ignored'
+          when should_ignore then 'ignored'
           else 'pending'
         end as mapping_status,
-        case
-          when (
-            c.sport_group ilike 'Politics%'
-            or c.sport_key not like 'soccer_%'
-            or c.sport_key ilike '%winner%'
-            or c.sport_key ilike '%championship%'
-            or c.sport_key ilike '%world_series%'
-          ) then 'auto_ignored'
-          else 'auto_low_conf'
-        end as mapping_source,
+        'auto_low_conf' as mapping_source,
         0.0 as confidence,
         case
-          when (
-            c.sport_group ilike 'Politics%'
-            or c.sport_key not like 'soccer_%'
-            or c.sport_key ilike '%winner%'
-            or c.sport_key ilike '%championship%'
-            or c.sport_key ilike '%world_series%'
-          ) then 'auto-created by gap_scan (ignored)'
+          when should_ignore then 'auto-created by gap_scan (ignored)'
           else 'auto-created by gap_scan (pending)'
         end as notes,
-        %(now)s as created_at_utc,
-        %(now)s as updated_at_utc
-      from odds.odds_sport_catalog c
-      left join odds.odds_league_map m on m.sport_key = c.sport_key
-      where m.sport_key is null
+        %s as created_at_utc,
+        %s as updated_at_utc
+      from candidates
       returning sport_key, mapping_status
     """
 
@@ -90,7 +75,19 @@ def odds_league_gap_scan(*, default_enabled: bool = False) -> Dict[str, Any]:
     with pg_conn() as conn:
         conn.autocommit = False
         with conn.cursor() as cur:
-            cur.execute(sql_insert, {"enabled": bool(default_enabled), "now": now})
+            cur.execute(
+                sql_insert,
+                (
+                    "Politics%",
+                    "soccer_%",
+                    "%winner%",
+                    "%championship%",
+                    "%world_series%",
+                    bool(default_enabled),
+                    now,
+                    now,
+                ),
+            )
             rows = cur.fetchall() or []
             inserted_keys = [r[0] for r in rows]
             inserted = len(inserted_keys)

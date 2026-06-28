@@ -303,7 +303,17 @@ export type WorldCupPoolParticipantDashboardResponse = {
 };
 
 export type WorldCupPoolMatchFilter = "all" | "pending" | "predicted" | "locked";
-export type WorldCupPoolRoundFilter = "all" | "1" | "2" | "3";
+export type WorldCupPoolRoundFilter =
+  | "all"
+  | "1"
+  | "2"
+  | "3"
+  | "round_of_32"
+  | "round_of_16"
+  | "quarter_final"
+  | "semi_final"
+  | "third_place"
+  | "final";
 
 export type WorldCupPoolPagination = {
   page: number;
