@@ -8,6 +8,7 @@ import type {
   ProductOddsQuoteResponse,
   ProductOdds1x2,
   ProductNarrativeContext,
+  ProductDecisionSummary,
 } from "../../api/contracts";
 import type { ProductLeagueItem } from "../../api/contracts";
 import { productListLeagues, productListOddsEvents, productQuoteOdds } from "../../api/client";
@@ -545,11 +546,23 @@ function pickSnapshotNarrativeContext(
   const positivePrice = isPositivePriceAlignment(priceAlignment);
 
   return {
-    headline,
-    paragraphs: visibleParagraphs,
+    // Contexto textual escondido temporariamente.
+    // Motivo: a headline/parágrafos atuais ainda misturam "contexto equilibrado"
+    // com leitura de modelo/odd e acabam duplicando a Leitura prevIA.
+    // Vamos reaproveitar depois em uma narrativa unificada.
+    headline: "",
+    paragraphs: [],
+
     isCompact,
     cards: [
-      { key: "context", label: labels.context, value: contextText, tone: "neutral" },
+      // Contexto escondido temporariamente.
+      // {
+      //   key: "context",
+      //   label: labels.context,
+      //   value: contextText,
+      //   tone: "neutral",
+      // },
+
       { key: "model", label: labels.model, value: modelText, tone: "neutral" },
       {
         key: "price",
@@ -565,10 +578,12 @@ function pickSnapshotNarrativeContext(
       },
     ],
     chips: [
-      {
-        label: labels.context,
-        value: contextSide === "balanced" ? labels.balanced : shortOutcomeRole(contextSide, lang),
-      },
+      // Contexto escondido temporariamente.
+      // {
+      //   label: labels.context,
+      //   value: contextSide === "balanced" ? labels.balanced : shortOutcomeRole(contextSide, lang),
+      // },
+
       { label: labels.model, value: shortOutcomeRole(likelyOutcome, lang) },
       { label: labels.price, value: shortOutcomeRole(valueOutcome, lang) },
       { label: labels.valueLabel, value: narrativeValueLabel(priceAlignment, lang) },
@@ -1149,9 +1164,193 @@ function hasOpportunity(summary: ProductEdgeSummary | null | undefined) {
   );
 }
 
+function normalizeDecisionLabel(label: unknown): string {
+  return String(label ?? "").trim().toUpperCase();
+}
+
+function getEventDecisionSummary(
+  event: ProductOddsEvent | null | undefined
+): ProductDecisionSummary | null {
+  if (!event?.decision_summary || typeof event.decision_summary !== "object") {
+    return null;
+  }
+
+  return event.decision_summary;
+}
+
+function getEventDecisionLabel(event: ProductOddsEvent | null | undefined): string {
+  return normalizeDecisionLabel(getEventDecisionSummary(event)?.label);
+}
+
+function isPositiveDecisionLabel(label: string) {
+  return label === "OPPORTUNITY" || label === "CAUTION_OPPORTUNITY";
+}
+
+function eventDecisionIsPositive(event: ProductOddsEvent | null | undefined) {
+  const summary = getEventDecisionSummary(event);
+  const label = normalizeDecisionLabel(summary?.label);
+
+  if (!label) return null;
+
+  if (typeof summary?.is_positive === "boolean") {
+    return summary.is_positive && isPositiveDecisionLabel(label);
+  }
+
+  return isPositiveDecisionLabel(label);
+}
+
+function getDecisionAnalysisChipMeta(
+  event: ProductOddsEvent | null | undefined,
+  lang: Lang
+): { label: string; description: string; icon: string; tone: string } | null {
+  const label = getEventDecisionLabel(event);
+  if (!label) return null;
+
+  if (label === "OPPORTUNITY") {
+    return {
+      icon: "✦",
+      tone: "opportunity",
+      label:
+        lang === "en"
+          ? "Worth a look"
+          : lang === "es"
+          ? "Vale la atención"
+          : "Vale atenção",
+      description:
+        lang === "en"
+          ? "The odd looks good for prevIA's read."
+          : lang === "es"
+          ? "La cuota parece buena para la lectura de prevIA."
+          : "A odd parece boa para a leitura do prevIA.",
+    };
+  }
+
+  if (label === "CAUTION_OPPORTUNITY") {
+    return {
+      icon: "!",
+      tone: "caution",
+      label:
+        lang === "en"
+          ? "Go with caution"
+          : lang === "es"
+          ? "Con cautela"
+          : "Com cautela",
+      description:
+        lang === "en"
+          ? "There is a signal, but it is not a clean entry."
+          : lang === "es"
+          ? "Hay señal, pero no es una entrada limpia."
+          : "Tem sinal, mas não é uma entrada limpa.",
+    };
+  }
+
+  if (label === "NO_GOOD_PRICE") {
+    return {
+      icon: "−",
+      tone: "no-good-price",
+      label:
+        lang === "en"
+          ? "Not at this price"
+          : lang === "es"
+          ? "No a este precio"
+          : "Não vale nesse preço",
+      description:
+        lang === "en"
+          ? "The scenario may make sense, but the odd is too short."
+          : lang === "es"
+          ? "El escenario puede tener sentido, pero la cuota está corta."
+          : "O cenário pode fazer sentido, mas a odd está curta.",
+    };
+  }
+
+  if (label === "NO_CLEAR_EDGE") {
+    return {
+      icon: "○",
+      tone: "neutral",
+      label:
+        lang === "en"
+          ? "Better to pass"
+          : lang === "es"
+          ? "Mejor pasar"
+          : "Melhor passar",
+      description:
+        lang === "en"
+          ? "No clear advantage showed up right now."
+          : lang === "es"
+          ? "No apareció una ventaja clara ahora."
+          : "Não apareceu uma vantagem clara agora.",
+    };
+  }
+
+  if (label === "HIGH_RISK") {
+    return {
+      icon: "!",
+      tone: "risk",
+      label:
+        lang === "en"
+          ? "High risk"
+          : lang === "es"
+          ? "Riesgo alto"
+          : "Risco alto",
+      description:
+        lang === "en"
+          ? "The price may stand out, but the risk weighs more."
+          : lang === "es"
+          ? "El precio puede llamar la atención, pero el riesgo pesa más."
+          : "O preço pode chamar atenção, mas o risco pesa mais.",
+    };
+  }
+
+  if (label === "INSUFFICIENT_DATA") {
+    return {
+      icon: "?",
+      tone: "muted",
+      label:
+        lang === "en"
+          ? "Not enough data"
+          : lang === "es"
+          ? "Datos insuficientes"
+          : "Dados insuficientes",
+      description:
+        lang === "en"
+          ? "There is not enough information to call it safely."
+          : lang === "es"
+          ? "Todavía falta información para una lectura segura."
+          : "Ainda falta informação para uma leitura segura.",
+    };
+  }
+
+  return null;
+}
+
+function renderDecisionAnalysisChip(
+  event: ProductOddsEvent | null | undefined,
+  lang: Lang
+) {
+  const chip = getDecisionAnalysisChipMeta(event, lang);
+  if (!chip) return null;
+
+  return (
+    <div className={`pi-analysis-decision-chip pi-analysis-decision-chip--${chip.tone}`}>
+      <span className="pi-analysis-decision-chip-icon" aria-hidden="true">
+        {chip.icon}
+      </span>
+      <div className="pi-analysis-decision-chip-body">
+        <div className="pi-analysis-decision-chip-label">{chip.label}</div>
+        <div className="pi-analysis-decision-chip-description">{chip.description}</div>
+      </div>
+    </div>
+  );
+}
+
 function eventHasOpportunity(event: ProductOddsEvent | null | undefined) {
   if (!event) return false;
+
+  const decisionPositive = eventDecisionIsPositive(event);
+  if (typeof decisionPositive === "boolean") return decisionPositive;
+
   if (typeof event.has_opportunity === "boolean") return event.has_opportunity;
+
   return hasOpportunity(event.edge_summary);
 }
 
@@ -2844,6 +3043,8 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
                       </div>
                     </div>
 
+                    {renderDecisionAnalysisChip(selected, lang)}
+
                     {matchNarrativeContext.headline ? (
                       <div className="pi-match-context-headline">
                         {matchNarrativeContext.headline}
@@ -2852,10 +3053,16 @@ export default function ProductIndex({ mode = "app" }: ProductIndexProps) {
 
                     <div className="pi-match-context-grid">
                       {matchNarrativeContext.cards.map((card) => (
-                        <div
-                          className={`pi-match-context-card pi-match-context-card--${card.tone ?? "neutral"}`}
-                          key={card.key}
-                        >
+                    <div
+                      className={[
+                        "pi-match-context-card",
+                        `pi-match-context-card--${card.tone ?? "neutral"}`,
+                        card.key === "conclusion" ? "pi-match-context-card--conclusion" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      key={card.key}
+                    >
                           <div className="pi-match-context-card-label">{card.label}</div>
                           <div className="pi-match-context-card-value">{card.value}</div>
                         </div>
@@ -4013,6 +4220,7 @@ return (
                         ) : null}
                       </div>
                     ) : null}
+
                   </div>
 
                   <div className="pi-row-sub">

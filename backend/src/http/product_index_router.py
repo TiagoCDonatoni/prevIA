@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -65,6 +66,12 @@ def _has_public_opportunity(
     if not summary:
         return False
 
+    decision = getattr(summary, "decision", None)
+    if isinstance(decision, dict):
+        label = str(decision.get("label") or "")
+        return bool(decision.get("is_positive")) and label in {"OPPORTUNITY", "CAUTION_OPPORTUNITY"}
+
+    # Fallback legado para respostas antigas sem decision.
     side = summary.opportunity_outcome
     edge = _safe_float(summary.opportunity_edge)
     ev = _safe_float(summary.opportunity_ev)
@@ -86,6 +93,41 @@ def _has_public_opportunity(
             or int(freshness) <= OPPORTUNITY_MAX_FRESHNESS_SECONDS
         )
     )
+
+def _build_public_decision_summary(summary: Optional[EdgeSummary]) -> Optional[Dict[str, Any]]:
+    """
+    Resumo seguro para listagem pública.
+
+    Não expõe:
+    - lado recomendado;
+    - probabilidade do modelo;
+    - odd mínima;
+    - EV;
+    - casa sugerida;
+    - edge.
+
+    Esses detalhes continuam restritos ao edge_summary quando o jogo está revelado.
+    """
+    if not summary:
+        return None
+
+    decision = getattr(summary, "decision", None)
+    if not isinstance(decision, dict):
+        return None
+
+    label = str(decision.get("label") or "")
+    if not label:
+        return None
+
+    return {
+        "version": decision.get("version"),
+        "label": label,
+        "is_positive": bool(decision.get("is_positive")),
+        "reasons": list(decision.get("reasons") or []),
+        "blocks": list(decision.get("blocks") or []),
+        "market_books_count": decision.get("market_books_count"),
+        "confidence_overall": decision.get("confidence_overall"),
+    }
 
 
 def _load_revealed_fixture_keys(conn, request: Request) -> set[str]:
@@ -110,6 +152,7 @@ def product_index(
     sport_key: str = Query(...),
     hours_ahead: int = Query(168, ge=1, le=24 * 60),
     limit: int = Query(200, ge=1, le=1000),
+    include_revealed: bool = Query(False),
 ) -> OddsEventsResponse:
     now = datetime.now(timezone.utc)
     active_event_grace_start = now - timedelta(minutes=ACTIVE_EVENT_GRACE_MINUTES)
@@ -250,9 +293,21 @@ def product_index(
                 }
 
                 books = books_map.get(str(event_id), []) or []
-                edge_summary = _build_edge_summary_from_books(probs_block, books)
+                edge_summary = _build_edge_summary_from_books(
+                    probs_block,
+                    books,
+                    confidence_overall=confidence_overall,
+                    sport_key=str(sport_key_db),
+                    model_version=str(mv),
+                )
 
-            is_unlocked = str(event_id) in revealed_fixture_keys
+            debug_reveal_all = (
+                bool(include_revealed)
+                and str(os.getenv("PREVIA_ALLOW_PRODUCT_INDEX_DEBUG_REVEAL", "")).lower()
+                in {"1", "true", "yes", "on"}
+            )
+
+            is_unlocked = debug_reveal_all or str(event_id) in revealed_fixture_keys
             has_public_opportunity = _has_public_opportunity(
                 edge_summary,
                 confidence_overall=confidence_overall,
@@ -279,6 +334,7 @@ def product_index(
                     } if (odds_home is not None or odds_draw is not None or odds_away is not None) else None,
                     odds_books=books_map.get(str(event_id), []),
                     edge_summary=edge_summary if is_unlocked else None,
+                    decision_summary=_build_public_decision_summary(edge_summary),
                     probs_1x2={
                         "H": float(probs_1x2["home"]),
                         "D": float(probs_1x2["draw"]),

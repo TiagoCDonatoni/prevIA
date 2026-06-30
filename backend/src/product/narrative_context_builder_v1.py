@@ -150,6 +150,295 @@ def _outcome_name_es(outcome: Optional[str], home: str, away: str) -> str:
         return "el empate"
     return "este lado"
 
+def _decision_outcome_key(decision: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(decision, dict):
+        return None
+
+    outcome_key = str(decision.get("outcome_key") or "").strip().lower()
+    if outcome_key in ("home", "draw", "away"):
+        return outcome_key
+
+    outcome = str(decision.get("outcome") or "").strip().upper()
+    if outcome == "H":
+        return "home"
+    if outcome == "D":
+        return "draw"
+    if outcome == "A":
+        return "away"
+
+    outcome = str(decision.get("outcome") or "").strip().lower()
+    if outcome in ("home", "draw", "away"):
+        return outcome
+
+    return None
+
+
+def _decision_label(decision: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("label") or "").strip().upper()
+
+
+def _decision_has_block(decision: Optional[Dict[str, Any]], block: str) -> bool:
+    if not isinstance(decision, dict):
+        return False
+    blocks = decision.get("blocks") or []
+    return str(block) in {str(item) for item in blocks}
+
+
+MODEL_CLEAR_HOME_AWAY_PROB = 0.60
+MODEL_CLEAR_DRAW_PROB = 0.36
+
+
+def _decision_model_prob(decision: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not isinstance(decision, dict):
+        return None
+    return _as_float(decision.get("model_prob"))
+
+
+def _decision_has_clear_model_side(decision: Optional[Dict[str, Any]]) -> bool:
+    outcome = _decision_outcome_key(decision)
+    prob = _decision_model_prob(decision)
+
+    if outcome is None or prob is None:
+        return False
+
+    if outcome in ("home", "away"):
+        return float(prob) >= MODEL_CLEAR_HOME_AWAY_PROB
+
+    if outcome == "draw":
+        return float(prob) >= MODEL_CLEAR_DRAW_PROB
+
+    return False
+
+
+def _build_decision_market_connection_text_pt(
+    *,
+    decision: Optional[Dict[str, Any]],
+    home: str,
+    away: str,
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    label = _decision_label(decision)
+    if not label:
+        return None
+
+    outcome_key = _decision_outcome_key(decision)
+    target = _outcome_name_pt(outcome_key, home, away) if outcome_key else "esse lado"
+
+    if label == "OPPORTUNITY":
+        variants = (
+            f"Sim — para {target}, a odd está boa. O jogo tem risco, claro, mas o preço paga melhor do que esse risco nos dados do prevIA.",
+            f"Sim — {target} apareceu com uma odd que vale atenção. Não é garantia, mas o preço está do lado certo.",
+            f"Sim — o preço ajuda {target}. Pela leitura do prevIA, essa odd ainda deixa espaço para uma boa entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_opportunity", variants=variants)
+
+    if label == "CAUTION_OPPORTUNITY":
+        if _decision_has_block(decision, "stale_market_price"):
+            variants = (
+                f"Tem sinal em {target}, mas vale olhar de novo antes. A odd usada não parece tão recente.",
+                f"{target} chama atenção, só que o preço precisa ser conferido de novo. Melhor não decidir com odd antiga.",
+                f"Existe uma boa leitura em {target}, mas a odd pode ter mudado. Antes de forçar, vale atualizar o mercado.",
+            )
+        elif _decision_has_block(decision, "high_odd_volatility"):
+            variants = (
+                f"Tem sinal em {target}, mas é daqueles mais arriscados. A odd chama atenção, só que pode oscilar bastante.",
+                f"{target} aparece com preço interessante, mas não é uma leitura limpa. É para ir com mais cuidado.",
+                f"O preço de {target} chama atenção, mas o risco também sobe. Vale acompanhar sem exagerar.",
+            )
+        elif _decision_has_block(decision, "large_market_disagreement"):
+            variants = (
+                f"Tem sinal em {target}, mas com alerta. O prevIA está vendo esse jogo diferente do mercado.",
+                f"{target} passa na leitura do prevIA, mas o mercado não está tão junto. É oportunidade possível, com cuidado.",
+                f"O preço de {target} chama atenção, só que a leitura não está tão alinhada com o mercado. Melhor tratar como sinal, não como certeza.",
+            )
+        else:
+            variants = (
+                f"Tem sinal em {target}, mas sem muita folga. Dá para acompanhar, só não é uma entrada tão limpa.",
+                f"{target} tem uma odd que ajuda, mas não sobra tanto espaço. Melhor olhar com calma.",
+                f"Existe um caminho interessante em {target}, mas é uma leitura para cautela, não para forçar.",
+            )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_caution", variants=variants)
+
+    if label == "NO_GOOD_PRICE":
+        variants = (
+            f"Melhor não. {target} até aparece bem na leitura, mas a odd está baixa para o risco.",
+            f"{target} pode até ser o caminho mais provável, mas a odd não ajuda. Nesse preço, melhor não forçar.",
+            f"Não anima. O cenário de {target} faz sentido, mas o pagamento está curto.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_good_price", variants=variants)
+
+    if label == "NO_CLEAR_EDGE":
+        variants = (
+            "Melhor passar. Não apareceu uma odd que faça valer a pena.",
+            "Jogo para acompanhar, não para forçar. O preço não abriu uma vantagem clara.",
+            "Nada muito claro por enquanto. Sem uma odd melhor, a leitura fica sem entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_clear_edge", variants=variants)
+
+    if label == "INSUFFICIENT_DATA":
+        variants = (
+            "Ainda não dá para cravar. Falta informação suficiente para ligar o jogo ao preço com segurança.",
+            "Por enquanto, é mais jogo para acompanhar do que para decidir. Ainda falta dado confiável.",
+            "A leitura ainda está incompleta. Melhor esperar mais informação antes de falar em entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_insufficient", variants=variants)
+
+    return None
+
+
+def _build_decision_market_connection_text_en(
+    *,
+    decision: Optional[Dict[str, Any]],
+    home: str,
+    away: str,
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    label = _decision_label(decision)
+    if not label:
+        return None
+
+    outcome_key = _decision_outcome_key(decision)
+    target = _outcome_name_en(outcome_key, home, away) if outcome_key else "this side"
+
+    if label == "OPPORTUNITY":
+        variants = (
+            f"Yes — the price looks good for {target}. There is always risk, but this odd pays better than that risk in prevIA's read.",
+            f"Yes — {target} has an odd worth attention. It is not a guarantee, but the price is on the right side.",
+            f"Yes — the current price helps {target}. In prevIA's read, this odd still leaves room for a good entry.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_opportunity", variants=variants)
+
+    if label == "CAUTION_OPPORTUNITY":
+        if _decision_has_block(decision, "stale_market_price"):
+            variants = (
+                f"There is a signal on {target}, but it is worth checking again. The odd used does not look fresh enough.",
+                f"{target} stands out, but the price should be checked again. Better not decide with an old odd.",
+                f"There is a good read on {target}, but the odd may have moved. Update the market before forcing anything.",
+            )
+        elif _decision_has_block(decision, "high_odd_volatility"):
+            variants = (
+                f"There is a signal on {target}, but it is a riskier one. The odd stands out, but it can move a lot.",
+                f"{target} has an interesting price, but this is not a clean read. It calls for more care.",
+                f"The price on {target} stands out, but the risk also rises. Worth watching without overplaying.",
+            )
+        elif _decision_has_block(decision, "large_market_disagreement"):
+            variants = (
+                f"There is a signal on {target}, but with an alert. prevIA is reading this game differently from the market.",
+                f"{target} works in prevIA's read, but the market is not fully with it. Possible opportunity, with caution.",
+                f"The price on {target} stands out, but the read is not fully aligned with the market. Treat it as a signal, not a certainty.",
+            )
+        else:
+            variants = (
+                f"There is a signal on {target}, but not much room. Worth watching, but not a clean entry.",
+                f"{target} has an odd that helps, but the margin is not wide. Better take it slowly.",
+                f"There is an interesting path on {target}, but this is a cautious read, not one to force.",
+            )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_caution", variants=variants)
+
+    if label == "NO_GOOD_PRICE":
+        variants = (
+            f"Better not. {target} looks fine in the read, but the odd is too low for the risk.",
+            f"{target} may be the most likely path, but the odd does not help. At this price, better not force it.",
+            f"Not attractive enough. The {target} scenario makes sense, but the payout is short.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_good_price", variants=variants)
+
+    if label == "NO_CLEAR_EDGE":
+        variants = (
+            "Better to pass. No odd here really makes it worth it.",
+            "A game to watch, not to force. The price does not show a clear advantage.",
+            "Nothing clear for now. Without a better odd, there is no real entry.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_clear_edge", variants=variants)
+
+    if label == "INSUFFICIENT_DATA":
+        variants = (
+            "Too early to call. There is not enough information to connect the game and the price safely.",
+            "For now, this is more a game to watch than a game to act on. The read still needs better data.",
+            "The read is still incomplete. Better wait for more reliable information before calling an entry.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_insufficient", variants=variants)
+
+    return None
+
+
+def _build_decision_market_connection_text_es(
+    *,
+    decision: Optional[Dict[str, Any]],
+    home: str,
+    away: str,
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    label = _decision_label(decision)
+    if not label:
+        return None
+
+    outcome_key = _decision_outcome_key(decision)
+    target = _outcome_name_es(outcome_key, home, away) if outcome_key else "este lado"
+
+    if label == "OPPORTUNITY":
+        variants = (
+            f"Sí — la cuota está buena para {target}. El partido tiene riesgo, claro, pero el precio paga mejor que ese riesgo en la lectura de prevIA.",
+            f"Sí — {target} apareció con una cuota que merece atención. No es garantía, pero el precio está del lado correcto.",
+            f"Sí — el precio ayuda a {target}. En la lectura de prevIA, esta cuota todavía deja espacio para una buena entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_opportunity", variants=variants)
+
+    if label == "CAUTION_OPPORTUNITY":
+        if _decision_has_block(decision, "stale_market_price"):
+            variants = (
+                f"Hay señal en {target}, pero conviene mirar otra vez. La cuota usada no parece tan reciente.",
+                f"{target} llama la atención, pero el precio debería revisarse de nuevo. Mejor no decidir con una cuota vieja.",
+                f"Hay una buena lectura en {target}, pero la cuota puede haber cambiado. Antes de forzar, conviene actualizar el mercado.",
+            )
+        elif _decision_has_block(decision, "high_odd_volatility"):
+            variants = (
+                f"Hay señal en {target}, pero es de las más arriesgadas. La cuota llama la atención, pero puede moverse bastante.",
+                f"{target} tiene un precio interesante, pero no es una lectura limpia. Pide más cuidado.",
+                f"El precio de {target} llama la atención, pero el riesgo también sube. Vale seguirlo sin exagerar.",
+            )
+        elif _decision_has_block(decision, "large_market_disagreement"):
+            variants = (
+                f"Hay señal en {target}, pero con alerta. prevIA está viendo este partido diferente al mercado.",
+                f"{target} funciona en la lectura de prevIA, pero el mercado no está tan alineado. Posible oportunidad, con cautela.",
+                f"El precio de {target} llama la atención, pero la lectura no está tan alineada con el mercado. Mejor tratarlo como señal, no como certeza.",
+            )
+        else:
+            variants = (
+                f"Hay señal en {target}, pero sin mucha holgura. Vale seguirlo, pero no es una entrada limpia.",
+                f"{target} tiene una cuota que ayuda, pero no sobra tanto margen. Mejor mirarlo con calma.",
+                f"Hay un camino interesante en {target}, pero es una lectura de cautela, no para forzar.",
+            )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_caution", variants=variants)
+
+    if label == "NO_GOOD_PRICE":
+        variants = (
+            f"Mejor no. {target} aparece bien en la lectura, pero la cuota está baja para el riesgo.",
+            f"{target} puede ser el camino más probable, pero la cuota no ayuda. A este precio, mejor no forzar.",
+            f"No entusiasma. El escenario de {target} tiene sentido, pero el pago está corto.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_good_price", variants=variants)
+
+    if label == "NO_CLEAR_EDGE":
+        variants = (
+            "Mejor pasar. No apareció una cuota que realmente valga la pena.",
+            "Partido para seguir, no para forzar. El precio no muestra una ventaja clara.",
+            "Nada muy claro por ahora. Sin una cuota mejor, la lectura queda sin entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_no_clear_edge", variants=variants)
+
+    if label == "INSUFFICIENT_DATA":
+        variants = (
+            "Todavía no da para marcar una entrada. Falta información suficiente para unir partido y precio con seguridad.",
+            "Por ahora, es más partido para seguir que para decidir. La lectura todavía necesita mejores datos.",
+            "La lectura sigue incompleta. Mejor esperar más información confiable antes de hablar de entrada.",
+        )
+        return _pick_variant(seed=seed, section_key="market_connection_decision_insufficient", variants=variants)
+
+    return None
+
 def _context_model_alignment(context_side: str, most_likely_outcome: Optional[str]) -> str:
     if context_side == "balanced":
         return "context_balanced"
@@ -416,7 +705,17 @@ def _build_headline_pt(
     home_away_edge: str,
     h2h_status: str,
     seed: str,
+    decision: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, int]:
+    if context_side == "balanced" and _decision_has_clear_model_side(decision):
+        outcome_key = _decision_outcome_key(decision)
+        target = _outcome_name_pt(outcome_key, home, away)
+        variants = (
+            f"{home} x {away}: o recorte recente é equilibrado, mas o prevIA coloca {target} um pouco à frente.",
+            f"{home} x {away}: os dados recentes não abrem tanta distância, mas {target} aparece melhor na conta geral.",
+            f"{home} x {away}: jogo parelho no contexto, com {target} puxando a leitura do prevIA.",
+        )
+        return _pick_variant(seed=seed, section_key="headline_model_reconciled", variants=variants)
     if context_side == "home":
         if home_away_edge in ("home_clear", "home_slight"):
             variants = (
@@ -607,7 +906,16 @@ def _build_market_connection_text_pt(
     away: str,
     seed: str,
     price_read: Optional[Dict[str, Any]] = None,
+    decision: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, int]:
+    decision_text = _build_decision_market_connection_text_pt(
+        decision=decision,
+        home=home,
+        away=away,
+        seed=seed,
+    )
+    if decision_text is not None:
+        return decision_text
     price_read = price_read or {}
     alignment = str(price_read.get("alignment") or "unknown")
     pricing_status = str(price_read.get("status") or "unknown")
@@ -772,7 +1080,26 @@ def _h2h_summary_en(*, home: str, away: str, h2h: Dict[str, Any]) -> str:
     return _join_en(tuple(parts)) or "no wins recorded for either side"
 
 
-def _build_headline_en(*, home: str, away: str, context_side: str, season_edge: str, home_away_edge: str, h2h_status: str, seed: str) -> Tuple[str, int]:
+def _build_headline_en(
+    *,
+    home: str,
+    away: str,
+    context_side: str,
+    season_edge: str,
+    home_away_edge: str,
+    h2h_status: str,
+    seed: str,
+    decision: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, int]:
+    if context_side == "balanced" and _decision_has_clear_model_side(decision):
+        outcome_key = _decision_outcome_key(decision)
+        target = _outcome_name_en(outcome_key, home, away)
+        variants = (
+            f"{home} vs {away}: the recent picture is close, but prevIA has {target} slightly ahead.",
+            f"{home} vs {away}: recent data does not create much distance, but {target} comes out better overall.",
+            f"{home} vs {away}: a close game in context, with {target} leading prevIA's read.",
+        )
+        return _pick_variant(seed=seed, section_key="headline_model_reconciled", variants=variants)
     if context_side == "home":
         if home_away_edge in ("home_clear", "home_slight"):
             variants = (
@@ -909,7 +1236,17 @@ def _build_market_connection_text_en(
     away: str,
     seed: str,
     price_read: Optional[Dict[str, Any]] = None,
+    decision: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, int]:
+    decision_text = _build_decision_market_connection_text_en(
+        decision=decision,
+        home=home,
+        away=away,
+        seed=seed,
+    )
+    if decision_text is not None:
+        return decision_text
+
     price_read = price_read or {}
     alignment = str(price_read.get("alignment") or "unknown")
     context_alignment = str(price_read.get("context_model_alignment") or "unknown")
@@ -1064,7 +1401,27 @@ def _h2h_summary_es(*, home: str, away: str, h2h: Dict[str, Any]) -> str:
     return _join_es(tuple(parts)) or "sin victorias registradas para ninguno de los lados"
 
 
-def _build_headline_es(*, home: str, away: str, context_side: str, season_edge: str, home_away_edge: str, h2h_status: str, seed: str) -> Tuple[str, int]:
+def _build_headline_es(
+    *,
+    home: str,
+    away: str,
+    context_side: str,
+    season_edge: str,
+    home_away_edge: str,
+    h2h_status: str,
+    seed: str,
+    decision: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, int]:
+    if context_side == "balanced" and _decision_has_clear_model_side(decision):
+        outcome_key = _decision_outcome_key(decision)
+        target = _outcome_name_es(outcome_key, home, away)
+        variants = (
+            f"{home} vs {away}: el recorte reciente está parejo, pero prevIA pone a {target} un poco por delante.",
+            f"{home} vs {away}: los datos recientes no abren tanta distancia, pero {target} sale mejor en la cuenta general.",
+            f"{home} vs {away}: partido parejo en contexto, con {target} liderando la lectura de prevIA.",
+        )
+        return _pick_variant(seed=seed, section_key="headline_model_reconciled", variants=variants)
+
     if context_side == "home":
         if home_away_edge in ("home_clear", "home_slight"):
             variants = (
@@ -1078,6 +1435,7 @@ def _build_headline_es(*, home: str, away: str, context_side: str, season_edge: 
                 f"{home} vs {away}: {home} aparece ligeramente por delante, pero la cuota tiene que ayudar.",
                 f"{home} vs {away}: lectura levemente favorable al local, con margen para cautela.",
             )
+
     elif context_side == "away":
         if home_away_edge in ("away_clear", "away_slight"):
             variants = (
@@ -1091,18 +1449,21 @@ def _build_headline_es(*, home: str, away: str, context_side: str, season_edge: 
                 f"{home} vs {away}: {away} entra con una lectura un poco más positiva.",
                 f"{home} vs {away}: el visitante aparece mejor en el contexto, pero el partido todavía pide cuidado.",
             )
+
     elif h2h_status == "unavailable":
         variants = (
             f"{home} vs {away}: partido con lectura más equilibrada y poco historial directo reciente.",
             f"{home} vs {away}: sin un lado muy claro en el contexto y sin historial reciente fuerte entre ellos.",
             f"{home} vs {away}: escenario equilibrado, con pocos indicadores claros para separar a los equipos.",
         )
+
     else:
         variants = (
             f"{home} vs {away}: contexto más equilibrado, sin un lado claramente dominante.",
             f"{home} vs {away}: los datos dejan el partido más abierto que unilateral.",
             f"{home} vs {away}: lectura equilibrada, con argumentos repartidos entre los dos lados.",
         )
+
     return _pick_variant(seed=seed, section_key="headline", variants=variants)
 
 
@@ -1201,7 +1562,17 @@ def _build_market_connection_text_es(
     away: str,
     seed: str,
     price_read: Optional[Dict[str, Any]] = None,
+    decision: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, int]:
+    decision_text = _build_decision_market_connection_text_es(
+        decision=decision,
+        home=home,
+        away=away,
+        seed=seed,
+    )
+    if decision_text is not None:
+        return decision_text
+
     price_read = price_read or {}
     alignment = str(price_read.get("alignment") or "unknown")
     context_alignment = str(price_read.get("context_model_alignment") or "unknown")
@@ -1365,6 +1736,7 @@ def _compose_language_texts(
     h2h_edge: str,
     context_side: str,
     price_read: Optional[Dict[str, Any]],
+    decision: Optional[Dict[str, Any]],
     variant_seed: str,
     collect_variants: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
@@ -1432,6 +1804,7 @@ def _compose_language_texts(
         away=away,
         seed=variant_seed,
         price_read=price_read,
+        decision=decision,
     )
     if collect_variants is not None:
         collect_variants["market_connection"] = variant_idx
@@ -1447,6 +1820,7 @@ def _compose_language_texts(
         home_away_edge=home_away_edge,
         h2h_status=str(h2h.get("status") or "unknown"),
         seed=variant_seed,
+        decision=decision,
     )
     if collect_variants is not None:
         collect_variants["headline"] = variant_idx
@@ -1665,6 +2039,10 @@ def build_narrative_context_v1(
         away=away,
     )
 
+    decision = (payload or {}).get("decision")
+    if not isinstance(decision, dict):
+        decision = None
+
     pt = _compose_language_texts(
         lang="pt-BR",
         home=home,
@@ -1677,6 +2055,7 @@ def build_narrative_context_v1(
         h2h_edge=h2h_edge,
         context_side=context_side,
         price_read=price_read,
+        decision=decision,
         variant_seed=variant_seed,
         collect_variants=selected_variants,
     )
@@ -1692,6 +2071,7 @@ def build_narrative_context_v1(
         h2h_edge=h2h_edge,
         context_side=context_side,
         price_read=price_read,
+        decision=decision,
         variant_seed=variant_seed,
     )
     es = _compose_language_texts(
@@ -1706,6 +2086,7 @@ def build_narrative_context_v1(
         h2h_edge=h2h_edge,
         context_side=context_side,
         price_read=price_read,
+        decision=decision,
         variant_seed=variant_seed,
     )
 
@@ -1740,6 +2121,10 @@ def build_narrative_context_v1(
             "tone": NARRATIVE_CONTEXT_TONE,
             "pricing_status": price_read.get("status"),
             "pricing_outcome": price_read.get("outcome"),
+            "decision_version": (decision or {}).get("version") if isinstance(decision, dict) else None,
+            "decision_label": (decision or {}).get("label") if isinstance(decision, dict) else None,
+            "decision_is_positive": (decision or {}).get("is_positive") if isinstance(decision, dict) else None,
+            "decision_outcome": _decision_outcome_key(decision),
             "context_side": context_side,
             "season_edge": season_edge,
             "home_away_edge": home_away_edge,
@@ -1756,6 +2141,14 @@ def build_narrative_context_v1(
         },
         "selected_variants": selected_variants,
         "facts": {
+            "decision_summary": {
+                "version": (decision or {}).get("version"),
+                "label": (decision or {}).get("label"),
+                "is_positive": (decision or {}).get("is_positive"),
+                "outcome_key": _decision_outcome_key(decision),
+                "reasons": list((decision or {}).get("reasons") or []),
+                "blocks": list((decision or {}).get("blocks") or []),
+            } if isinstance(decision, dict) else None,
             "league_id": league_id,
             "season": season,
             "home_team_id": home_team_id,

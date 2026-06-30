@@ -570,6 +570,7 @@ def rebuild_hist5_shadow_snapshots_v1(
                 home_name=ev.get("home_name"),
                 away_name=ev.get("away_name"),
                 kickoff_utc=kickoff_utc,
+                event_id=event_id,
             )
             _record_narrative_context_counter(counters, payload)
 

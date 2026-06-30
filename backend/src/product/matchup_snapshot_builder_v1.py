@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from src.product.matchup_model_v0 import estimate_lambdas_with_fallback
 from src.product.narrative_context_builder_v1 import attach_narrative_context_v1
+from src.product.opportunity_decision_v1 import build_opportunity_decision_v1
 
 from src.core.season_policy import (
     choose_current_operational_season,
@@ -317,6 +318,165 @@ def _select_1x2_best_odds(conn, *, event_id: str) -> Dict[str, Any]:
         "reason": None if has_any else "empty_1x2_odds_for_event",
     }
 
+def _decision_book_key(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return "unknown"
+
+    if value.startswith("oddspapi:"):
+        value = value.split(":", 1)[1].strip()
+
+    value = value.replace("&", "and")
+    for ch in [" ", "-", ".", ",", "/", "\\", "(", ")", "[", "]", "{", "}", "’", "'", "\""]:
+        value = value.replace(ch, "_")
+
+    while "__" in value:
+        value = value.replace("__", "_")
+
+    return value.strip("_") or "unknown"
+
+
+def _decision_book_display_name(raw: Any) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return "unknown"
+
+    if value.lower().startswith("oddspapi:"):
+        slug = value.split(":", 1)[1].strip()
+        return (
+            slug.replace("_", " ")
+            .replace("-", " ")
+            .strip()
+            .title()
+            or value
+        )
+
+    return value
+
+
+def _select_1x2_books_for_decision(conn, *, event_id: str) -> List[Dict[str, Any]]:
+    """
+    Lê odds 1x2 por casa no último timestamp de cada bookmaker.
+
+    Formato compatível com build_opportunity_decision_v1, sem depender do
+    odds_router para evitar acoplamento HTTP -> product.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('odds.odds_snapshots_1x2')")
+            table_exists = bool((cur.fetchone() or [None])[0])
+    except Exception:
+        table_exists = False
+
+    if not table_exists:
+        return []
+
+    sql = """
+      SELECT
+        s.bookmaker,
+        s.odds_home,
+        s.odds_draw,
+        s.odds_away,
+        t.max_ts
+      FROM odds.odds_snapshots_1x2 s
+      JOIN (
+          SELECT
+            event_id,
+            bookmaker,
+            MAX(captured_at_utc) AS max_ts
+          FROM odds.odds_snapshots_1x2
+          WHERE event_id = %(event_id)s
+          GROUP BY event_id, bookmaker
+      ) t
+        ON t.event_id = s.event_id
+       AND t.bookmaker = s.bookmaker
+       AND t.max_ts = s.captured_at_utc
+      WHERE s.event_id = %(event_id)s
+      ORDER BY s.bookmaker NULLS LAST
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(sql, {"event_id": str(event_id)})
+        rows = cur.fetchall() or []
+
+    books: List[Dict[str, Any]] = []
+    for bookmaker, odds_home, odds_draw, odds_away, captured_at_utc in rows:
+        key = _decision_book_key(bookmaker)
+        name = _decision_book_display_name(bookmaker)
+
+        books.append(
+            {
+                "key": key,
+                "name": name,
+                "captured_at_utc": (
+                    captured_at_utc.isoformat().replace("+00:00", "Z")
+                    if hasattr(captured_at_utc, "isoformat")
+                    else captured_at_utc
+                ),
+                "odds_1x2": {
+                    "H": float(odds_home) if odds_home is not None else None,
+                    "D": float(odds_draw) if odds_draw is not None else None,
+                    "A": float(odds_away) if odds_away is not None else None,
+                },
+            }
+        )
+
+    return books
+
+
+def _attach_opportunity_decision_to_payload(
+    conn,
+    *,
+    payload: Dict[str, Any],
+    event_id: Optional[str],
+    sport_key: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Anexa payload["decision"] para snapshots materializados.
+
+    A narrativa v2 ainda não usa isso neste bloco; o objetivo é congelar
+    a decisão junto com o snapshot para uso posterior na análise completa.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    if not event_id:
+        return payload
+
+    markets = payload.get("markets") if isinstance(payload.get("markets"), dict) else {}
+    one_x_two = markets.get("1x2") if isinstance(markets.get("1x2"), dict) else {}
+    probs = one_x_two.get("p_model") if isinstance(one_x_two.get("p_model"), dict) else {}
+
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    confidence = payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
+
+    try:
+        books = _select_1x2_books_for_decision(conn, event_id=str(event_id))
+        decision = build_opportunity_decision_v1(
+            probs or {},
+            books,
+            confidence_overall=confidence.get("overall"),
+            sport_key=str(sport_key) if sport_key else None,
+            league_id=(
+                int(inputs["league_id"])
+                if inputs.get("league_id") is not None
+                else None
+            ),
+            model_version=str(payload.get("model_version") or ""),
+        )
+        payload["decision"] = decision
+    except Exception as exc:
+        payload["decision"] = {
+            "version": "opportunity_decision_v1",
+            "label": "INSUFFICIENT_DATA",
+            "is_positive": False,
+            "reasons": [],
+            "blocks": ["decision_engine_error"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    return payload
+
 def _resolve_matchup_payload_column(conn) -> str:
     """
     Detecta o nome da coluna JSONB onde o payload do snapshot é armazenado.
@@ -363,7 +523,15 @@ def _attach_narrative_context_to_payload(
     home_name: Optional[str],
     away_name: Optional[str],
     kickoff_utc,
+    event_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    payload = _attach_opportunity_decision_to_payload(
+        conn,
+        payload=payload,
+        event_id=event_id,
+        sport_key=sport_key,
+    )
+
     return attach_narrative_context_v1(
         conn,
         payload=payload,
@@ -381,6 +549,14 @@ def _record_narrative_context_counter(c: Dict[str, Any], payload: Dict[str, Any]
     quality = str((narrative or {}).get("quality") or "unknown")
     c[f"narrative_status_{status}"] = int(c.get(f"narrative_status_{status}", 0)) + 1
     c[f"narrative_quality_{quality}"] = int(c.get(f"narrative_quality_{quality}", 0)) + 1
+
+    decision = payload.get("decision") if isinstance(payload, dict) else None
+    if isinstance(decision, dict):
+        label = str(decision.get("label") or "unknown").lower()
+        c["decision_attached"] = int(c.get("decision_attached", 0)) + 1
+        c[f"decision_label_{label}"] = int(c.get(f"decision_label_{label}", 0)) + 1
+    else:
+        c["decision_missing"] = int(c.get("decision_missing", 0)) + 1
 
 def upsert_matchup_snapshot_v1(
     conn,
@@ -963,6 +1139,7 @@ def rebuild_matchup_snapshots_v1(
                     home_name=ev.get("home_name"),
                     away_name=ev.get("away_name"),
                     kickoff_utc=ev.get("kickoff_utc"),
+                    event_id=event_id,
                 )
                 _record_narrative_context_counter(c, payload)
 
@@ -1004,6 +1181,7 @@ def rebuild_matchup_snapshots_v1(
                     home_name=ev.get("home_name"),
                     away_name=ev.get("away_name"),
                     kickoff_utc=ev.get("kickoff_utc"),
+                    event_id=event_id,
                 )
                 _record_narrative_context_counter(c, payload)
 
@@ -1109,6 +1287,7 @@ def rebuild_matchup_snapshots_v1(
                 home_name=ev.get("home_name"),
                 away_name=ev.get("away_name"),
                 kickoff_utc=ev.get("kickoff_utc"),
+                event_id=event_id,
             )
             _record_narrative_context_counter(c, payload)
 
@@ -1223,6 +1402,7 @@ def rebuild_matchup_snapshots_v1(
             home_name=ev.get("home_name"),
             away_name=ev.get("away_name"),
             kickoff_utc=fx["kickoff_utc"],
+            event_id=event_id,
         )
         _record_narrative_context_counter(c, payload)
 

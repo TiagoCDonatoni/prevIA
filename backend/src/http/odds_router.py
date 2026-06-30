@@ -18,6 +18,7 @@ from src.access.service import (
     _today_date_key,
 )
 from src.product.model_registry import get_active_model_version
+from src.product.opportunity_decision_v1 import build_opportunity_decision_v1
 
 import json
 from pathlib import Path
@@ -66,6 +67,7 @@ class EdgeSummary(BaseModel):
     consensus_probs: Optional[Dict[str, Optional[float]]] = None
     consensus_edges: Optional[Dict[str, Optional[float]]] = None
     market_source: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
 
 class OddsEventRow(BaseModel):
     event_id: str
@@ -84,6 +86,7 @@ class OddsEventRow(BaseModel):
     model_confidence_overall: Optional[float] = None
     model_confidence_level: Optional[str] = None
     edge_summary: Optional[EdgeSummary] = None
+    decision_summary: Optional[Dict[str, Any]] = None
     snapshot_summary: Optional[Dict[str, Any]] = None
     resolved_home_team_id: Optional[int] = None
     resolved_away_team_id: Optional[int] = None
@@ -697,6 +700,11 @@ def _consensus_market_probs_from_books(books: List[OddsBook]) -> Dict[str, Any]:
 def _build_edge_summary_from_books(
     probs_block: Dict[str, Optional[float]],
     books: List[OddsBook],
+    *,
+    confidence_overall: Any = None,
+    sport_key: Optional[str] = None,
+    league_id: Optional[int] = None,
+    model_version: Optional[str] = None,
 ) -> Optional[EdgeSummary]:
     if not probs_block:
         return None
@@ -771,6 +779,15 @@ def _build_edge_summary_from_books(
 
     opportunity_price = per_side_prices.get(opportunity_outcome) if opportunity_outcome else None
 
+    decision = build_opportunity_decision_v1(
+        probs_block,
+        books,
+        confidence_overall=confidence_overall,
+        sport_key=sport_key,
+        league_id=league_id,
+        model_version=model_version,
+    )
+
     return EdgeSummary(
         best_outcome=best_outcome,
         best_edge=float(best_edge) if best_edge is not None else None,
@@ -814,6 +831,7 @@ def _build_edge_summary_from_books(
             "A": edges.get("A"),
         },
         market_source=str(market.get("source") or "median_complete_books_novig"),
+        decision=decision,
     )
 
 

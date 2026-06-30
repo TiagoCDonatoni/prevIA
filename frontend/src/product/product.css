@@ -2398,6 +2398,59 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
 }
 
+.pi-decision-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: normal;
+  max-width: 100%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.pi-decision-badge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  font-weight: 800;
+}
+
+.pi-decision-badge--opportunity {
+  background: linear-gradient(180deg, var(--previa-blue-soft) 0%, #f3f7ff 100%);
+  border: 1px solid rgba(11, 47, 138, 0.22);
+  color: var(--previa-blue);
+}
+
+.pi-decision-badge--caution {
+  background: linear-gradient(180deg, #fff7ed 0%, #fffbf5 100%);
+  border: 1px solid rgba(194, 65, 12, 0.24);
+  color: #9a3412;
+}
+
+.pi-decision-badge--no-good-price {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid rgba(71, 85, 105, 0.22);
+  color: #475569;
+}
+
+.pi-decision-badge--neutral,
+.pi-decision-badge--muted {
+  background: #f8fafc;
+  border: 1px solid #d6deea;
+  color: #64748b;
+}
+
+.pi-decision-badge--risk {
+  background: linear-gradient(180deg, #fef2f2 0%, #fff7f7 100%);
+  border: 1px solid rgba(185, 28, 28, 0.22);
+  color: #991b1b;
+}
+
 .pi-seen-badge {
   display: inline-flex;
   align-items: center;
@@ -2440,6 +2493,24 @@
     font-size: 13px;
     line-height: 1;
     color: var(--previa-blue);
+  }
+
+  .pi-decision-badge {
+    padding: 3px 8px;
+    min-width: 28px;
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
+    line-height: 1;
+  }
+
+  .pi-decision-badge-icon {
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  .pi-decision-badge-text {
+    display: none;
   }
 }
 
@@ -3254,6 +3325,135 @@
 
 .pi-match-context-card:not(:nth-child(4)).pi-match-context-card--caution .pi-match-context-card-label{
   color: #52627d;
+}
+
+.pi-analysis-decision-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border-radius: 14px;
+  border: 1px solid #dbe3ee;
+  background: #ffffff;
+}
+
+.pi-analysis-decision-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.pi-analysis-decision-chip-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pi-analysis-decision-chip-label {
+  color: var(--previa-text);
+  font-size: 12.5px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.pi-analysis-decision-chip-description {
+  color: #52627d;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.pi-analysis-decision-chip--opportunity {
+  border-color: rgba(11, 47, 138, 0.20);
+  background: linear-gradient(180deg, #ffffff 0%, var(--previa-blue-soft-2) 100%);
+}
+
+.pi-analysis-decision-chip--opportunity .pi-analysis-decision-chip-icon {
+  color: var(--previa-blue);
+  background: var(--previa-blue-soft);
+}
+
+.pi-analysis-decision-chip--caution {
+  border-color: #fed7aa;
+  background: linear-gradient(180deg, #fffaf4 0%, #ffffff 100%);
+}
+
+.pi-analysis-decision-chip--caution .pi-analysis-decision-chip-icon {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.pi-analysis-decision-chip--no-good-price,
+.pi-analysis-decision-chip--neutral,
+.pi-analysis-decision-chip--muted {
+  border-color: #dbe3ee;
+  background: #ffffff;
+}
+
+.pi-analysis-decision-chip--no-good-price .pi-analysis-decision-chip-icon,
+.pi-analysis-decision-chip--neutral .pi-analysis-decision-chip-icon,
+.pi-analysis-decision-chip--muted .pi-analysis-decision-chip-icon {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.pi-analysis-decision-chip--risk {
+  border-color: #fecaca;
+  background: linear-gradient(180deg, #fff7f7 0%, #ffffff 100%);
+}
+
+.pi-analysis-decision-chip--risk .pi-analysis-decision-chip-icon {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+/* Destaque da Leitura prevIA sem depender da posição do card.
+   Antes era nth-child(4); com o Contexto comentado, a conclusão pode ser o 3º card. */
+.pi-match-context-card--conclusion {
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 12px;
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(11, 47, 138, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(11, 47, 138, 0.08), transparent 30%),
+    linear-gradient(180deg, #ffffff 0%, var(--previa-blue-soft-2) 100%);
+  box-shadow:
+    0 8px 22px rgba(11, 47, 138, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.pi-match-context-card--conclusion::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--previa-blue) 0%, #2563eb 100%);
+}
+
+.pi-match-context-card--conclusion .pi-match-context-card-label {
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--previa-blue-soft);
+  color: var(--previa-blue);
+  border: 1px solid rgba(11, 47, 138, 0.14);
+}
+
+.pi-match-context-card--conclusion .pi-match-context-card-value {
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.48;
+  font-weight: 750;
 }
 
 .pi-narrative{

@@ -737,6 +737,25 @@ export type AdminOddsBttsResponse = {
 
 export type ProductOdds1x2 = { H: number; D: number; A: number };
 
+export type ProductDecisionLabel =
+  | "OPPORTUNITY"
+  | "CAUTION_OPPORTUNITY"
+  | "NO_GOOD_PRICE"
+  | "NO_CLEAR_EDGE"
+  | "HIGH_RISK"
+  | "INSUFFICIENT_DATA"
+  | string;
+
+export type ProductDecisionSummary = {
+  version?: string | null;
+  label?: ProductDecisionLabel | null;
+  is_positive?: boolean | null;
+  reasons?: string[] | null;
+  blocks?: string[] | null;
+  market_books_count?: number | null;
+  confidence_overall?: number | null;
+};
+
 export type ProductEdgeSummary = {
   best_outcome: "H" | "D" | "A" | null;
   best_edge: number | null;
@@ -768,7 +787,8 @@ export type ProductEdgeSummary = {
   consensus_probs?: ProductOdds1x2 | null;
   consensus_edges?: ProductOdds1x2 | null;
   market_source?: string | null;
-};
+
+  decision?: ProductDecisionSummary | Record<string, unknown> | null;};
 
 export type ProductModelConfidence = {
   overall?: number | null;
@@ -895,6 +915,7 @@ export type ProductOddsEvent = {
   model_confidence_level?: string | null;
 
   edge_summary?: ProductEdgeSummary | null;
+  decision_summary?: ProductDecisionSummary | null;
 
   snapshot_summary?: ProductSnapshotSummary | null;
 };
