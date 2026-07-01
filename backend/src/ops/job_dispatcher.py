@@ -15,6 +15,7 @@ from src.ops.jobs.snapshots_materialize import snapshots_materialize
 from src.ops.jobs.update_pipeline import update_pipeline_run, update_pipeline_run_shard
 from src.ops.jobs.worldcup_pool_results_sync import worldcup_pool_results_sync
 from src.ops.jobs.worldcup_pool_fixture_mapping_sync import worldcup_pool_fixture_mapping_sync
+from src.ops.jobs.worldcup_pool_predictions_open_email import worldcup_pool_predictions_open_email
 
 JobCallable = Callable[..., dict]
 
@@ -33,6 +34,7 @@ JOB_DISPATCH: Dict[str, JobCallable] = {
     "update_pipeline_run_shard": update_pipeline_run_shard,
     "worldcup_pool_results_sync": worldcup_pool_results_sync,
     "worldcup_pool_fixture_mapping_sync": worldcup_pool_fixture_mapping_sync,
+    "worldcup_pool_predictions_open_email": worldcup_pool_predictions_open_email,
 }
 
 

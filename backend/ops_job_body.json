@@ -1,0 +1,11 @@
+﻿{
+    "requested_by":  "manual_decision_payload_test",
+    "job_key":  "snapshots_materialize",
+    "trigger_source":  "manual",
+    "payload":  {
+                    "hours_ahead":  1440,
+                    "sport_key":  "soccer_brazil_campeonato",
+                    "limit":  3,
+                    "model_version":  "model_v1_hist5_decay"
+                }
+}

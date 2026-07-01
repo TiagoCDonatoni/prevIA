@@ -61,6 +61,15 @@ TEAM_ALIAS_GROUPS = [
     {"espanha", "spain", "espana"},
     {"portugal"},
     {"croacia", "croatia"},
+    {"austria"},
+    {"suica", "switzerland", "suiza"},
+    {"argelia", "algeria"},
+    {"australia"},
+    {"egito", "egypt", "egipto"},
+    {"argentina"},
+    {"cabo verde", "cape verde", "cape verde islands"},
+    {"colombia", "colombia"},
+    {"gana", "ghana"},
 ]
 
 
