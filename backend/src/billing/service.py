@@ -31,6 +31,7 @@ PLAN_CHANGE_CYCLE_RANK = {
 }
 
 PLAN_CHANGE_ALLOWED_BILLING_STATUSES = {"active", "trialing"}
+ACCESS_GRANT_BILLING_STATUSES = {"active", "trialing", "past_due"}
 
 SUBSCRIPTION_STATUS_MAP = {
     "trialing": "trialing",
@@ -61,6 +62,54 @@ def _json_default(value):
 
 def _json_dumps_safe(value):
     return json.dumps(value, default=_json_default)
+
+def _coerce_json_array(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _normalize_json_string_list(value: Any, *, upper: bool = False) -> List[str]:
+    items: List[str] = []
+    for item in _coerce_json_array(value):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        items.append(text.upper() if upper else text.lower())
+    return items
+
+
+def _eligibility_allows_value(values: Any, target: str, *, upper: bool = False) -> bool:
+    normalized_values = _normalize_json_string_list(values, upper=upper)
+    if not normalized_values:
+        return True
+    normalized_target = str(target or "").strip()
+    normalized_target = normalized_target.upper() if upper else normalized_target.lower()
+    return normalized_target in normalized_values
+
+
+def _iso_optional(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 def _currency_symbol(currency_code: str) -> str:
@@ -470,6 +519,220 @@ def list_billing_catalog(currency_code: Optional[str] = None) -> Dict[str, Any]:
         "items": rows,
     }
 
+
+def _resolve_checkout_discount_eligibility_for_user(
+    cur,
+    *,
+    user_id: int,
+    plan_code: str,
+    billing_cycle: str,
+) -> Optional[Dict[str, Any]]:
+    normalized_plan_code = _normalize_plan_code(plan_code)
+    normalized_billing_cycle = _normalize_billing_cycle(billing_cycle)
+
+    cur.execute(
+        """
+        SELECT
+            ude.eligibility_id,
+            ude.campaign_id,
+            ude.offer_id,
+            ude.eligible_plan_codes,
+            ude.eligible_billing_cycles,
+            ude.starts_at_utc,
+            ude.ends_at_utc,
+            COALESCE(NULLIF(ude.stripe_coupon_id, ''), NULLIF(co.stripe_coupon_id, '')) AS stripe_coupon_id,
+            COALESCE(NULLIF(ude.stripe_promotion_code_id, ''), NULLIF(co.stripe_promotion_code_id, '')) AS stripe_promotion_code_id,
+            c.slug AS campaign_slug,
+            c.label AS campaign_label,
+            co.discount_type,
+            co.discount_percent,
+            co.discount_amount_cents,
+            co.currency,
+            co.discount_duration,
+            co.discount_duration_months
+        FROM billing.user_discount_eligibilities ude
+        LEFT JOIN access.campaigns c
+          ON c.campaign_id = ude.campaign_id
+        LEFT JOIN access.campaign_offers co
+          ON co.offer_id = ude.offer_id
+        WHERE ude.user_id = %(user_id)s
+          AND ude.status = 'active'
+          AND ude.used_at_utc IS NULL
+          AND ude.starts_at_utc <= NOW()
+          AND (ude.ends_at_utc IS NULL OR ude.ends_at_utc > NOW())
+          AND (
+            jsonb_array_length(COALESCE(ude.eligible_plan_codes, '[]'::jsonb)) = 0
+            OR ude.eligible_plan_codes ? %(plan_code)s
+          )
+          AND (
+            jsonb_array_length(COALESCE(ude.eligible_billing_cycles, '[]'::jsonb)) = 0
+            OR ude.eligible_billing_cycles ? %(billing_cycle)s
+          )
+          AND (
+            NULLIF(ude.stripe_coupon_id, '') IS NOT NULL
+            OR NULLIF(ude.stripe_promotion_code_id, '') IS NOT NULL
+            OR NULLIF(co.stripe_coupon_id, '') IS NOT NULL
+            OR NULLIF(co.stripe_promotion_code_id, '') IS NOT NULL
+          )
+        ORDER BY ude.ends_at_utc ASC NULLS LAST, ude.eligibility_id DESC
+        LIMIT 1
+        """,
+        {
+            "user_id": user_id,
+            "plan_code": normalized_plan_code,
+            "billing_cycle": normalized_billing_cycle,
+        },
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+
+    eligible_plan_codes = _normalize_json_string_list(row[3], upper=True)
+    eligible_billing_cycles = _normalize_json_string_list(row[4], upper=False)
+
+    if not _eligibility_allows_value(eligible_plan_codes, normalized_plan_code, upper=True):
+        return None
+    if not _eligibility_allows_value(eligible_billing_cycles, normalized_billing_cycle, upper=False):
+        return None
+
+    stripe_coupon_id = str(row[7] or "").strip() or None
+    stripe_promotion_code_id = str(row[8] or "").strip() or None
+    if not stripe_coupon_id and not stripe_promotion_code_id:
+        return None
+
+    campaign_slug = str(row[9] or "").strip() or None
+    campaign_label = str(row[10] or "").strip() or None
+    discount_percent = float(row[12]) if row[12] is not None else None
+    discount_amount_cents = int(row[13]) if row[13] is not None else None
+    currency = str(row[14] or "").upper() or None
+
+    if discount_percent is not None:
+        label = f"Desconto de fundador ({discount_percent:g}%) aplicado automaticamente no checkout."
+    elif discount_amount_cents is not None:
+        label = "Desconto de fundador aplicado automaticamente no checkout."
+    else:
+        label = "Desconto de fundador aplicado automaticamente no checkout."
+
+    return {
+        "discount_eligibility_id": int(row[0]),
+        "eligibility_id": int(row[0]),
+        "campaign_id": int(row[1]) if row[1] is not None else None,
+        "offer_id": int(row[2]) if row[2] is not None else None,
+        "campaign_slug": campaign_slug,
+        "campaign_label": campaign_label,
+        "eligible_plan_codes": eligible_plan_codes,
+        "eligible_billing_cycles": eligible_billing_cycles,
+        "starts_at_utc": _iso_optional(row[5]),
+        "ends_at_utc": _iso_optional(row[6]),
+        "stripe_coupon_id": stripe_coupon_id,
+        "stripe_promotion_code_id": stripe_promotion_code_id,
+        "discount_type": row[11],
+        "discount_percent": discount_percent,
+        "discount_amount_cents": discount_amount_cents,
+        "currency": currency,
+        "discount_duration": row[15],
+        "discount_duration_months": int(row[16]) if row[16] is not None else None,
+        "label": label,
+    }
+
+
+def _build_checkout_discount_metadata(discount: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "discount_eligibility_id": str(discount.get("discount_eligibility_id") or ""),
+        "campaign_id": str(discount.get("campaign_id") or ""),
+        "campaign_slug": str(discount.get("campaign_slug") or ""),
+        "campaign_label": str(discount.get("campaign_label") or ""),
+        "campaign_offer_id": str(discount.get("offer_id") or ""),
+        "discount_source": "campaign_post_trial",
+    }
+
+
+def _build_checkout_applied_discount_payload(discount: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not discount:
+        return None
+
+    return {
+        "discount_eligibility_id": discount.get("discount_eligibility_id"),
+        "campaign_id": discount.get("campaign_id"),
+        "campaign_slug": discount.get("campaign_slug"),
+        "campaign_label": discount.get("campaign_label"),
+        "offer_id": discount.get("offer_id"),
+        "discount_type": discount.get("discount_type"),
+        "discount_percent": discount.get("discount_percent"),
+        "discount_amount_cents": discount.get("discount_amount_cents"),
+        "currency": discount.get("currency"),
+        "discount_duration": discount.get("discount_duration"),
+        "discount_duration_months": discount.get("discount_duration_months"),
+        "label": discount.get("label") or "Desconto de fundador aplicado automaticamente no checkout.",
+    }
+
+
+def _consume_checkout_discount_eligibility(
+    cur,
+    *,
+    checkout_session: Optional[Dict[str, Any]],
+    user_id: int,
+    provider_checkout_session_id: Optional[str],
+    provider_subscription_id: str,
+) -> Optional[Dict[str, Any]]:
+    if not checkout_session:
+        return None
+
+    metadata = checkout_session.get("metadata") or {}
+    raw_eligibility_id = metadata.get("discount_eligibility_id")
+    if raw_eligibility_id in (None, ""):
+        return None
+
+    try:
+        eligibility_id = int(raw_eligibility_id)
+    except Exception:
+        return {"consumed": False, "reason": "invalid_discount_eligibility_id"}
+
+    cur.execute(
+        """
+        UPDATE billing.user_discount_eligibilities
+        SET status = 'used',
+            used_at_utc = NOW(),
+            used_provider_checkout_session_id = %(provider_checkout_session_id)s,
+            used_provider_subscription_id = %(provider_subscription_id)s,
+            updated_at_utc = NOW(),
+            metadata_json = COALESCE(metadata_json, '{}'::jsonb) || %(metadata_json)s::jsonb
+        WHERE eligibility_id = %(eligibility_id)s
+          AND user_id = %(user_id)s
+          AND status = 'active'
+          AND used_at_utc IS NULL
+        RETURNING eligibility_id, campaign_id, offer_id
+        """,
+        {
+            "eligibility_id": eligibility_id,
+            "user_id": user_id,
+            "provider_checkout_session_id": provider_checkout_session_id,
+            "provider_subscription_id": provider_subscription_id,
+            "metadata_json": json.dumps(
+                {
+                    "used_by": "stripe_checkout_session_completed",
+                    "provider_checkout_session_id": provider_checkout_session_id,
+                    "provider_subscription_id": provider_subscription_id,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    )
+    row = cur.fetchone()
+    if row is None:
+        return {
+            "consumed": False,
+            "eligibility_id": eligibility_id,
+            "reason": "not_active_or_already_used",
+        }
+
+    return {
+        "consumed": True,
+        "eligibility_id": int(row[0]),
+        "campaign_id": int(row[1]) if row[1] is not None else None,
+        "offer_id": int(row[2]) if row[2] is not None else None,
+    }
+
 def create_checkout_session_for_user(
     *,
     user_id: int,
@@ -627,6 +890,13 @@ def create_checkout_session_for_user(
             customer_row = cur.fetchone()
             provider_customer_id = str(customer_row[0]) if customer_row and customer_row[0] else None
 
+            automatic_discount = _resolve_checkout_discount_eligibility_for_user(
+                cur,
+                user_id=user_id,
+                plan_code=plan_code,
+                billing_cycle=billing_cycle,
+            )
+
         conn.commit()
 
     stripe.api_key = runtime_config["secret_key"]
@@ -661,7 +931,6 @@ def create_checkout_session_for_user(
         ],
         "return_url": return_url,
         "client_reference_id": str(user_id),
-        "allow_promotion_codes": True,
         "metadata": {
             "user_id": str(user_id),
             "plan_code": plan_code,
@@ -669,7 +938,7 @@ def create_checkout_session_for_user(
             "currency_code": executable_currency_code,
             "plan_price_id": str(plan_price_id),
             "price_code": price_code,
-            "provider_price_id": provider_price_id,
+            "provider_price_id": str(provider_price_id or ""),
             "billing_runtime": normalized_runtime,
         },
         "subscription_data": {
@@ -680,11 +949,27 @@ def create_checkout_session_for_user(
                 "currency_code": executable_currency_code,
                 "plan_price_id": str(plan_price_id),
                 "price_code": price_code,
-                "provider_price_id": provider_price_id,
+                "provider_price_id": str(provider_price_id or ""),
                 "billing_runtime": normalized_runtime,
             }
         },
     }
+
+    if automatic_discount:
+        discount_metadata = _build_checkout_discount_metadata(automatic_discount)
+        session_params["metadata"].update(discount_metadata)
+        session_params["subscription_data"]["metadata"].update(discount_metadata)
+
+        if automatic_discount.get("stripe_promotion_code_id"):
+            session_params["discounts"] = [
+                {"promotion_code": automatic_discount["stripe_promotion_code_id"]}
+            ]
+        elif automatic_discount.get("stripe_coupon_id"):
+            session_params["discounts"] = [
+                {"coupon": automatic_discount["stripe_coupon_id"]}
+            ]
+    else:
+        session_params["allow_promotion_codes"] = True
 
     if provider_customer_id:
         session_params["customer"] = provider_customer_id
@@ -714,6 +999,7 @@ def create_checkout_session_for_user(
         "provider_product_id": provider_product_id,
         "provider_price_id": provider_price_id,
         "billing_runtime": normalized_runtime,
+        "applied_discount": _build_checkout_applied_discount_payload(automatic_discount),
     }
 
 def _resolve_user_id_from_checkout_session_payload(
@@ -1535,7 +1821,7 @@ def sync_subscription_from_stripe_event(
         }
     )
 
-    access_plan_code = resolved_plan_price["plan_code"] if row_status in {"active", "trialing", "past_due"} else "FREE"
+    access_plan_code = resolved_plan_price["plan_code"] if row_status in ACCESS_GRANT_BILLING_STATUSES else "FREE"
 
     with pg_conn() as conn:
         with conn.cursor() as cur:
@@ -1724,6 +2010,14 @@ def sync_subscription_from_stripe_event(
 
             _upsert_entitlements_snapshot(cur, user_id=user_id, plan_code=access_plan_code)
 
+            discount_consumption_result = _consume_checkout_discount_eligibility(
+                cur,
+                checkout_session=checkout_session,
+                user_id=user_id,
+                provider_checkout_session_id=provider_checkout_session_id,
+                provider_subscription_id=provider_subscription_id,
+            )
+
             _insert_subscription_event(
                 cur,
                 subscription_id=subscription_id,
@@ -1745,6 +2039,7 @@ def sync_subscription_from_stripe_event(
                     "access_plan_code": access_plan_code,
                     "provider_schedule_id": provider_schedule_id,
                     "scheduled_change_reconciliation": reconciliation_result,
+                    "discount_consumption": discount_consumption_result,
                 },
             )
 
@@ -1767,6 +2062,7 @@ def sync_subscription_from_stripe_event(
         "provider_price_id": provider_price_id,
         "event_type": incoming_event_type,
         "scheduled_change_reconciliation": reconciliation_result,
+        "discount_consumption": discount_consumption_result,
     }
 
 
@@ -1943,7 +2239,7 @@ def get_billing_subscription_summary_for_user(
             "scheduled_change": None,
             "actions": {
                 "can_checkout": True,
-                "can_change_plan": True,
+                "can_change_plan": False,
                 "can_cancel_renewal": False,
                 "can_resume_renewal": False,
                 "can_cancel_scheduled_change": False,
@@ -1989,6 +2285,13 @@ def get_billing_subscription_summary_for_user(
         billing_runtime=normalized_runtime,
     )
 
+    can_change_plan = (
+        can_manage_stripe_subscription
+        and billing_status in PLAN_CHANGE_ALLOWED_BILLING_STATUSES
+        and not cancel_at_period_end
+        and scheduled_change is None
+    )
+
     return {
         "ok": True,
         "has_subscription": True,
@@ -2002,7 +2305,7 @@ def get_billing_subscription_summary_for_user(
         "scheduled_change": scheduled_change,
         "actions": {
             "can_checkout": not can_manage_stripe_subscription,
-            "can_change_plan": True,
+            "can_change_plan": can_change_plan,
             "can_cancel_renewal": can_manage_stripe_subscription and not cancel_at_period_end,
             "can_resume_renewal": can_manage_stripe_subscription and cancel_at_period_end,
             "can_cancel_scheduled_change": bool(scheduled_change),
@@ -2686,7 +2989,7 @@ def _update_subscription_cancel_at_period_end(
         {
             "id": f"manual_subscription_update_{provider_subscription_id}_{'resume' if not cancel_at_period_end else 'cancel'}",
             "type": "customer.subscription.updated",
-            "data": {"object": dict(subscription)},
+            "data": {"object": subscription._to_dict_recursive()},
         },
         billing_runtime=normalized_runtime,
     )
