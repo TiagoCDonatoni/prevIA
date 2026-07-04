@@ -150,6 +150,95 @@ def _outcome_name_es(outcome: Optional[str], home: str, away: str) -> str:
         return "el empate"
     return "este lado"
 
+def _historical_profile_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    inputs = (payload or {}).get("inputs") or {}
+    lambda_meta = inputs.get("lambda_meta") or {}
+    summary = lambda_meta.get("historical_context_summary") or {}
+    profile = summary.get("historical_profile") or {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _historical_profile_selected_signal(historical_profile: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(historical_profile, dict):
+        return None
+
+    selected = historical_profile.get("selected_signals") or []
+    if not isinstance(selected, list):
+        return None
+
+    for signal in selected:
+        if isinstance(signal, dict) and signal.get("safe_to_narrate"):
+            return signal
+
+    return None
+
+
+def _fmt_goal_pg(value: Any, *, lang: str) -> Optional[str]:
+    v = _as_float(value)
+    if v is None:
+        return None
+
+    text = f"{float(v):.2f}".rstrip("0").rstrip(".")
+    if lang in ("pt-BR", "es"):
+        text = text.replace(".", ",")
+    return text
+
+def _historical_signal_support_side(signal: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(signal, dict):
+        return None
+
+    key = str(signal.get("key") or "")
+    label = str(signal.get("label") or "")
+
+    if key == "home_attack_home":
+        if label == "scores_above_average":
+            return "home"
+        if label == "scores_below_average":
+            return "away"
+
+    if key == "home_defense_home":
+        if label == "concedes_below_average":
+            return "home"
+        if label == "concedes_above_average":
+            return "away"
+
+    if key == "away_attack_away":
+        if label == "scores_above_average":
+            return "away"
+        if label == "scores_below_average":
+            return "home"
+
+    if key == "away_defense_away":
+        if label == "concedes_below_average":
+            return "away"
+        if label == "concedes_above_average":
+            return "home"
+
+    return None
+
+
+def _historical_signal_alignment(signal: Optional[Dict[str, Any]], context_side: str) -> str:
+    support_side = _historical_signal_support_side(signal)
+
+    if not support_side or context_side not in ("home", "away"):
+        return "neutral"
+
+    if support_side == context_side:
+        return "supports_read"
+
+    return "cautions_read"
+    
+
+def _historical_profile_reference_side(context_side: str, decision: Optional[Dict[str, Any]]) -> str:
+    if context_side in ("home", "away"):
+        return context_side
+
+    decision_side = _decision_outcome_key(decision)
+    if decision_side in ("home", "away"):
+        return decision_side
+
+    return context_side or "balanced"
+
 def _decision_outcome_key(decision: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(decision, dict):
         return None
@@ -1229,6 +1318,103 @@ def _build_h2h_text_en(*, home: str, away: str, h2h: Dict[str, Any], edge: str, 
     return _pick_variant(seed=seed, section_key="head_to_head", variants=variants)
 
 
+def _build_historical_profile_text_en(
+    *,
+    home: str,
+    away: str,
+    historical_profile: Dict[str, Any],
+    context_side: str,
+    decision: Optional[Dict[str, Any]],
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    signal = _historical_profile_selected_signal(historical_profile)
+    if not signal:
+        return None
+
+    key = str(signal.get("key") or "")
+    label = str(signal.get("label") or "")
+    value = _fmt_goal_pg(signal.get("value"), lang="en")
+    baseline = _fmt_goal_pg(signal.get("baseline"), lang="en")
+
+    if not value or not baseline:
+        return None
+
+    if key == "home_attack_home":
+        metric_text = f"at home, {home} has averaged {value} goals scored per game"
+        if label == "scores_above_average":
+            compare = f"above the league average for home teams ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"below the league average for home teams ({baseline})"
+        else:
+            return None
+
+    elif key == "home_defense_home":
+        metric_text = f"at home, {home} concedes {value} goals per game"
+        if label == "concedes_below_average":
+            compare = f"below what away teams usually score in this league ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"above what away teams usually score in this league ({baseline})"
+        else:
+            return None
+
+    elif key == "away_attack_away":
+        metric_text = f"away from home, {away} has averaged {value} goals scored per game"
+        if label == "scores_above_average":
+            compare = f"above the league average for away teams ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"below the league average for away teams ({baseline})"
+        else:
+            return None
+
+    elif key == "away_defense_away":
+        metric_text = f"away from home, {away} concedes {value} goals per game"
+        if label == "concedes_below_average":
+            compare = f"below what home teams usually score in this league ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"above what home teams usually score in this league ({baseline})"
+        else:
+            return None
+
+    else:
+        return None
+
+    reference_side = _historical_profile_reference_side(context_side, decision)
+    alignment = _historical_signal_alignment(signal, reference_side)
+    reference_name = _context_name_en(reference_side, home, away)
+
+    if alignment == "supports_read":
+        if reference_name:
+            variants = (
+                f"The broader history also supports the read for {reference_name}: {metric_text}, {compare}.",
+                f"The wider sample helps explain the matchup for {reference_name}: {metric_text}, {compare}.",
+                f"Beyond current form, there is historical support for {reference_name}: {metric_text}, {compare}.",
+            )
+        else:
+            variants = (
+                f"The broader history also supports this read: {metric_text}, {compare}.",
+                f"The wider sample helps explain the matchup: {metric_text}, {compare}.",
+                f"Beyond current form, there is historical support: {metric_text}, {compare}.",
+            )
+    elif alignment == "cautions_read":
+        variants = (
+            f"The broader history calls for a bit more caution: {metric_text}, {compare}.",
+            f"The wider sample makes the game less straightforward: {metric_text}, {compare}.",
+            f"Beyond current form, the history adds a warning point: {metric_text}, {compare}.",
+        )
+    else:
+        variants = (
+            f"The broader history adds context: {metric_text}, {compare}.",
+            f"The wider sample helps complete the read: {metric_text}, {compare}.",
+            f"Beyond current form, the history adds another piece to the matchup: {metric_text}, {compare}.",
+        )
+
+    return _pick_variant(
+        seed=seed,
+        section_key=f"historical_profile_{key}_{label}_{alignment}",
+        variants=variants,
+    )
+
+
 def _build_market_connection_text_en(
     *,
     context_side: str,
@@ -1555,6 +1741,198 @@ def _build_h2h_text_es(*, home: str, away: str, h2h: Dict[str, Any], edge: str, 
     return _pick_variant(seed=seed, section_key="head_to_head", variants=variants)
 
 
+def _build_historical_profile_text_es(
+    *,
+    home: str,
+    away: str,
+    historical_profile: Dict[str, Any],
+    context_side: str,
+    decision: Optional[Dict[str, Any]],
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    signal = _historical_profile_selected_signal(historical_profile)
+    if not signal:
+        return None
+
+    key = str(signal.get("key") or "")
+    label = str(signal.get("label") or "")
+    value = _fmt_goal_pg(signal.get("value"), lang="es")
+    baseline = _fmt_goal_pg(signal.get("baseline"), lang="es")
+
+    if not value or not baseline:
+        return None
+
+    if key == "home_attack_home":
+        metric_text = f"en casa, {home} tiene una media de {value} goles marcados por partido"
+        if label == "scores_above_average":
+            compare = f"por encima del promedio de la liga para locales ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"por debajo del promedio de la liga para locales ({baseline})"
+        else:
+            return None
+
+    elif key == "home_defense_home":
+        metric_text = f"en casa, {home} recibe {value} goles por partido"
+        if label == "concedes_below_average":
+            compare = f"por debajo de lo que los visitantes suelen marcar en esta liga ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"por encima de lo que los visitantes suelen marcar en esta liga ({baseline})"
+        else:
+            return None
+
+    elif key == "away_attack_away":
+        metric_text = f"fuera de casa, {away} tiene una media de {value} goles marcados por partido"
+        if label == "scores_above_average":
+            compare = f"por encima del promedio de la liga para visitantes ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"por debajo del promedio de la liga para visitantes ({baseline})"
+        else:
+            return None
+
+    elif key == "away_defense_away":
+        metric_text = f"fuera de casa, {away} recibe {value} goles por partido"
+        if label == "concedes_below_average":
+            compare = f"por debajo de lo que los locales suelen marcar en esta liga ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"por encima de lo que los locales suelen marcar en esta liga ({baseline})"
+        else:
+            return None
+
+    else:
+        return None
+
+    reference_side = _historical_profile_reference_side(context_side, decision)
+    alignment = _historical_signal_alignment(signal, reference_side)
+    reference_name = _context_name_es(reference_side, home, away)
+
+    if alignment == "supports_read":
+        if reference_name:
+            variants = (
+                f"La base histórica también refuerza la lectura para {reference_name}: {metric_text}, {compare}.",
+                f"El historial más amplio ayuda a explicar el escenario para {reference_name}: {metric_text}, {compare}.",
+                f"Además de la fase actual, hay apoyo histórico para {reference_name}: {metric_text}, {compare}.",
+            )
+        else:
+            variants = (
+                f"La base histórica también refuerza esta lectura: {metric_text}, {compare}.",
+                f"El historial más amplio ayuda a explicar el escenario: {metric_text}, {compare}.",
+                f"Además de la fase actual, hay apoyo histórico: {metric_text}, {compare}.",
+            )
+    elif alignment == "cautions_read":
+        variants = (
+            f"La base histórica pide un poco más de cautela: {metric_text}, {compare}.",
+            f"El historial más amplio hace que el partido sea menos simple: {metric_text}, {compare}.",
+            f"Además de la fase actual, el historial deja una alerta: {metric_text}, {compare}.",
+        )
+    else:
+        variants = (
+            f"La base histórica añade contexto: {metric_text}, {compare}.",
+            f"El historial más amplio ayuda a completar la lectura: {metric_text}, {compare}.",
+            f"Además de la fase actual, el historial aporta otra pieza al escenario: {metric_text}, {compare}.",
+        )
+
+    return _pick_variant(
+        seed=seed,
+        section_key=f"historical_profile_{key}_{label}_{alignment}",
+        variants=variants,
+    )
+
+def _build_historical_profile_text_pt(
+    *,
+    home: str,
+    away: str,
+    historical_profile: Dict[str, Any],
+    context_side: str,
+    decision: Optional[Dict[str, Any]],
+    seed: str,
+) -> Optional[Tuple[str, int]]:
+    signal = _historical_profile_selected_signal(historical_profile)
+    if not signal:
+        return None
+
+    key = str(signal.get("key") or "")
+    label = str(signal.get("label") or "")
+    value = _fmt_goal_pg(signal.get("value"), lang="pt-BR")
+    baseline = _fmt_goal_pg(signal.get("baseline"), lang="pt-BR")
+
+    if not value or not baseline:
+        return None
+
+    if key == "home_attack_home":
+        metric_text = f"em casa, {home} tem média de {value} gols marcados por jogo"
+        if label == "scores_above_average":
+            compare = f"acima da média da liga para mandantes ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"abaixo da média da liga para mandantes ({baseline})"
+        else:
+            return None
+
+    elif key == "home_defense_home":
+        metric_text = f"em casa, {home} sofre {value} gols por jogo"
+        if label == "concedes_below_average":
+            compare = f"abaixo do que visitantes costumam marcar na liga ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"acima do que visitantes costumam marcar na liga ({baseline})"
+        else:
+            return None
+
+    elif key == "away_attack_away":
+        metric_text = f"fora de casa, {away} tem média de {value} gols marcados por jogo"
+        if label == "scores_above_average":
+            compare = f"acima da média da liga para visitantes ({baseline})"
+        elif label == "scores_below_average":
+            compare = f"abaixo da média da liga para visitantes ({baseline})"
+        else:
+            return None
+
+    elif key == "away_defense_away":
+        metric_text = f"fora de casa, {away} sofre {value} gols por jogo"
+        if label == "concedes_below_average":
+            compare = f"abaixo do que mandantes costumam marcar na liga ({baseline})"
+        elif label == "concedes_above_average":
+            compare = f"acima do que mandantes costumam marcar na liga ({baseline})"
+        else:
+            return None
+
+    else:
+        return None
+
+    reference_side = _historical_profile_reference_side(context_side, decision)
+    alignment = _historical_signal_alignment(signal, reference_side)
+    reference_name = _context_name_pt(reference_side, home, away)
+
+    if alignment == "supports_read":
+        if reference_name:
+            variants = (
+                f"A base histórica também reforça a leitura para {reference_name}: {metric_text}, {compare}.",
+                f"O histórico mais amplo ajuda a explicar o cenário para {reference_name}: {metric_text}, {compare}.",
+                f"Além da fase atual, há um apoio histórico para {reference_name}: {metric_text}, {compare}.",
+            )
+        else:
+            variants = (
+                f"A base histórica também reforça essa leitura: {metric_text}, {compare}.",
+                f"O histórico mais amplo ajuda a explicar o cenário: {metric_text}, {compare}.",
+                f"Além da fase atual, há um apoio histórico: {metric_text}, {compare}.",
+            )
+    elif alignment == "cautions_read":
+        variants = (
+            f"A base histórica pede um pouco mais de cautela: {metric_text}, {compare}.",
+            f"O histórico mais amplo deixa o jogo menos simples: {metric_text}, {compare}.",
+            f"Além da fase atual, há um alerta no histórico: {metric_text}, {compare}.",
+        )
+    else:
+        variants = (
+            f"A base histórica acrescenta contexto: {metric_text}, {compare}.",
+            f"O histórico mais amplo ajuda a completar a leitura: {metric_text}, {compare}.",
+            f"Além da fase atual, o histórico traz mais uma peça para o cenário: {metric_text}, {compare}.",
+        )
+
+    return _pick_variant(
+        seed=seed,
+        section_key=f"historical_profile_{key}_{label}_{alignment}",
+        variants=variants,
+    )
+
 def _build_market_connection_text_es(
     *,
     context_side: str,
@@ -1715,12 +2093,44 @@ def _build_h2h_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
     return _build_h2h_text_pt(**kwargs)
 
 
+def _build_historical_profile_text_for_lang(lang: str, **kwargs) -> Optional[Tuple[str, int]]:
+    if lang == "en":
+        return _build_historical_profile_text_en(**kwargs)
+    if lang == "es":
+        return _build_historical_profile_text_es(**kwargs)
+    return _build_historical_profile_text_pt(**kwargs)
+
+
 def _build_market_connection_text_for_lang(lang: str, **kwargs) -> Tuple[str, int]:
     if lang == "en":
         return _build_market_connection_text_en(**kwargs)
     if lang == "es":
         return _build_market_connection_text_es(**kwargs)
     return _build_market_connection_text_pt(**kwargs)
+
+
+def _compact_paragraph_from_sections(sections: Dict[str, Dict[str, Any]]) -> str:
+    parts = []
+
+    current = sections.get("current_season") or {}
+    home_away = sections.get("home_away") or {}
+    historical = sections.get("historical_profile") or {}
+    market = sections.get("market_connection") or {}
+
+    if current.get("status") == "available" and current.get("text"):
+        parts.append(str(current.get("text")))
+    elif home_away.get("status") == "available" and home_away.get("text"):
+        parts.append(str(home_away.get("text")))
+
+    if historical.get("status") == "available" and historical.get("text"):
+        parts.append(str(historical.get("text")))
+    elif not parts and home_away.get("text"):
+        parts.append(str(home_away.get("text")))
+
+    if market.get("text"):
+        parts.append(str(market.get("text")))
+
+    return " ".join(p.strip() for p in parts if str(p or "").strip())
 
 
 def _compose_language_texts(
@@ -1737,6 +2147,7 @@ def _compose_language_texts(
     context_side: str,
     price_read: Optional[Dict[str, Any]],
     decision: Optional[Dict[str, Any]],
+    historical_profile: Optional[Dict[str, Any]],
     variant_seed: str,
     collect_variants: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
@@ -1783,6 +2194,36 @@ def _compose_language_texts(
         sections["home_away"] = {"status": "limited" if home_stats or away_stats else "unavailable", "quality": "limited", "sample_size": {"home_home": hhp, "away_away": aap}, "text": text}
     paragraphs.append(text)
 
+    historical_text = _build_historical_profile_text_for_lang(
+        lang,
+        home=home,
+        away=away,
+        historical_profile=historical_profile or {},
+        context_side=context_side,
+        decision=decision,
+        seed=variant_seed,
+    )
+
+    historical_signal = _historical_profile_selected_signal(historical_profile or {})
+    if historical_text is not None and historical_signal:
+        text, variant_idx = historical_text
+        if collect_variants is not None:
+            collect_variants["historical_profile"] = variant_idx
+        sections["historical_profile"] = {
+            "status": "available",
+            "quality": "good",
+            "text": text,
+            "signal": historical_signal,
+        }
+        paragraphs.append(text)
+    else:
+        sections["historical_profile"] = {
+            "status": str((historical_profile or {}).get("status") or "unavailable"),
+            "quality": str((historical_profile or {}).get("quality") or "unavailable"),
+            "text": "",
+            "signal": None,
+        }
+
     if h2h["status"] == "available":
         text, variant_idx = _build_h2h_text_for_lang(lang, home=home, away=away, h2h=h2h, edge=h2h_edge, seed=variant_seed)
         if collect_variants is not None:
@@ -1825,7 +2266,15 @@ def _compose_language_texts(
     if collect_variants is not None:
         collect_variants["headline"] = variant_idx
 
-    return {"headline": headline, "paragraphs": paragraphs, "sections": sections}
+    compact_paragraph = _compact_paragraph_from_sections(sections)
+
+    return {
+        "headline": headline,
+        "paragraphs": paragraphs,
+        "compact_paragraph": compact_paragraph,
+        "paragraphs_compact": [compact_paragraph] if compact_paragraph else [],
+        "sections": sections,
+    }
 
 
 def _fallback_context(*, reason: str, home_name: Optional[str], away_name: Optional[str]) -> Dict[str, Any]:
@@ -2039,6 +2488,12 @@ def build_narrative_context_v1(
         away=away,
     )
 
+    historical_profile = _historical_profile_from_payload(payload or {})
+    historical_profile_signal = _historical_profile_selected_signal(historical_profile)
+    historical_profile_status = str(historical_profile.get("status") or "unavailable")
+    if historical_profile_status != "available":
+        data_gaps.append("historical_profile_limited")
+
     decision = (payload or {}).get("decision")
     if not isinstance(decision, dict):
         decision = None
@@ -2056,6 +2511,7 @@ def build_narrative_context_v1(
         context_side=context_side,
         price_read=price_read,
         decision=decision,
+        historical_profile=historical_profile,
         variant_seed=variant_seed,
         collect_variants=selected_variants,
     )
@@ -2072,6 +2528,7 @@ def build_narrative_context_v1(
         context_side=context_side,
         price_read=price_read,
         decision=decision,
+        historical_profile=historical_profile,
         variant_seed=variant_seed,
     )
     es = _compose_language_texts(
@@ -2087,6 +2544,7 @@ def build_narrative_context_v1(
         context_side=context_side,
         price_read=price_read,
         decision=decision,
+        historical_profile=historical_profile,
         variant_seed=variant_seed,
     )
 
@@ -2110,6 +2568,8 @@ def build_narrative_context_v1(
         # Backward compatible: top-level text remains pt-BR.
         "headline": pt["headline"],
         "paragraphs": pt["paragraphs"],
+        "compact_paragraph": pt.get("compact_paragraph"),
+        "paragraphs_compact": pt.get("paragraphs_compact") or [],
         "sections": pt["sections"],
         # New multilingual payload for frontend selection later.
         "texts": {
@@ -2129,6 +2589,10 @@ def build_narrative_context_v1(
             "season_edge": season_edge,
             "home_away_edge": home_away_edge,
             "head_to_head_edge": h2h_edge,
+            "historical_profile_status": historical_profile_status,
+            "historical_profile_signal_key": (historical_profile_signal or {}).get("key") if historical_profile_signal else None,
+            "historical_profile_signal_label": (historical_profile_signal or {}).get("label") if historical_profile_signal else None,
+            "historical_profile_signal_strength": (historical_profile_signal or {}).get("strength") if historical_profile_signal else None,
 
             # Novos sinais explicativos.
             "price_context_alignment": price_read.get("alignment"),
@@ -2156,6 +2620,7 @@ def build_narrative_context_v1(
             "home_team": _public_stats(home_stats),
             "away_team": _public_stats(away_stats),
             "head_to_head": h2h,
+            "historical_profile": historical_profile,
             "pricing": price_read,
         },
         "data_gaps": sorted(set(data_gaps)),

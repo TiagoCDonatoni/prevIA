@@ -17,34 +17,34 @@ DEFAULT_COMPETITION_KEY = "fifa_world_cup_2026"
 
 PHASE_LABELS: Dict[str, Dict[str, str]] = {
     "round_of_32": {
-        "pt": "fase extra (16-avos de final)",
-        "en": "extra knockout round",
-        "es": "ronda extra",
+        "pt": "a fase extra (16-avos de final)",
+        "en": "the extra knockout round",
+        "es": "la ronda extra",
     },
     "round_of_16": {
-        "pt": "oitavas de final",
-        "en": "round of 16",
-        "es": "octavos de final",
+        "pt": "as oitavas de final",
+        "en": "the round of 16",
+        "es": "los octavos de final",
     },
     "quarter_final": {
-        "pt": "quartas de final",
-        "en": "quarter-finals",
-        "es": "cuartos de final",
+        "pt": "as quartas de final",
+        "en": "the quarter-finals",
+        "es": "los cuartos de final",
     },
     "semi_final": {
-        "pt": "semifinais",
-        "en": "semi-finals",
-        "es": "semifinales",
+        "pt": "as semifinais",
+        "en": "the semi-finals",
+        "es": "las semifinales",
     },
     "third_place": {
-        "pt": "disputa de 3º lugar",
-        "en": "third-place match",
-        "es": "partido por el 3º puesto",
+        "pt": "a disputa de 3º lugar",
+        "en": "the third-place match",
+        "es": "el partido por el 3º puesto",
     },
     "final": {
-        "pt": "final",
-        "en": "final",
-        "es": "final",
+        "pt": "a final",
+        "en": "the final",
+        "es": "la final",
     },
 }
 
@@ -274,7 +274,7 @@ def _build_email_payload(
     subject = f"Novos palpites liberados no {pool_name}"
     text_body = (
         f"Olá {participant_name}, tudo bem?\n\n"
-        f"Já estão liberados novos palpites para a {phase_label} do seu bolão \"{pool_name}\".\n\n"
+        f"Já estão liberados novos palpites para {phase_label} do seu bolão \"{pool_name}\".\n\n"
         f"Acesse seu painel e faça seus palpites:\n{panel_url}\n\n"
         f"Boa sorte!\n"
         f"prevIA\n"
@@ -283,7 +283,7 @@ def _build_email_payload(
     <html>
       <body style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
         <p>Olá {safe_name}, tudo bem?</p>
-        <p>Já estão liberados novos palpites para a <strong>{safe_phase}</strong> do seu bolão <strong>{safe_pool}</strong>.</p>
+        <p>Já estão liberados novos palpites para <strong>{safe_phase}</strong> do seu bolão <strong>{safe_pool}</strong>.</p>
         <p><a href="{safe_url}" style="display: inline-block; padding: 11px 16px; border-radius: 10px; background: #0b2f8a; color: #ffffff; text-decoration: none; font-weight: 700;">Abrir painel de palpites</a></p>
         <p style="font-size: 13px; color: #555555;">Se o botão não abrir, use este link:<br /><a href="{safe_url}">{safe_url}</a></p>
         <p>Boa sorte!<br />prevIA</p>

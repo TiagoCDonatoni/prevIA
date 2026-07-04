@@ -7,6 +7,24 @@ from src.product.model_profiles import get_model_profile
 
 QUALITY_SCORE = {"STRONG": 5, "OK": 4, "THIN": 3, "CUP_LIKE": 2, "INSUFFICIENT": 1, "UNKNOWN": 0}
 
+HISTORICAL_PROFILE_VERSION = "historical_profile_v1"
+HISTORICAL_PROFILE_SAFE_QUALITIES = {"STRONG", "OK"}
+HISTORICAL_PROFILE_CAUTION_QUALITIES = {"THIN"}
+HISTORICAL_PROFILE_BLOCKING_GUARDRAILS = {
+    "cup_like_league_history",
+    "cup_like_team_history",
+}
+HISTORICAL_PROFILE_CAUTION_GUARDRAILS = {
+    "thin_or_insufficient_history",
+}
+HISTORICAL_PROFILE_MIN_REL_DELTA = 0.07
+HISTORICAL_PROFILE_MIN_ABS_DELTA = 0.12
+HISTORICAL_PROFILE_CLEAR_REL_DELTA = 0.12
+HISTORICAL_PROFILE_CLEAR_ABS_DELTA = 0.20
+HISTORICAL_PROFILE_MIN_TEAM_SPLIT_PLAYED = 6.0
+HISTORICAL_PROFILE_MIN_LEAGUE_AVG_TEAM_PLAYED = 12.0
+HISTORICAL_PROFILE_MAX_SELECTED_SIGNALS = 2
+
 
 def _f(value: Any, default: float = 0.0) -> float:
     try:
@@ -157,6 +175,12 @@ def _summary(rows: List[Dict[str, Any]], *, weights: Dict[int, float], window: i
     used_weights = _renorm(weights, usable)
 
     weighted_played = sum(used_weights.get(int(r["season"]), 0.0) * _f(r.get("played")) for r in rows)
+    weighted_home_played = sum(
+        used_weights.get(int(r["season"]), 0.0) * _f(r.get("home_played")) for r in rows
+    )
+    weighted_away_played = sum(
+        used_weights.get(int(r["season"]), 0.0) * _f(r.get("away_played")) for r in rows
+    )
     weighted_avg_team_played = sum(
         used_weights.get(int(r["season"]), 0.0) * _f(r.get("avg_team_played")) for r in rows
     )
@@ -175,6 +199,8 @@ def _summary(rows: List[Dict[str, Any]], *, weights: Dict[int, float], window: i
         "season_weights_used": {str(k): round(float(v), 6) for k, v in sorted(used_weights.items(), reverse=True)},
         "raw_total_played": round(sum(_f(r.get("played")) for r in rows), 2),
         "weighted_avg_played": round(float(weighted_played), 2),
+        "weighted_home_played": round(float(weighted_home_played), 2),
+        "weighted_away_played": round(float(weighted_away_played), 2),
     }
 
     if league_level:
@@ -222,6 +248,7 @@ def _effective_team_history(same_league: Dict[str, Any], global_history: Dict[st
         }
 
     keys = ["home_gf_pg", "home_ga_pg", "away_gf_pg", "away_ga_pg", "overall_gf_pg", "overall_ga_pg"]
+    sample_keys = ["weighted_avg_played", "weighted_home_played", "weighted_away_played"]
 
     if not global_ok:
         return {
@@ -230,6 +257,7 @@ def _effective_team_history(same_league: Dict[str, Any], global_history: Dict[st
             "same_league_weight": 1.0,
             "global_weight": 0.0,
             **{k: same_league.get(k) for k in keys},
+            **{k: same_league.get(k) for k in sample_keys},
         }
 
     same_weight = 0.0
@@ -267,6 +295,244 @@ def _effective_team_history(same_league: Dict[str, Any], global_history: Dict[st
         "away_ga_pg": _r(blend("away_ga_pg")),
         "overall_gf_pg": _r(blend("overall_gf_pg")),
         "overall_ga_pg": _r(blend("overall_ga_pg")),
+        **{k: global_history.get(k) for k in sample_keys},
+    }
+
+
+def _profile_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _historical_profile_strength(delta: Optional[float], rel_delta: Optional[float]) -> str:
+    if delta is None or rel_delta is None:
+        return "unknown"
+    if abs(float(delta)) >= HISTORICAL_PROFILE_CLEAR_ABS_DELTA and abs(float(rel_delta)) >= HISTORICAL_PROFILE_CLEAR_REL_DELTA:
+        return "clear"
+    return "slight"
+
+
+def _historical_profile_signal(
+    *,
+    key: str,
+    team_side: str,
+    venue: str,
+    metric: str,
+    value: Any,
+    baseline: Any,
+    baseline_metric: str,
+    lower_is_better: bool,
+    team_split_weighted_played: Any,
+    league_weighted_avg_team_played: Any,
+    match_history_quality: str,
+    guardrails: List[str],
+) -> Dict[str, Any]:
+    val = _profile_float(value)
+    base = _profile_float(baseline)
+    team_sample = _f(team_split_weighted_played, 0.0)
+    league_sample = _f(league_weighted_avg_team_played, 0.0)
+    reasons: List[str] = []
+
+    if val is None or base is None or base <= 0.0:
+        reasons.append("missing_metric")
+        delta = None
+        ratio = None
+        rel_delta = None
+    else:
+        delta = float(val) - float(base)
+        ratio = float(val) / float(base)
+        rel_delta = ratio - 1.0
+
+    quality = str(match_history_quality or "UNKNOWN")
+    quality_is_safe = quality in HISTORICAL_PROFILE_SAFE_QUALITIES
+    quality_is_cautious = quality in HISTORICAL_PROFILE_CAUTION_QUALITIES
+
+    if not quality_is_safe and not quality_is_cautious:
+        reasons.append("quality")
+
+    if any(str(g) in HISTORICAL_PROFILE_BLOCKING_GUARDRAILS for g in guardrails):
+        reasons.append("guardrail")
+
+    if team_sample < HISTORICAL_PROFILE_MIN_TEAM_SPLIT_PLAYED or league_sample < HISTORICAL_PROFILE_MIN_LEAGUE_AVG_TEAM_PLAYED:
+        reasons.append("sample")
+
+    if delta is not None and rel_delta is not None:
+        if abs(float(delta)) < HISTORICAL_PROFILE_MIN_ABS_DELTA or abs(float(rel_delta)) < HISTORICAL_PROFILE_MIN_REL_DELTA:
+            reasons.append("small_delta")
+
+    strength = _historical_profile_strength(delta, rel_delta)
+
+    if quality_is_cautious and strength != "clear":
+        reasons.append("quality")
+
+    if delta is None or rel_delta is None:
+        direction = "unknown"
+        label = "unknown"
+    else:
+        positive_delta = float(delta) > 0.0
+        if lower_is_better:
+            direction = "better_than_baseline" if not positive_delta else "worse_than_baseline"
+            label = "concedes_below_average" if not positive_delta else "concedes_above_average"
+        else:
+            direction = "above_baseline" if positive_delta else "below_baseline"
+            label = "scores_above_average" if positive_delta else "scores_below_average"
+
+    return {
+        "key": key,
+        "team_side": team_side,
+        "venue": venue,
+        "metric": metric,
+        "value": _r(val),
+        "baseline": _r(base),
+        "baseline_metric": baseline_metric,
+        "delta": _r(delta),
+        "ratio": _r(ratio),
+        "rel_delta_pct": _r((float(rel_delta) * 100.0) if rel_delta is not None else None, 2),
+        "label": label,
+        "direction": direction,
+        "strength": strength,
+        "lower_is_better": bool(lower_is_better),
+        "sample_size": {
+            "team_split_weighted_played": _r(team_sample, 2),
+            "league_weighted_avg_team_played": _r(league_sample, 2),
+        },
+        "confidence": "cautious" if quality_is_cautious and not reasons else ("standard" if not reasons else "blocked"),
+        "caution_reasons": ["thin_history"] if quality_is_cautious and not reasons else [],
+        "safe_to_narrate": not reasons,
+        "blocked_reasons": sorted(set(reasons)),
+    }
+
+
+def _historical_profile_rank(signal: Dict[str, Any]) -> Tuple[int, float, float]:
+    strength_score = 2 if signal.get("strength") == "clear" else 1
+    rel_delta = abs(_f(signal.get("rel_delta_pct"), 0.0))
+    abs_delta = abs(_f(signal.get("delta"), 0.0))
+    return (strength_score, rel_delta, abs_delta)
+
+
+def _build_historical_profile(context: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(context, dict) or context.get("status") != "ok":
+        return {
+            "version": HISTORICAL_PROFILE_VERSION,
+            "status": "unavailable",
+            "quality": "unavailable",
+            "reason": f"context_status_{context.get('status') if isinstance(context, dict) else 'invalid'}",
+            "signals": [],
+            "selected_signals": [],
+            "safe_signal_count": 0,
+            "candidate_signal_count": 0,
+            "blocked_counts": {},
+        }
+
+    league_prior = context.get("league_prior") or {}
+    home_effective = ((context.get("home_team") or {}).get("effective") or {})
+    away_effective = ((context.get("away_team") or {}).get("effective") or {})
+    match_quality = str(context.get("match_history_quality") or "UNKNOWN")
+    guardrails = [str(g) for g in list(context.get("guardrails") or [])]
+    league_sample = league_prior.get("weighted_avg_team_played")
+
+    signal_specs = [
+        {
+            "key": "home_attack_home",
+            "team_side": "home",
+            "venue": "home",
+            "metric": "home_gf_pg",
+            "value": home_effective.get("home_gf_pg"),
+            "baseline": league_prior.get("mu_home"),
+            "baseline_metric": "league_home_goals_pg",
+            "lower_is_better": False,
+            "team_split_weighted_played": home_effective.get("weighted_home_played"),
+        },
+        {
+            "key": "home_defense_home",
+            "team_side": "home",
+            "venue": "home",
+            "metric": "home_ga_pg",
+            "value": home_effective.get("home_ga_pg"),
+            "baseline": league_prior.get("mu_away"),
+            "baseline_metric": "league_away_goals_pg",
+            "lower_is_better": True,
+            "team_split_weighted_played": home_effective.get("weighted_home_played"),
+        },
+        {
+            "key": "away_attack_away",
+            "team_side": "away",
+            "venue": "away",
+            "metric": "away_gf_pg",
+            "value": away_effective.get("away_gf_pg"),
+            "baseline": league_prior.get("mu_away"),
+            "baseline_metric": "league_away_goals_pg",
+            "lower_is_better": False,
+            "team_split_weighted_played": away_effective.get("weighted_away_played"),
+        },
+        {
+            "key": "away_defense_away",
+            "team_side": "away",
+            "venue": "away",
+            "metric": "away_ga_pg",
+            "value": away_effective.get("away_ga_pg"),
+            "baseline": league_prior.get("mu_home"),
+            "baseline_metric": "league_home_goals_pg",
+            "lower_is_better": True,
+            "team_split_weighted_played": away_effective.get("weighted_away_played"),
+        },
+    ]
+
+    signals = [
+        _historical_profile_signal(
+            league_weighted_avg_team_played=league_sample,
+            match_history_quality=match_quality,
+            guardrails=guardrails,
+            **spec,
+        )
+        for spec in signal_specs
+    ]
+
+    safe_signals = [s for s in signals if s.get("safe_to_narrate")]
+    selected = sorted(safe_signals, key=_historical_profile_rank, reverse=True)[:HISTORICAL_PROFILE_MAX_SELECTED_SIGNALS]
+
+    blocked_counts: Dict[str, int] = {}
+    for signal in signals:
+        for reason in signal.get("blocked_reasons") or []:
+            blocked_counts[str(reason)] = int(blocked_counts.get(str(reason), 0)) + 1
+
+    return {
+        "version": HISTORICAL_PROFILE_VERSION,
+        "status": "available" if selected else "limited",
+        "quality": "good" if selected else "limited",
+        "match_history_quality": match_quality,
+        "guardrails": sorted(set(guardrails)),
+        "target_season": context.get("target_season"),
+        "window_seasons": context.get("target_seasons") or context.get("window_seasons") or [],
+        "league_baseline": {
+            "quality": league_prior.get("quality"),
+            "home_goals_pg": league_prior.get("mu_home"),
+            "away_goals_pg": league_prior.get("mu_away"),
+            "weighted_avg_team_played": league_prior.get("weighted_avg_team_played"),
+        },
+        "rules": {
+            "min_rel_delta": HISTORICAL_PROFILE_MIN_REL_DELTA,
+            "min_abs_delta": HISTORICAL_PROFILE_MIN_ABS_DELTA,
+            "clear_rel_delta": HISTORICAL_PROFILE_CLEAR_REL_DELTA,
+            "clear_abs_delta": HISTORICAL_PROFILE_CLEAR_ABS_DELTA,
+            "min_team_split_played": HISTORICAL_PROFILE_MIN_TEAM_SPLIT_PLAYED,
+            "min_league_avg_team_played": HISTORICAL_PROFILE_MIN_LEAGUE_AVG_TEAM_PLAYED,
+            "safe_qualities": sorted(HISTORICAL_PROFILE_SAFE_QUALITIES),
+            "caution_qualities": sorted(HISTORICAL_PROFILE_CAUTION_QUALITIES),
+            "blocking_guardrails": sorted(HISTORICAL_PROFILE_BLOCKING_GUARDRAILS),
+            "caution_guardrails": sorted(HISTORICAL_PROFILE_CAUTION_GUARDRAILS),
+            "thin_requires_clear_signal": True,
+            "max_selected_signals": HISTORICAL_PROFILE_MAX_SELECTED_SIGNALS,
+        },
+        "signals": signals,
+        "selected_signals": selected,
+        "safe_signal_count": len(safe_signals),
+        "candidate_signal_count": len(signals),
+        "blocked_counts": blocked_counts,
     }
 
 
@@ -348,7 +614,7 @@ def build_match_historical_context(
     if quality in {"THIN", "INSUFFICIENT", "UNKNOWN"}:
         guardrails.append("thin_or_insufficient_history")
 
-    return {
+    context: Dict[str, Any] = {
         "status": "ok",
         "connected_to_snapshot": False,
         "profile": profile.as_dict(),
@@ -377,3 +643,6 @@ def build_match_historical_context(
             "lambda_away_preview": _r(mu_away * away_attack * home_defense),
         },
     }
+
+    context["historical_profile"] = _build_historical_profile(context)
+    return context

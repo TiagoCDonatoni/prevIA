@@ -120,19 +120,19 @@ def _minimal_context_summary(context: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(context, dict):
         return {}
 
-    home = context.get("home") or {}
-    away = context.get("away") or {}
+    home = context.get("home_team") or context.get("home") or {}
+    away = context.get("away_team") or context.get("away") or {}
     league_prior = context.get("league_prior") or {}
 
     return {
         "status": context.get("status"),
         "target_season": context.get("target_season"),
-        "window_seasons": context.get("window_seasons"),
+        "window_seasons": context.get("target_seasons") or context.get("window_seasons"),
         "match_history_quality": context.get("match_history_quality"),
         "guardrails": context.get("guardrails") or [],
         "league_prior": {
             "quality": league_prior.get("quality"),
-            "weighted_played": league_prior.get("weighted_played"),
+            "weighted_played": league_prior.get("weighted_avg_played"),
             "weighted_avg_team_played": league_prior.get("weighted_avg_team_played"),
             "mu_home": league_prior.get("mu_home"),
             "mu_away": league_prior.get("mu_away"),
@@ -147,7 +147,30 @@ def _minimal_context_summary(context: Dict[str, Any]) -> Dict[str, Any]:
             "global_quality": ((away.get("global") or {}).get("quality")),
             "effective_quality": ((away.get("effective") or {}).get("quality")),
         },
+        "historical_profile": context.get("historical_profile") or {},
     }
+
+def _historical_profile_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    inputs = (payload or {}).get("inputs") or {}
+    lambda_meta = inputs.get("lambda_meta") or {}
+    summary = lambda_meta.get("historical_context_summary") or {}
+    profile = summary.get("historical_profile") or {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _record_historical_profile_counter(counters: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    profile = _historical_profile_from_payload(payload)
+    status = str(profile.get("status") or "unknown")
+    counters[f"historical_profile_status_{status}"] = int(counters.get(f"historical_profile_status_{status}", 0)) + 1
+    counters["historical_profile_candidate_signals"] = int(counters.get("historical_profile_candidate_signals", 0)) + int(profile.get("candidate_signal_count") or 0)
+    counters["historical_profile_safe_signals"] = int(counters.get("historical_profile_safe_signals", 0)) + int(profile.get("safe_signal_count") or 0)
+    counters["historical_profile_selected_signals"] = int(counters.get("historical_profile_selected_signals", 0)) + len(profile.get("selected_signals") or [])
+
+    blocked_counts = profile.get("blocked_counts") or {}
+    if isinstance(blocked_counts, dict):
+        for reason, count in blocked_counts.items():
+            key = f"historical_profile_blocked_{str(reason)}"
+            counters[key] = int(counters.get(key, 0)) + int(count or 0)
 
 
 def _build_payload_from_lambdas(
@@ -422,6 +445,18 @@ def rebuild_hist5_shadow_snapshots_v1(
         "narrative_quality_limited": 0,
         "narrative_quality_unavailable": 0,
         "narrative_quality_unknown": 0,
+        "historical_profile_status_available": 0,
+        "historical_profile_status_limited": 0,
+        "historical_profile_status_unavailable": 0,
+        "historical_profile_status_unknown": 0,
+        "historical_profile_candidate_signals": 0,
+        "historical_profile_safe_signals": 0,
+        "historical_profile_selected_signals": 0,
+        "historical_profile_blocked_missing_metric": 0,
+        "historical_profile_blocked_quality": 0,
+        "historical_profile_blocked_guardrail": 0,
+        "historical_profile_blocked_sample": 0,
+        "historical_profile_blocked_small_delta": 0,
         "errors": 0,
         "errors_sample": [],
     }
@@ -562,6 +597,8 @@ def rebuild_hist5_shadow_snapshots_v1(
                 counters["shadow_action_use_hist5"] += 1
             elif lambda_source.startswith("v0_fallback:"):
                 counters["shadow_action_fallback_to_v0"] += 1
+
+            _record_historical_profile_counter(counters, payload)
 
             payload = _attach_narrative_context_to_payload(
                 conn,

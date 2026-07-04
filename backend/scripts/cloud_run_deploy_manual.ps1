@@ -18,6 +18,7 @@ $databaseUrlSecret = Require-Env "DATABASE_URL_SECRET"
 $apiFootballKeySecret = Require-Env "APIFOOTBALL_KEY_SECRET"
 $theOddsApiKeySecret = Require-Env "THE_ODDS_API_KEY_SECRET"
 $opsTriggerTokenSecret = Require-Env "OPS_TRIGGER_TOKEN_SECRET"
+$productSmtpPasswordSecret = Require-Env "PRODUCT_SMTP_PASSWORD_SECRET"
 
 Write-Host "==> Enabling required Google Cloud services..."
 & gcloud services enable `
@@ -54,6 +55,7 @@ Write-Host "==> Deploying Cloud Run service..."
     --set-secrets APIFOOTBALL_KEY="$apiFootballKeySecret`:latest" `
     --set-secrets THE_ODDS_API_KEY="$theOddsApiKeySecret`:latest" `
     --set-secrets OPS_TRIGGER_TOKEN="$opsTriggerTokenSecret`:latest" `
+    --set-secrets PRODUCT_SMTP_PASSWORD="$productSmtpPasswordSecret`:latest" `
     --quiet
 
 if ($LASTEXITCODE -ne 0) {

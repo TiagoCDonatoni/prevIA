@@ -634,6 +634,22 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+WORLDCUP_POOL_VISIBLE_MATCH_SQL = """
+  AND (
+    m.phase = 'group'
+    OR (
+      m.phase <> 'group'
+      AND m.status <> 'placeholder'
+      AND m.home_team_i18n IS NOT NULL
+      AND m.away_team_i18n IS NOT NULL
+      AND m.kickoff_utc IS NOT NULL
+      AND COALESCE(m.home_team_i18n ->> 'pt', '') <> ''
+      AND COALESCE(m.away_team_i18n ->> 'pt', '') <> ''
+    )
+  )
+"""
+
+
 def _normalize_slug(value: str) -> str:
     raw = unicodedata.normalize("NFKD", value.strip())
     raw = raw.encode("ascii", "ignore").decode("ascii")
@@ -1476,7 +1492,7 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
     if not participant_token_hashes and not organizer_token_hashes:
         return WorldCupPoolMyPoolsResponse(ok=True, pools=[])
 
-    participant_sql = """
+    participant_sql = f"""
       SELECT
         p.id,
         p.slug,
@@ -1494,6 +1510,7 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
           FROM worldcup_pool.matches m
           WHERE m.competition_key = 'fifa_world_cup_2026'
             AND m.status <> 'cancelled'
+            {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         ) AS available_matches,
         MAX(s.session_token_hash) AS session_token_hash
       FROM worldcup_pool.sessions s
@@ -1525,7 +1542,7 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
         pt.display_name
     """
 
-    organizer_sql = """
+    organizer_sql = f"""
       SELECT
         p.id,
         p.slug,
@@ -1543,6 +1560,7 @@ def list_worldcup_pool_my_pools(request: Request) -> WorldCupPoolMyPoolsResponse
           FROM worldcup_pool.matches m
           WHERE m.competition_key = 'fifa_world_cup_2026'
             AND m.status <> 'cancelled'
+            {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         ) AS available_matches,
         MAX(s.session_token_hash) AS session_token_hash
       FROM worldcup_pool.sessions s
@@ -1752,7 +1770,7 @@ def login_worldcup_pool_access(
     user_agent: Optional[str] = request.headers.get("user-agent")
     safe_user_agent = user_agent[:500] if user_agent else None
 
-    candidate_sql = """
+    candidate_sql = f"""
       SELECT
         'organizer' AS role,
         p.id,
@@ -1773,6 +1791,7 @@ def login_worldcup_pool_access(
           FROM worldcup_pool.matches m
           WHERE m.competition_key = 'fifa_world_cup_2026'
             AND m.status <> 'cancelled'
+            {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         ) AS available_matches
       FROM worldcup_pool.pools p
       LEFT JOIN worldcup_pool.participants active_pt
@@ -1822,6 +1841,7 @@ def login_worldcup_pool_access(
           FROM worldcup_pool.matches m
           WHERE m.competition_key = 'fifa_world_cup_2026'
             AND m.status <> 'cancelled'
+            {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         ) AS available_matches
       FROM worldcup_pool.participants pt
       JOIN worldcup_pool.pools p
@@ -3579,6 +3599,7 @@ def list_worldcup_pool_participant_matches(
        AND pr.participant_id = %s
       WHERE m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
     """
 
     count_sql = f"""
@@ -3590,6 +3611,7 @@ def list_worldcup_pool_participant_matches(
        AND pr.participant_id = %s
       WHERE m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         {filter_sql}
         {round_sql}
     """
@@ -3640,11 +3662,13 @@ def list_worldcup_pool_participant_matches(
        AND pr.participant_id = %s
       WHERE m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         {filter_sql}
         {round_sql}
       ORDER BY
+        CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END ASC,
+        m.kickoff_utc ASC NULLS LAST,
         m.display_order ASC,
-        m.kickoff_utc NULLS LAST,
         m.id ASC
       LIMIT %s
       OFFSET %s
@@ -3657,8 +3681,9 @@ def list_worldcup_pool_participant_matches(
           m.kickoff_utc,
           ROW_NUMBER() OVER (
             ORDER BY
+              CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END ASC,
+              m.kickoff_utc ASC NULLS LAST,
               m.display_order ASC,
-              m.kickoff_utc NULLS LAST,
               m.id ASC
           )::int AS row_number
         FROM worldcup_pool.matches m
@@ -3668,6 +3693,7 @@ def list_worldcup_pool_participant_matches(
          AND pr.participant_id = %s
         WHERE m.competition_key = 'fifa_world_cup_2026'
           AND m.status <> 'cancelled'
+          {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
           {filter_sql}
           {round_sql}
       )
@@ -3812,7 +3838,7 @@ def upsert_worldcup_pool_prediction(
 
     pool, participant = _require_participant_context(invite_token, request)
 
-    match_sql = """
+    match_sql = f"""
       SELECT
         m.id,
         m.match_key,
@@ -3829,6 +3855,7 @@ def upsert_worldcup_pool_prediction(
       WHERE m.id = %s
         AND m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
       LIMIT 1
     """
 
@@ -4417,6 +4444,7 @@ def get_worldcup_pool_participant_locked_predictions(
         AND pr.participant_id = %s
         AND m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         AND {lock_expr}
     """
 
@@ -4464,6 +4492,7 @@ def get_worldcup_pool_participant_locked_predictions(
         AND pr.participant_id = %s
         AND m.competition_key = 'fifa_world_cup_2026'
         AND m.status <> 'cancelled'
+        {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         AND {lock_expr}
       ORDER BY
         m.kickoff_utc DESC NULLS LAST,
@@ -5327,7 +5356,7 @@ def get_worldcup_pool_organizer_dashboard(
     query_text = (q or "").strip().lower()
     query_like = f"%{query_text}%"
 
-    summary_sql = """
+    summary_sql = f"""
       SELECT
         COUNT(pt.id) FILTER (WHERE pt.status = 'active')::int AS active_participants,
         (
@@ -5335,6 +5364,7 @@ def get_worldcup_pool_organizer_dashboard(
           FROM worldcup_pool.matches m
           WHERE m.competition_key = 'fifa_world_cup_2026'
             AND m.status <> 'cancelled'
+            {WORLDCUP_POOL_VISIBLE_MATCH_SQL}
         ) AS available_matches
       FROM worldcup_pool.participants pt
       WHERE pt.pool_id = %s
