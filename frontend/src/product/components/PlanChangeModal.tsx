@@ -387,6 +387,7 @@ useEffect(() => {
               planLabel={tr(getPlanNameKey(checkoutPlanId))}
               priceLabel={selectedPriceLabel}
               cycleLabel={tr(getBillingCycleLabelKey(selectedCycle))}
+              appliedDiscount={checkoutSession.applied_discount ?? null}
               onBack={() => {
                 setCheckoutSession(null);
                 setSubmitError(null);

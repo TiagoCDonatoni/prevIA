@@ -7,6 +7,7 @@ import {
 } from "@stripe/react-stripe-js/checkout";
 
 import { t, type Lang } from "../i18n";
+import type { BillingAppliedDiscount } from "../api/billing";
 
 type BillingCheckoutInlineProps = {
   lang: Lang;
@@ -15,6 +16,7 @@ type BillingCheckoutInlineProps = {
   planLabel: string;
   priceLabel: string;
   cycleLabel: string;
+  appliedDiscount?: BillingAppliedDiscount | null;
   onBack: () => void;
   onCancel: () => void;
   onSuccess: () => void;
@@ -38,6 +40,12 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
   }
 
   const { checkout } = checkoutState;
+  const appliedDiscountLabel = props.appliedDiscount?.label
+    || (props.lang === "pt"
+      ? "Desconto de fundador aplicado automaticamente no checkout."
+      : props.lang === "es"
+        ? "Descuento de fundador aplicado automáticamente en el checkout."
+        : "Founder discount automatically applied at checkout.");
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,6 +82,22 @@ function BillingCheckoutInlineBody(props: BillingCheckoutInlineProps) {
           {t(props.lang, "auth.billingCheckoutSubtitle")}
         </div>
       </div>
+
+      {props.appliedDiscount ? (
+        <div
+          style={{
+            border: "1px solid rgba(22, 163, 74, 0.24)",
+            borderRadius: 16,
+            background: "rgba(240, 253, 244, 0.92)",
+            padding: 14,
+            color: "#166534",
+            fontWeight: 800,
+            fontSize: 14,
+          }}
+        >
+          {appliedDiscountLabel}
+        </div>
+      ) : null}
 
       <div
         style={{

@@ -26,6 +26,21 @@ export type BillingCatalogResponse = {
   items: BillingCatalogItem[];
 };
 
+export type BillingAppliedDiscount = {
+  discount_eligibility_id: number;
+  campaign_id: number | null;
+  campaign_slug?: string | null;
+  campaign_label?: string | null;
+  offer_id?: number | null;
+  discount_type?: string | null;
+  discount_percent?: number | null;
+  discount_amount_cents?: number | null;
+  currency?: string | null;
+  discount_duration?: string | null;
+  discount_duration_months?: number | null;
+  label?: string | null;
+};
+
 export type BillingCheckoutSessionResponse = {
   ok: boolean;
   ui_mode?: "custom" | "hosted" | string;
@@ -39,6 +54,7 @@ export type BillingCheckoutSessionResponse = {
   currency_code?: "BRL" | "USD" | string;
   provider_product_id?: string | null;
   provider_price_id?: string | null;
+  applied_discount?: BillingAppliedDiscount | null;
 };
 
 export type BillingSubscriptionData = {
