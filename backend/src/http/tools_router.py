@@ -3,9 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 
 from src.auth.service import get_auth_me_payload
+from src.http.bankroll_router import router as bankroll_router
 from src.tools.service import list_tool_catalog, list_user_tool_access
 
 router = APIRouter(prefix="/tools", tags=["tools"])
+router.include_router(bankroll_router)
 
 @router.get("/catalog")
 def tools_catalog():
