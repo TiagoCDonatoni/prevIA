@@ -83,6 +83,9 @@ class Settings:
     admin_auth_enabled: bool
     product_manual_analysis_enabled: bool
 
+    tools_enabled: bool
+    tools_bankroll_enabled: bool
+
     worldcup_pool_enabled: bool
     worldcup_pool_public_create_enabled: bool
     worldcup_pool_join_enabled: bool
@@ -178,6 +181,11 @@ def load_settings() -> Settings:
     product_auth_enabled = _env_bool("PRODUCT_AUTH_ENABLED", default=False)
     admin_auth_enabled = _env_bool("ADMIN_AUTH_ENABLED", default=False)
     product_manual_analysis_enabled = _env_bool("PRODUCT_MANUAL_ANALYSIS_ENABLED", default=True)
+
+    tools_enabled = _env_bool("TOOLS_ENABLED", default=False)
+    tools_bankroll_enabled = _env_bool("TOOLS_BANKROLL_ENABLED", default=False)
+    if not tools_enabled:
+        tools_bankroll_enabled = False
 
     worldcup_pool_enabled = _env_bool("WORLDCUP_POOL_ENABLED", default=False)
     worldcup_pool_public_create_enabled = _env_bool(
@@ -295,6 +303,8 @@ def load_settings() -> Settings:
         product_auth_enabled=product_auth_enabled,
         admin_auth_enabled=admin_auth_enabled,
         product_manual_analysis_enabled=product_manual_analysis_enabled,
+        tools_enabled=tools_enabled,
+        tools_bankroll_enabled=tools_bankroll_enabled,
         worldcup_pool_enabled=worldcup_pool_enabled,
         worldcup_pool_public_create_enabled=worldcup_pool_public_create_enabled,
         worldcup_pool_join_enabled=worldcup_pool_join_enabled,

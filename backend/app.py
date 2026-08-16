@@ -28,6 +28,7 @@ from src.http.admin_partners_router import router as admin_partners_router
 from src.http.telemetry_router import router as telemetry_router, admin_router as admin_telemetry_router
 from src.http.partner_router import router as partner_router
 from src.http.worldcup_pool_router import router as worldcup_pool_router
+from src.http.tools_router import router as tools_router
 
 def create_app() -> FastAPI:
     settings = load_settings()
@@ -88,6 +89,8 @@ def create_app() -> FastAPI:
     api.include_router(partner_router)
     api.include_router(telemetry_router)
     api.include_router(admin_telemetry_router)
+    if settings.tools_enabled:
+        api.include_router(tools_router)
     if settings.worldcup_pool_enabled:
         api.include_router(worldcup_pool_router)
 
@@ -112,6 +115,8 @@ def create_app() -> FastAPI:
             "product_auth_enabled": settings.product_auth_enabled,
             "admin_auth_enabled": settings.admin_auth_enabled,
             "product_manual_analysis_enabled": settings.product_manual_analysis_enabled,
+            "tools_enabled": settings.tools_enabled,
+            "tools_bankroll_enabled": settings.tools_bankroll_enabled,
             "worldcup_pool_enabled": settings.worldcup_pool_enabled,
             "worldcup_pool_public_create_enabled": settings.worldcup_pool_public_create_enabled,
             "worldcup_pool_join_enabled": settings.worldcup_pool_join_enabled,
