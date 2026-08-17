@@ -20,6 +20,7 @@ import { WorldCupPoolParticipantPage } from "./public/pages/WorldCupPoolParticip
 import { WorldCupPoolMyPoolsPage } from "./public/pages/WorldCupPoolMyPoolsPage";
 import { PublicPartnersPage } from "./public/pages/PublicPartnersPage";
 import { PartnerConsolePage } from "./partner/PartnerConsolePage";
+import { ToolsApp } from "./tools/ToolsApp";
 
 import { ENABLE_ADMIN_APP, ENABLE_PRODUCT_APP, ENABLE_WORLDCUP_POOL } from "./config";
 
@@ -59,6 +60,8 @@ export function AppRoutes() {
           <Route path="glossary" element={<GlossaryHubPage />} />
           <Route path="glossary/:slug" element={<GlossaryTermPage />} />
           <Route path="about" element={<PublicAboutPage />} />
+          <Route path="tools" element={<ToolsApp />} />
+          <Route path="tools/:toolSlug" element={<ToolsApp page="bankroll" />} />
           <Route path="contact" element={<PublicContactPage />} />
           <Route path="parceiros" element={<PublicPartnersPage />} />
           <Route path="partners" element={<PublicPartnersPage />} />

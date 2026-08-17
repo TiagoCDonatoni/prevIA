@@ -300,6 +300,11 @@ export function PublicLayout() {
   }, []);
 
   const navItems = [
+    {
+      key: "tools",
+      to: `/${currentLang}/tools`,
+      label: "prevIA Tools",
+    },
     ...(ENABLE_WORLDCUP_POOL
       ? [
           {
@@ -721,7 +726,8 @@ export function PublicLayout() {
             clearAuthSearchParams();
 
             const referralRedeemPath = getPartnerReferralRedeemPath(currentLang as Lang);
-            navigate(nextPath ?? referralRedeemPath ?? "/app", { replace: true });
+            const toolsReturnPath = location.pathname.includes("/tools") ? location.pathname : null;
+            navigate(nextPath ?? toolsReturnPath ?? referralRedeemPath ?? "/app", { replace: true });
           }}
         />
       ) : null}
